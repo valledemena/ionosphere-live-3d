@@ -1,5 +1,6 @@
 #pragma once
 #include <glad/glad.h>
+#include <glm/glm.hpp>
 #include <vector>
 
 struct TECGrid {
@@ -17,7 +18,7 @@ public:
 
     void init();
     void updateFromGrid(const TECGrid& grid);
-    void render();
+    void render(const glm::mat4& view, const glm::mat4& projection);
     void destroy();
 
     bool isVisible() const { return visible_; }
@@ -38,11 +39,11 @@ private:
 
     int indexCount_ = 0;
     bool visible_ = false;
-    float altitude_ = 0.02f;  // Fraction of Earth radius above surface
+    float altitude_ = 0.02f;
 
     TECGrid grid_;
     std::vector<unsigned char> textureData_;
-    std::vector<float> colormap_;  // RGB floats for viridis
+    std::vector<float> colormap_;
 
     bool meshDirty_ = true;
     bool textureDirty_ = true;

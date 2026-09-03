@@ -49,6 +49,9 @@ struct App::Impl {
 
     Shader tecShader;
 
+    GLuint quadVAO = 0;
+    GLuint quadVBO = 0;
+
     float time = 0.0f;
     bool bloomEnabled = true;
 
@@ -288,6 +291,26 @@ bool App::init(int width, int height, const char* title) {
     impl->bloomFBO[0].init(winW / 2, winH / 2);
     impl->bloomFBO[1].init(winW / 2, winH / 2);
 
+    // Fullscreen quad for post-processing (bloom, composite)
+    float quadVerts[] = {
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+         1.0f,  1.0f,  1.0f, 1.0f,
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         1.0f,  1.0f,  1.0f, 1.0f,
+        -1.0f,  1.0f,  0.0f, 1.0f,
+    };
+    glGenVertexArrays(1, &impl->quadVAO);
+    glGenBuffers(1, &impl->quadVBO);
+    glBindVertexArray(impl->quadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, impl->quadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
     // Set scroll callback once
     glfwSetWindowUserPointer(window, this);
     glfwSetScrollCallback(window, [](GLFWwindow* w, double, double sy) {
@@ -391,8 +414,7 @@ void App::render() {
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        model = glm::mat4(1.0f);
-        impl->tecLayer.render();
+        impl->tecLayer.render(view, proj);
         glDepthMask(GL_TRUE);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
@@ -437,7 +459,7 @@ void App::render() {
         impl->bloomShader.setInt("u_texture", 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->sceneFBO.colorTexture);
-        glBindVertexArray(0);
+        glBindVertexArray(impl->quadVAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         impl->bloomFBO[0].unbind();
 
@@ -448,6 +470,7 @@ void App::render() {
         impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 1.0f));
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->bloomFBO[0].colorTexture);
+        glBindVertexArray(impl->quadVAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         impl->bloomFBO[1].unbind();
 
@@ -458,30 +481,25 @@ void App::render() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
     impl->compositeShader.use();
-    impl->compositeShader.setInt("u_scene", 0);
-    impl->compositeShader.setInt("u_bloom", 1);
-    impl->compositeShader.setBool("u_bloomEnabled", impl->bloomEnabled);
 
+    // Unit 0 = scene
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, impl->sceneFBO.colorTexture);
+    impl->compositeShader.setInt("u_scene", 0);
+
+    // Unit 1 = bloom (DO NOT rebind GL_TEXTURE0!)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, impl->bloomFBO[1].colorTexture);
+    impl->compositeShader.setInt("u_bloom", 1);
+
+    impl->compositeShader.setBool("u_bloomEnabled", impl->bloomEnabled);
+
+    // Draw fullscreen quad with persistent VAO
+    glBindVertexArray(impl->quadVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
     glActiveTexture(GL_TEXTURE0);
-
-    // Draw fullscreen quad
-    float quadVerts[] = { -1,-1, 1,-1, -1,1, 1,1 };
-    GLuint quadVAO, quadVBO;
-    glGenVertexArrays(1, &quadVAO);
-    glGenBuffers(1, &quadVBO);
-    glBindVertexArray(quadVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glDeleteVertexArrays(1, &quadVAO);
-    glDeleteBuffers(1, &quadVBO);
-
     glEnable(GL_DEPTH_TEST);
 
     // --- ImGui ---
@@ -531,6 +549,9 @@ void App::render() {
 
 void App::shutdown() {
     impl->tecLayer.destroy();
+
+    if (impl->quadVAO) glDeleteVertexArrays(1, &impl->quadVAO);
+    if (impl->quadVBO) glDeleteBuffers(1, &impl->quadVBO);
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

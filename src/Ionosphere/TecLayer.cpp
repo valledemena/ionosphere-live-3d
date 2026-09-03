@@ -228,11 +228,14 @@ void TecLayer::updateTexture() {
     textureDirty_ = false;
 }
 
-void TecLayer::render() {
+void TecLayer::render(const glm::mat4& view, const glm::mat4& projection) {
     if (!visible_ || !grid_.valid || vao_ == 0) return;
 
     glUseProgram(shader_);
-    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_model"), 1, GL_FALSE, &glm::mat4(1.0f)[0][0]);
+    glm::mat4 model = glm::mat4(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_model"), 1, GL_FALSE, &model[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_view"), 1, GL_FALSE, &view[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_projection"), 1, GL_FALSE, &projection[0][0]);
     glUniform1i(glGetUniformLocation(shader_, "u_tecTexture"), 0);
     glUniform1f(glGetUniformLocation(shader_, "u_opacity"), 0.7f);
 
