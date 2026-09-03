@@ -23,6 +23,9 @@
 #include "Globe/Stars.h"
 #include "Globe/Atmosphere.h"
 #include "Globe/Terminator.h"
+#include "Ionosphere/TecLayer.h"
+#include "Data/DataManager.h"
+#include "Data/EsaAdapter.h"
 #include "Utils/SolarPosition.h"
 #include "Utils/CoordinateSystem.h"
 
@@ -38,8 +41,13 @@ struct App::Impl {
     Stars stars;
     Atmosphere atmosphere;
     Terminator terminator;
+    TecLayer tecLayer;
+    DataManager dataManager;
+    EsaAdapter esaAdapter;
     Framebuffer sceneFBO;
     Framebuffer bloomFBO[2];
+
+    Shader tecShader;
 
     float time = 0.0f;
     bool bloomEnabled = true;
@@ -261,6 +269,20 @@ bool App::init(int width, int height, const char* title) {
     impl->atmosphere.init();
     impl->terminator.init();
 
+    // Ionosphere
+    impl->tecLayer.init();
+    impl->dataManager.init();
+    impl->esaAdapter.init();
+
+    // Generate initial TEC data
+    impl->esaAdapter.fetchTEC(glfwGetTime());
+    TECGrid grid;
+    grid.width = impl->esaAdapter.getData().width;
+    grid.height = impl->esaAdapter.getData().height;
+    grid.values = impl->esaAdapter.getData().values;
+    grid.timestamp = impl->esaAdapter.getData().timestamp;
+    impl->tecLayer.updateFromGrid(grid);
+
     // Framebuffers
     impl->sceneFBO.init(winW, winH);
     impl->bloomFBO[0].init(winW / 2, winH / 2);
@@ -363,6 +385,17 @@ void App::render() {
     impl->earthShader.setVec3("u_sunDir", impl->sunDirection);
     impl->earthShader.setInt("u_texture", 0);
     impl->earth.render();
+
+    // TEC Layer (additive blend on top of Earth)
+    if (impl->tecLayer.isVisible()) {
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        model = glm::mat4(1.0f);
+        impl->tecLayer.render();
+        glDepthMask(GL_TRUE);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
 
     // Atmosphere (additive)
     glDepthMask(GL_FALSE);
@@ -475,11 +508,21 @@ void App::render() {
     ImGui::Checkbox("Stars", &showStars);
     ImGui::Separator();
     ImGui::Text("Ionosphere");
-    ImGui::Checkbox("TEC Layer", &showTEC);
+    if (ImGui::Checkbox("TEC Layer", &showTEC)) {
+        impl->tecLayer.setVisible(showTEC);
+    }
     static float altSlider = 300.0f;
-    ImGui::SliderFloat("Altitude (km)", &altSlider, 100.0f, 800.0f);
+    if (ImGui::SliderFloat("Altitude (km)", &altSlider, 100.0f, 800.0f)) {
+        impl->tecLayer.setAltitude(altSlider / 6371.0f);
+    }
     ImGui::Separator();
     ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);
+    ImGui::Separator();
+    if (impl->dataManager.isFetching()) {
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Fetching TEC...");
+    } else {
+        ImGui::Text("TEC: %dx%d", impl->esaAdapter.getData().width, impl->esaAdapter.getData().height);
+    }
     ImGui::End();
 
     ImGui::Render();
@@ -487,6 +530,8 @@ void App::render() {
 }
 
 void App::shutdown() {
+    impl->tecLayer.destroy();
+
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
