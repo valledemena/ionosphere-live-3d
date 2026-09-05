@@ -62,10 +62,19 @@ Inversa (la que necesita el fragment shader del raymarching):
 
 ```
 lat = asin(clamp(n.y, -1, 1))
-lon = pi - atan2(n.z, n.x)         // radianes en [0, 2pi]; plegar a [-pi, pi]
+lon = pi - atan2(n.z, n.x)           // radianes en [0, 2pi]; plegar a [-pi, pi]
 s   = lon / (2*pi) + 0.5
-t   = 0.5 - lat / pi               // t=0 = NORTE (fila 0 del upload)
+t   = lat / pi + 0.5                 // t=0 es el SUR (fila 0 = latIdx 0)
 ```
+
+CORRECCION (bug real encontrado al implementar): la primera version de este
+documento ponia `t = 0.5 - lat/pi` por analogia con `GridLayer::updateTexture`
+(que SI voltea filas con `texRow = H-1-latIdx`). Pero `buildDensityVolume`
+guarda `latIdx=0 (sur)` en la primera fila SIN voltear, y el upload OpenGL
+mapea la primera fila a t=0. Con `0.5 - lat/pi` el shader leia el hemisferio
+especular (verificado numericamente: Ebro lat+40.8 leia fila 19.18 en vez de
+51.82). `sampleVolume()` (CPU, usado por el slice) siempre leyo bien.
+Test ejecutable del invariante en `test_slice.cpp` ("shader-cpu-row-match").
 
 Referencia canónica en el código: `IonosondeLayer.cpp:249-250`
 (`lon = pi - atan2(z,x)`). Cualquier shader nuevo que convierta dirección→
@@ -89,5 +98,42 @@ r = 1.0 + altKm / 6371.0     // innerR(60km) = 1.00942, outerR(500km) = 1.07848
 ## 2. Física a implementar (validada, con 2 correcciones menores)
 
 Todo lo del doc previo es correcto: `Nm = 1.24e10·fo²`, Chapman-alfa para
-D/E/F1, Epstein-modificado de Bilitza&Rawer para bottomside F2, topsi
-...[truncated 5832 chars]
+D/E/F1, Epstein-modificado de Bilitza&Rawer para bottomside F2, topside
+difusivo, combinacion por `max()`, normalizacion log10 [8, 12.5].
+
+CORRECCION Epstein (bug real del doc previo, verificado numericamente): el
+minimo de `x^B1/cosh(x)` esta donde `x*tanh(x)=B1` (x*~=1.97 para B1=1.9,
+x*~=2.63 para B1=2.6, x*~=3.01 para B1=3.0). Clampear a xmax=3.0 YA resucita
+con B1 diurno/nocturno real. Implementado: xmax=1.6 (seguro para B1>=1.7) +
+taper `exp(-(x-xmax)/1.2)` mas alla, y saneo `B0->[20,300]`, `B1->[1.7,4.0]`
+al ingerir (`sanitizeB0/sanitizeB1` en `LayerProfile.h`, aplicados en
+`profileFromStation` y en `interpLayerProfiles`). Tests `mono-B1-*` en
+`test_profile.cpp`.
+
+## 3. Implementacion realizada (mapa para el siguiente LLM)
+
+- `Utils/Colormap.h`: paleta unica (verificada bit a bit vs la original antes
+  de borrar el duplicado de `GridLayer.cpp`; `IonosondeLayer` conserva la
+  suya a proposito porque su plasma difiere ligeramente).
+- `Ionosphere/LayerProfile.h`: `profileFromStation` + `evalNeTotal` (+ D con
+  `sqrt(cosChi)*flare`, `applyDayNight` atenua E/F1 de noche).
+- `Ionosphere/DensityVolume.h`: `buildDensityVolume` (72×72×48, 60-500 km en
+  ^1.5), `densityDir` (convencion verificada), `sampleVolume` trilineal.
+- `Ionosphere/VolumeRenderer.{h,cpp}`: bounding sphere + front-cull + inner
+  analitica, `GL_R8` (suficiente: el dato ya va 0..1), colormap 1D propio,
+  64 pasos por defecto. Sin `setDensityRange` a proposito (la normalizacion
+  es CPU; el setter mentiria).
+- `Data/XrayAdapter.{h,cpp}`: GOES `xrays-6-hour.json` (filtrar
+  `energy=="0.1-0.8nm"`, usar `flux`), clases A/B/C/M/X, `flareFactor`
+  ilustrativo. 6º paso del worker.
+- `Ionosphere/SliceLayer.{h,cpp}`: cortina slerp 64×20 A(pinned)->B(hover)
+  muestreando el volumen (usa la ruta CPU, inmune al bug del shader).
+- `RefShells`: meridianos corregidos a `theta=pi-lon` + `updateAltitudes`
+  (E=110, F1/F2=mediana hmF2, histeresis 0.5 km).
+- `GridLayer`: modo `setDisplaceCentered` para hmF2 (alturas reales sobre/bajo
+  la media en vez de valor normalizado).
+- `App.cpp`: `interpLayerProfiles` (8 campos IDW de una pasada), rebuild del
+  volumen cada 5 s (sigue live+replay+sol+flares), UI (checkbox+opacidad,
+  linea X-ray, slice), `lastVolume` para el slice, persistencia de
+  volumen/slice.
+- GOES verificado en vivo (`flux` 4.09e-07 = B4.1 durante el desarrollo).

@@ -444,8 +444,8 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
     const float mNmF1 = fF1 > 0.0f ? 1.24e10f * fF1 * fF1 : 0.0f;
     const float mNmF2 = fF2 > 0.0f ? 1.24e10f * fF2 * fF2 : 0.0f;
     const float hmedF2 = medOf(&StationSample::hmF2);
-    float mB0 = medOf(&StationSample::B0); if (mB0 <= 0.0f) mB0 = 100.0f;
-    float mB1 = medOf(&StationSample::B1); if (mB1 <= 0.0f) mB1 = 3.0f;
+    const float mB0 = sanitizeB0(medOf(&StationSample::B0));
+    const float mB1 = sanitizeB1(medOf(&StationSample::B1));
 
     for (int latIdx = 0; latIdx < h; latIdx++) {
         float latG = -90.0f + cellLat * latIdx;
@@ -481,10 +481,8 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
             pr.hmF2 = (float)(vHm / wHm);
             pr.hasF2 = pr.NmF2 > 0.0f && pr.hmF2 > 0.0f;
             pr.hmF1 = pr.hmF2 > 0.0f ? std::max(150.0f, 0.8f * pr.hmF2) : 180.0f;
-            pr.B0 = (float)(vB0 / wB0);
-            if (pr.B0 <= 0.0f) pr.B0 = 100.0f;
-            pr.B1 = (float)(vB1 / wB1);
-            if (pr.B1 <= 0.0f) pr.B1 = 3.0f;
+            pr.B0 = sanitizeB0((float)(vB0 / wB0));
+            pr.B1 = sanitizeB1((float)(vB1 / wB1));
             out[(size_t)latIdx * w + lonIdx] = pr;
         }
     }
@@ -716,6 +714,20 @@ bool App::init(int width, int height, const char* title) {
     impl->stars.init();
     impl->atmosphere.init();
     impl->terminator.init();
+    // FIX aro blanco: el shader del terminador nunca se cargaba (programa 0 ->
+    // el driver dibujaba la linea en fijo = blanca). Cargar siempre + fallback.
+    if (!impl->terminatorShader.load("shaders/terminator.vert", "shaders/terminator.frag")) {
+        fprintf(stderr, "Terminator shader failed, using fallback\n");
+        impl->terminatorShader.loadFromSource(
+            "#version 400 core\n"
+            "layout(location=0) in vec3 aPos;\n"
+            "uniform mat4 u_model, u_view, u_projection;\n"
+            "void main(){ gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0); }\n",
+            "#version 400 core\n"
+            "out vec4 fragColor;\n"
+            "void main(){ fragColor = vec4(0.85, 0.32, 0.08, 0.22); }\n"
+        );
+    }
 
     // Ionosphere (capas vacias: el hilo worker las rellena al llegar datos).
     impl->tecLayer.init();
@@ -838,11 +850,13 @@ bool App::init(int width, int height, const char* title) {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Set scroll callback once
+    // Set scroll callback once (respeta la UI: sobre paneles, la rueda es de ImGui).
     glfwSetWindowUserPointer(window, this);
     glfwSetScrollCallback(window, [](GLFWwindow* w, double, double sy) {
         auto* self = static_cast<App*>(glfwGetWindowUserPointer(w));
-        if (self) self->impl->camera.distance -= (float)sy * 0.2f;
+        if (!self) return;
+        if (ImGui::GetIO().WantCaptureMouse) return;  // encima de la UI: no zoom
+        self->impl->camera.distance -= (float)sy * 0.2f;
     });
 
     impl->updateSunDirection();
@@ -934,9 +948,9 @@ void App::processInput() {
     lastMouseX = (float)xpos;
     lastMouseY = (float)ypos;
 
-    // Zoom
-    double scrollY = 0.0;
-    glfwSetScrollCallback(window, [](GLFWwindow*, double, double sy) {});
+    // Zoom por rueda: solo cuando el cursor NO esta sobre la UI (si esta sobre
+    // un slider, la rueda lo ajusta a el; el callback de scroll lo respeta).
+    // (El callback real se instala una vez en init; aqui no se toca.)
     // Simple zoom with keys
     if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS ||
         glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS)
@@ -1556,31 +1570,8 @@ void App::render() {
         impl->earth.render();
     }
 
-    // Atmosphere (additive)
-    if (impl->showAtmosphere) {
-        glDepthMask(GL_FALSE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glm::mat4 atmoModel = glm::scale(glm::mat4(1.0f), glm::vec3(1.02f));
-        impl->atmosphereShader.use();
-        impl->atmosphereShader.setMat4("u_model", atmoModel);
-        impl->atmosphereShader.setMat4("u_view", view);
-        impl->atmosphereShader.setMat4("u_projection", proj);
-        impl->atmosphereShader.setVec3("u_sunDir", impl->sunDirection);
-        impl->atmosphereShader.setVec3("u_cameraPos", camPos);
-        impl->atmosphere.render();
-        glDepthMask(GL_TRUE);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    }
-
-    // Terminator line
-    impl->terminatorShader.use();
-    model = glm::mat4(1.0f);
-    impl->terminatorShader.setMat4("u_model", model);
-    impl->terminatorShader.setMat4("u_view", view);
-    impl->terminatorShader.setMat4("u_projection", proj);
-    impl->terminatorShader.setVec3("u_sunDir", impl->sunDirection);
-    impl->terminator.render();
+    // (Atmosfera y terminador: se dibujan en el pase aditivo post-bloom para
+    // que el halo salga nitido y no se queme a blanco con el bloom.)
 
     impl->sceneFBO.unbind();
 
@@ -1622,21 +1613,41 @@ void App::render() {
         glEnable(GL_DEPTH_TEST);
     }
 
-    // --- TEC Layer: se dibuja DESPUES del bloom para que su textura NO participe
-    // en el bright-pass (el bloom solo ilumina atmosfera/Tierra, no el TEC).
-    // Fase 5: FaradayLayer tambien es aditivo (GL_LINES sobre la esfera).
+    // --- Overlays: se dibujan DESPUES del bloom para que no participen
+    // en el bright-pass (el bloom solo ilumina la Tierra; atmosfera, TEC y
+    // resto salen nitidos sin quemarse a blanco).
     bool additiveDrawn = false;
-    if (impl->tecLayer.isVisible() || impl->ionosondeLayer.isVisible() || impl->solarWindLayer.isVisible() || impl->faradayLayer.isVisible() || impl->auroraLayer.isVisible() || impl->shellLayer.isVisible() || impl->refShells.isVisible()) {
+    if (impl->showAtmosphere || impl->tecLayer.isVisible() || impl->ionosondeLayer.isVisible() || impl->solarWindLayer.isVisible() || impl->faradayLayer.isVisible() || impl->auroraLayer.isVisible() || impl->shellLayer.isVisible() || impl->refShells.isVisible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        // Atmosfera primero (halo base bajo las capas de datos).
+        if (impl->showAtmosphere) {
+            glm::mat4 atmoModel = glm::scale(glm::mat4(1.0f), glm::vec3(1.02f));
+            impl->atmosphereShader.use();
+            impl->atmosphereShader.setMat4("u_model", atmoModel);
+            impl->atmosphereShader.setMat4("u_view", view);
+            impl->atmosphereShader.setMat4("u_projection", proj);
+            impl->atmosphereShader.setVec3("u_sunDir", impl->sunDirection);
+            impl->atmosphereShader.setVec3("u_cameraPos", camPos);
+            impl->atmosphere.render();
+        }
         if (impl->tecLayer.isVisible()) impl->tecLayer.render(view, proj);
         if (impl->shellLayer.isVisible()) impl->shellLayer.render(view, proj);
         if (impl->volumeLayer.isVisible()) impl->volumeLayer.render(view, proj, camPos);
         if (impl->sliceOn && impl->sliceLayer.isVisible()) impl->sliceLayer.render(view, proj);
+        // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
+        {
+            impl->terminatorShader.use();
+            glm::mat4 tmodel = glm::mat4(1.0f);
+            impl->terminatorShader.setMat4("u_model", tmodel);
+            impl->terminatorShader.setMat4("u_view", view);
+            impl->terminatorShader.setMat4("u_projection", proj);
+            impl->terminator.render();
+        }
         if (impl->refShells.isVisible()) impl->refShells.render(view, proj);
         if (impl->ionosondeLayer.isVisible()) impl->ionosondeLayer.render(view, proj);
         if (impl->solarWindLayer.isVisible()) impl->solarWindLayer.render(view, proj);

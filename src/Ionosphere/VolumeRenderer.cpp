@@ -69,10 +69,12 @@ void main() {
 
         vec3 n = p / max(r, 1e-6);
         float lat = asin(clamp(n.y, -1.0, 1.0));
+        // t=0 es el SUR (fila 0 del upload = latIdx 0 = lat -90):
+        // t = lat/pi + 0.5. (NO 0.5 - lat/pi: eso lee el hemisferio especular.)
         float lon = 3.14159265 - atan(n.z, n.x);
         if (lon > 3.14159265) lon -= 2.0 * 3.14159265;
         if (lon < -3.14159265) lon += 2.0 * 3.14159265;
-        vec2 uv = vec2(lon / (2.0 * 3.14159265) + 0.5, 0.5 - lat / 3.14159265);
+        vec2 uv = vec2(lon / (2.0 * 3.14159265) + 0.5, lat / 3.14159265 + 0.5);
 
         float d = texture(u_density, vec3(uv, altNorm)).r;
         vec3 col = texture(u_colormap, d).rgb;

@@ -9,7 +9,8 @@
 // textura 3D (ver docs/volumetric-density-spec.md).
 //
 // Convencion esferica del motor (NO la ingenua): lon = pi - atan2(z, x),
-// t = 0.5 - lat/pi (norte). Ver IonosondeLayer.cpp:249-250.
+// t = lat/pi + 0.5 (t=0 es el SUR: la fila 0 del upload es latIdx 0).
+// Ver IonosondeLayer.cpp:249-250. Invertirla lee el hemisferio especular.
 class VolumeRenderer {
 public:
     VolumeRenderer();
@@ -26,9 +27,8 @@ public:
 
     void setColormap(const std::string& name);
     const std::string& getColormapName() const { return colormapName_; }
-    void setDensityRange(float log10Min, float log10Max) {
-        rangeMin_ = log10Min; rangeMax_ = log10Max;
-    }
+    // (Sin setDensityRange a proposito: la normalizacion log10 [8,12.5] se hace
+    // en CPU al construir el volumen; un setter aqui mentiria.)
     void setOpacityScale(float k) { opacityScale_ = glm::clamp(k, 0.0f, 3.0f); }
     float getOpacityScale() const { return opacityScale_; }
     void setStepCount(int n) { steps_ = glm::clamp(n, 16, 256); }
@@ -43,7 +43,6 @@ private:
     int indexCount_ = 0;
     int lonRes_ = 0, latRes_ = 0, altRes_ = 0;
     float altMinKm_ = 60.0f, altMaxKm_ = 500.0f;
-    float rangeMin_ = 8.0f, rangeMax_ = 12.5f;
     float opacityScale_ = 1.0f;
     int steps_ = 64;
     bool visible_ = false;

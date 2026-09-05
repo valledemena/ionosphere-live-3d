@@ -17,6 +17,22 @@ struct LayerProfile {
     bool hasE = false, hasF1 = false, hasF2 = false;
 };
 
+// Saneado al ingerir (SAO ruidoso puede dar B1<1.9, donde ni xmax=1.6 es
+// seguro: el minimo real cae a x~=1.2 para B1=1.0). Rangos amplios para no
+// tocar datos sanos.
+inline float sanitizeB0(float v) {
+    if (!(v > 0.0f)) return 100.0f;
+    if (v < 20.0f) return 20.0f;
+    if (v > 300.0f) return 300.0f;
+    return v;
+}
+inline float sanitizeB1(float v) {
+    if (!(v > 0.0f)) return 3.0f;
+    if (v < 1.7f) return 1.7f;
+    if (v > 4.0f) return 4.0f;
+    return v;
+}
+
 inline LayerProfile profileFromStation(const StationPoint& s) {
     LayerProfile p;
     if (s.foE > 0.0f) {
@@ -33,8 +49,8 @@ inline LayerProfile profileFromStation(const StationPoint& s) {
     if (s.foF2 > 0.0f && s.hmF2 > 0.0f) {
         p.NmF2 = (s.nmF2 > 0.0f) ? s.nmF2 : 1.24e10f * s.foF2 * s.foF2;
         p.hmF2 = s.hmF2;
-        p.B0 = (s.B0 > 0.0f) ? s.B0 : 100.0f;
-        p.B1 = (s.B1 > 0.0f) ? s.B1 : 3.0f;   // 3 = valor clasico IRI de fallback
+        p.B0 = sanitizeB0(s.B0);
+        p.B1 = sanitizeB1(s.B1);
         p.hasF2 = true;
     }
     return p;
@@ -62,9 +78,17 @@ inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float f
     if (p.hasF2) {
         float NeF2 = 0.0f;
         if (hKm <= p.hmF2) {
-            // Epstein modificado, clampear x: fuera de rango "resucita" (ver spec).
-            float x = std::max(0.0f, std::min(3.0f, (p.hmF2 - hKm) / p.B0));
-            NeF2 = p.NmF2 * expf(-powf(x, p.B1) / coshf(x));
+            // Epstein modificado. El minimo real de x^B1/cosh(x) esta en
+            // x*tanh(x)=B1 (x*~=1.97 para B1=1.9): clampear a 3.0 YA resucita
+            // con B1 realista. Clamp a 1.6 (seguro para B1>=1.7, saneado arriba)
+            // + taper exponencial mas alla, en vez de meseta.
+            float B0 = p.B0 > 0.0f ? p.B0 : 100.0f;
+            float x = (p.hmF2 - hKm) / B0;
+            const float xmax = 1.6f;
+            float xc = x < xmax ? x : xmax;
+            float base = p.NmF2 * expf(-powf(xc, p.B1) / coshf(xc));
+            if (x > xmax) base *= expf(-(x - xmax) / 1.2f);
+            NeF2 = base;
         } else {
             float Htop = 60.0f * (1.0f + (hKm - p.hmF2) / 300.0f);
             NeF2 = p.NmF2 * expf(-(hKm - p.hmF2) / Htop);

@@ -2,8 +2,9 @@
 out vec4 fragColor;
 
 void main() {
-    // Terminator line: faint orange ring on the day/night boundary.
+    // Terminator line: faint deep-orange ring on the day/night boundary.
     // Geometry is rebuilt in the sun-perpendicular plane (Terminator::update),
-    // so the color is constant here.
-    fragColor = vec4(1.0, 0.5, 0.2, 0.4);
+    // so the color is constant here. Kept dim on purpose: additive blending
+    // over bright day side would turn a brighter line white.
+    fragColor = vec4(0.85, 0.32, 0.08, 0.22);
 }
