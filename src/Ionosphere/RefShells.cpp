@@ -28,8 +28,11 @@ RefShells::RefShells() {}
 RefShells::~RefShells() { destroy(); }
 
 glm::vec3 RefShells::latLonToPos(float latDeg, float lonDeg, float r) const {
+    // OJO (historial de meridianos rotados 180°): TODO el motor usa
+    // theta = pi - lonRad (ver IonosondeLayer.cpp:249, malla igual que
+    // GridLayer/Earth verificada por pixeles). NO usar radians(lon) a secas.
     float phi = 3.14159265f * 0.5f - glm::radians(latDeg);
-    float theta = glm::radians(lonDeg);
+    float theta = 3.14159265f - glm::radians(lonDeg);
     float sn = sinf(phi), cs = cosf(phi);
     return glm::vec3(r * sn * cosf(theta), r * cs, r * sn * sinf(theta));
 }
@@ -48,11 +51,29 @@ void RefShells::init() {
     glDeleteShader(vs);
     glDeleteShader(fs);
 
+    glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &vbo_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+
+    rebuild();
+    printf("[OK] RefShells initialized (%d verts)\n", vertexCount_);
+}
+
+void RefShells::rebuild() {
     struct Shell { float altKm; glm::vec3 col; };
-    static const Shell shells[] = {
-        {110.0f, glm::vec3(0.10f, 0.45f, 0.20f)},   // E  (verde tenue)
-        {200.0f, glm::vec3(0.50f, 0.42f, 0.10f)},   // F1 (amarillo tenue)
-        {300.0f, glm::vec3(0.50f, 0.22f, 0.07f)},   // F2 (naranja tenue)
+    glm::vec3 colE(0.10f, 0.45f, 0.20f);
+    glm::vec3 colF1(0.50f, 0.42f, 0.10f);
+    glm::vec3 colF2(0.50f, 0.22f, 0.07f);
+    const Shell shells[] = {
+        {altE_, colE},     // E  (verde tenue)
+        {altF1_, colF1},   // F1 (amarillo tenue)
+        {altF2_, colF2},   // F2 (naranja tenue)
     };
     static const float parallels[] = {0.0f, 30.0f, -30.0f, 60.0f, -60.0f};
 
@@ -85,18 +106,17 @@ void RefShells::init() {
         }
     }
     vertexCount_ = (int)verts.size() / 6;
+    if (vao_ == 0 || vbo_ == 0) return;
 
-    glGenVertexArrays(1, &vao_);
-    glGenBuffers(1, &vbo_);
-    glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
-    printf("[OK] RefShells initialized (%d verts)\n", vertexCount_);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void RefShells::updateAltitudes(float eKm, float f1Km, float f2Km) {
+    if (fabsf(eKm - altE_) < 0.5f && fabsf(f1Km - altF1_) < 0.5f && fabsf(f2Km - altF2_) < 0.5f) return;
+    altE_ = eKm; altF1_ = f1Km; altF2_ = f2Km;
+    rebuild();
 }
 
 void RefShells::render(const glm::mat4& view, const glm::mat4& projection) {

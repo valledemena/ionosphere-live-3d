@@ -26,6 +26,7 @@ private:
     void loadSettings();      // settings.cfg -> GUI (si existe)
     void fetchWorker();       // hilo background: red+parse, publica bundles
     void consumeBundles();    // hilo principal: aplica bundles frescos a capas/UI
+    void rebuildSlice(bool force);  // cortina A=pinned B=hover desde lastVolume
     float currentKp() const;  // Kp del ultimo bundle (2.0 si no hay)
 
     GLFWwindow* window = nullptr;

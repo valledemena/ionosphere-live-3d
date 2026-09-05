@@ -47,6 +47,7 @@ set(SOURCES
     src/Ionosphere/SolarWindLayer.cpp
     src/Ionosphere/FaradayLayer.cpp
     src/Ionosphere/RefShells.cpp
+    src/Ionosphere/SliceLayer.cpp
     src/Data/DataManager.cpp
     src/Data/EsaAdapter.cpp
     src/Data/GloTecAdapter.cpp
@@ -57,6 +58,7 @@ set(SOURCES
     src/Data/RadioPropagationAdapter.cpp
     src/Data/AuroraAdapter.cpp
     src/Data/EbroAdapter.cpp
+    src/Data/XrayAdapter.cpp
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp

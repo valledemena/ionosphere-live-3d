@@ -51,6 +51,10 @@ public:
     // 0 = esfera perfecta. Tipico 0.02-0.06 para tormentas visibles.
     void setDisplace(float a);
     float getDisplace() const { return displaceAmp_; }
+    // Relieve centrado: desplaza (valor - midRango)/rango en vez de
+    // valor-normalizado (para hmF2: alturas reales sobre/bajo la media,
+    // dos tormentas con igual TEC pero distinta hmF2 ya no se ven iguales).
+    void setDisplaceCentered(bool c);
     const std::string& getColormapName() const { return colormapName_; }
     // Paleta activa (256 entradas RGB 0..1) para dibujar leyendas sincronizadas.
     const std::vector<float>& getColormap() const { return colormap_; }
@@ -69,6 +73,8 @@ private:
     void buildColormap(const std::string& name);
     // Valor normalizado 0..1 del grid en coords UV de malla (bilineal, lon con wrap).
     float sampleNorm(float u, float v) const;
+    // Valor crudo (sin normalizar) en coords UV.
+    float sampleRaw(float u, float v) const;
     // Recalcula posiciones de vertices (mismo orden que createMesh).
     void buildPositions(std::vector<float>& verts) const;
     void updatePositions();
@@ -92,8 +98,9 @@ private:
     std::vector<unsigned char> textureData_;
     std::vector<float> colormap_;
     std::string colormapName_ = "viridis";
-    float lastMin_ = 0.0f, lastMax_ = 1.0f;
+    float lastMin_ = 0.0f, lastMax_ = 1.0f, rangeMid_ = 0.5f;
     float displaceAmp_ = 0.0f;
+    bool displaceCentered_ = false;
 
     bool meshDirty_ = true;
     bool textureDirty_ = true;

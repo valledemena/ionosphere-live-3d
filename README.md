@@ -26,6 +26,11 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 - **LUF / FOT / Spread-F** derived per ITU practice.
 - Per-variable colormaps (viridis/inferno/plasma/turbo) + manual override,
   altitude/opacity sliders, live legend with units, range and data timestamp.
+- **Volumetric density**: real raymarched Ne(lat, lon, h) rebuilt from station
+  profiles (Chapman + Epstein) every ~5 s, with day/night D-layer and GOES
+  flare boost; nested outer shell + storm-swell relief.
+- **Path slice**: vertical Ne(h) curtain between pinned (A) and hovered (B)
+  station with peak log-density readout.
 
 **Stations & radio**
 - GIRO points colored by metric, hover tooltips with foF2 sparkline (~2 h),
@@ -53,6 +58,7 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 | Kp/Dst/F10.7/Ap/SSN | NOAA SWPC JSON | 5 min |
 | Solar wind | NOAA RTSW 1-min | 5 min |
 | Aurora | NOAA Ovation | 5 min |
+| X-ray flux (D-layer/flares) | NOAA GOES primary | 5 min |
 | Night lights | NASA Black Marble 2016 | static texture |
 
 Any unreachable source degrades gracefully (per-field mock/offline badges,

@@ -42,8 +42,13 @@
 #include "Data/RadioPropagationAdapter.h"
 #include "Data/AuroraAdapter.h"
 #include "Data/EbroAdapter.h"
+#include "Data/XrayAdapter.h"
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
+#include "Ionosphere/VolumeRenderer.h"
+#include "Ionosphere/SliceLayer.h"
+#include "Ionosphere/LayerProfile.h"
+#include "Ionosphere/DensityVolume.h"
 #include "Utils/SolarPosition.h"
 #include "Utils/CoordinateSystem.h"
 
@@ -68,21 +73,24 @@ struct App::Impl {
         bool usedGiro = false;
         std::string error;
     };
+    struct XrayBundle { XraySample latest; };
     mutable std::mutex bundleMutex;
     std::shared_ptr<const TecBundle> tec;
     std::shared_ptr<const IndicesBundle> indices;
     std::shared_ptr<const WindBundle> wind;
     std::shared_ptr<const AuroraBundle> auroraB;
     std::shared_ptr<const RadioBundle> radio;
+    std::shared_ptr<const XrayBundle> xray;
     std::shared_ptr<const TecBundle> getTec() const { std::lock_guard<std::mutex> lk(bundleMutex); return tec; }
     std::shared_ptr<const IndicesBundle> getIndices() const { std::lock_guard<std::mutex> lk(bundleMutex); return indices; }
     std::shared_ptr<const WindBundle> getWind() const { std::lock_guard<std::mutex> lk(bundleMutex); return wind; }
     std::shared_ptr<const AuroraBundle> getAurora() const { std::lock_guard<std::mutex> lk(bundleMutex); return auroraB; }
     std::shared_ptr<const RadioBundle> getRadio() const { std::lock_guard<std::mutex> lk(bundleMutex); return radio; }
+    std::shared_ptr<const XrayBundle> getXray() const { std::lock_guard<std::mutex> lk(bundleMutex); return xray; }
     // Hilo worker de red + progreso de carga inicial.
     std::thread fetchThread;
     std::atomic<bool> shutdownRequested{false};
-    std::atomic<int> loadTotal{5}, loadDone{0};
+    std::atomic<int> loadTotal{6}, loadDone{0};
     std::atomic<bool> initialLoadDone{false};
 
     Camera camera;
@@ -188,6 +196,17 @@ struct App::Impl {
     std::shared_ptr<const WindBundle> lastWind;
     std::shared_ptr<const AuroraBundle> lastAurora;
     std::shared_ptr<const RadioBundle> lastRadio;
+    std::shared_ptr<const XrayBundle> lastXray;
+    // Volumen + shells de referencia.
+    VolumeRenderer volumeLayer;
+    bool volumeVisible = false;
+    float volumeOpacity = 1.0f;
+    DensityVolume lastVolume;   // ultimo volumen construido (para el slice)
+    // Slice QTH-DX: A = pineada, B = hover.
+    SliceLayer sliceLayer;
+    bool sliceOn = false;
+    std::string sliceA, sliceB;
+    float slicePeakLog = 0.0f;  // log10(Ne) maximo del trayecto
     // Anillo protegido (el hilo de precarga escribe mientras el render lee).
     std::mutex tecHistMutex;
     std::atomic<int> histTotal{0}, histDone{0};
@@ -396,6 +415,80 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
     g.valid = true;
     g.timestamp = utc;
     return g;
+}
+
+// Interpola perfiles de capa (IDW, mismo patron/radio/peso que giroInterpGrid
+// para consistencia visual con las capas 2D). Fondo = mediana por campo.
+static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSample>& samples, int w, int h) {
+    std::vector<LayerProfile> out((size_t)w * h);
+    std::vector<StationSample> pts;
+    for (const auto& s : samples) if (s.valid) pts.push_back(s);
+    if (pts.empty()) return out;
+
+    const float maxDist = 50.0f;
+    const float cellLat = 180.0f / h;
+    const float cellLon = 360.0f / w;
+    const float wBg = 0.004f;
+    auto medOf = [&](float StationSample::*m) {
+        std::vector<float> v;
+        v.reserve(pts.size());
+        for (const auto& p : pts) if (p.*m > 0.0f) v.push_back(p.*m);
+        if (v.empty()) return 0.0f;
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    float fE = medOf(&StationSample::foE);
+    float fF1 = medOf(&StationSample::foF1);
+    float fF2 = medOf(&StationSample::foF2);
+    const float mNmE  = fE  > 0.0f ? 1.24e10f * fE * fE : 0.0f;
+    const float mNmF1 = fF1 > 0.0f ? 1.24e10f * fF1 * fF1 : 0.0f;
+    const float mNmF2 = fF2 > 0.0f ? 1.24e10f * fF2 * fF2 : 0.0f;
+    const float hmedF2 = medOf(&StationSample::hmF2);
+    float mB0 = medOf(&StationSample::B0); if (mB0 <= 0.0f) mB0 = 100.0f;
+    float mB1 = medOf(&StationSample::B1); if (mB1 <= 0.0f) mB1 = 3.0f;
+
+    for (int latIdx = 0; latIdx < h; latIdx++) {
+        float latG = -90.0f + cellLat * latIdx;
+        for (int lonIdx = 0; lonIdx < w; lonIdx++) {
+            float lonG = -180.0f + cellLon * lonIdx;
+            double wNmE = wBg, vNmE = (double)wBg * mNmE;
+            double wNmF1 = wBg, vNmF1 = (double)wBg * mNmF1;
+            double wNmF2 = wBg, vNmF2 = (double)wBg * mNmF2;
+            double wHm = wBg, vHm = (double)wBg * hmedF2;
+            double wB0 = wBg, vB0 = (double)wBg * mB0;
+            double wB1 = wBg, vB1 = (double)wBg * mB1;
+            for (const auto& p : pts) {
+                float dlat = p.latDeg - latG;
+                float dlon = p.lonDeg - lonG;
+                if (dlon > 180.0f) dlon -= 360.0f;
+                if (dlon < -180.0f) dlon += 360.0f;
+                float d = sqrtf(dlat * dlat + dlon * dlon);
+                if (d > maxDist) continue;
+                float w = 1.0f / (d * d + 0.5f);
+                if (p.foE > 0.0f)  { float v = 1.24e10f * p.foE * p.foE; wNmE += w; vNmE += (double)w * v; }
+                if (p.foF1 > 0.0f) { float v = 1.24e10f * p.foF1 * p.foF1; wNmF1 += w; vNmF1 += (double)w * v; }
+                if (p.foF2 > 0.0f) { float v = 1.24e10f * p.foF2 * p.foF2; wNmF2 += w; vNmF2 += (double)w * v; }
+                if (p.hmF2 > 0.0f) { wHm += w; vHm += (double)w * p.hmF2; }
+                if (p.B0 > 0.0f)   { wB0 += w; vB0 += (double)w * p.B0; }
+                if (p.B1 > 0.0f)   { wB1 += w; vB1 += (double)w * p.B1; }
+            }
+            LayerProfile pr;
+            pr.NmE = (float)(vNmE / wNmE);
+            pr.hasE = pr.NmE > 0.0f;
+            pr.NmF1 = (float)(vNmF1 / wNmF1);
+            pr.hasF1 = pr.NmF1 > 0.0f;
+            pr.NmF2 = (float)(vNmF2 / wNmF2);
+            pr.hmF2 = (float)(vHm / wHm);
+            pr.hasF2 = pr.NmF2 > 0.0f && pr.hmF2 > 0.0f;
+            pr.hmF1 = pr.hmF2 > 0.0f ? std::max(150.0f, 0.8f * pr.hmF2) : 180.0f;
+            pr.B0 = (float)(vB0 / wB0);
+            if (pr.B0 <= 0.0f) pr.B0 = 100.0f;
+            pr.B1 = (float)(vB1 / wB1);
+            if (pr.B1 <= 0.0f) pr.B1 = 3.0f;
+            out[(size_t)latIdx * w + lonIdx] = pr;
+        }
+    }
+    return out;
 }
 
 // Mezcla lineal de dos grids TEC (mismo tamano) para el replay temporal.
@@ -691,6 +784,15 @@ bool App::init(int width, int height, const char* title) {
     impl->faradayLayer.setHeightOffset(0.03f);
     impl->faradayLayer.setScale(1.0f);
 
+    // Volumen Ne(h) real (raymarching; se rellena en update cada ~5 s).
+    impl->volumeLayer.init();
+    impl->volumeLayer.setColormap("viridis");
+    impl->volumeLayer.setOpacityScale(1.0f);
+    impl->volumeLayer.setVisible(false);
+    // Cortina QTH-DX (se rellena al haber volumen + pin + hover).
+    impl->sliceLayer.init();
+    impl->sliceLayer.setVisible(false);
+
     // Anillos de referencia E/F1/F2 (ocultos por defecto).
     impl->refShells.init();
     impl->refShells.setVisible(false);
@@ -762,6 +864,9 @@ bool App::init(int width, int height, const char* title) {
     impl->faradayLayer.setScale(impl->faradayScale);
     impl->auroraLayer.setVisible(impl->auroraVisible);
     impl->auroraLayer.setOpacity(impl->aurOpacity);
+    impl->volumeLayer.setVisible(impl->volumeVisible);
+    impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
+    impl->sliceLayer.setVisible(impl->sliceOn);
     impl->refShells.setVisible(impl->refShellsVisible);
     applyColorLayer();
     applyRelief();
@@ -925,12 +1030,41 @@ void App::update(float dt) {
     // Fase 5: variables 5-7 (LUF/FOT/Spread-F) via RadioPropagationAdapter.
     // En replay, los grids derivados tambien siguen al tiempo de replay (gsAct).
     if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
+        bool centered = (impl->mapVariable == 3);  // hmF2: relieve de alturas reales
+        impl->tecLayer.setDisplaceCentered(centered);
+        impl->shellLayer.setDisplaceCentered(centered);
         updateMainGrid(giroInterpGrid(gsAct, impl->mapVariable - 1, 72, 72));
     } else if (impl->mapVariable >= 5 && impl->mapVariable <= 7) {
         float kpProxy = currentKp();
         double epoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
         updateMainGrid(radioInterpGrid(gsAct,
             impl->mapVariable - 5, 72, 72, epoch, kpProxy));
+    }
+
+    // Volumen Ne(h) + RefShells dinamicos: reconstruir cada ~5 s con las
+    // muestras activas (sigue live, replay, sol y flares).
+    static double lastVolBuild = -1.0;
+    if (now - lastVolBuild > 5.0) {
+        lastVolBuild = now;
+        auto profs = interpLayerProfiles(gsAct, 72, 72);
+        glm::vec3 sd = glm::normalize(impl->sunDirection);
+        applyDayNight(profs, 72, 72, sd.x, sd.y, sd.z);
+        float flare = 1.0f;
+        if (impl->lastXray && impl->lastXray->latest.valid)
+            flare = XrayAdapter::flareFactor(impl->lastXray->latest.flux);
+        DensityVolume vol = buildDensityVolume(profs, 72, 72, 48, 60.0f, 500.0f,
+                                               sd.x, sd.y, sd.z, flare);
+        vol.timestamp = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        impl->volumeLayer.updateVolume(vol);
+        impl->lastVolume = vol;
+        if (impl->sliceOn) rebuildSlice(true);
+        std::vector<float> hv;
+        for (const auto& s : gsAct) if (s.valid && s.hmF2 > 0.0f) hv.push_back(s.hmF2);
+        if (!hv.empty()) {
+            std::sort(hv.begin(), hv.end());
+            float mh = hv[hv.size() / 2];
+            impl->refShells.updateAltitudes(110.0f, std::max(150.0f, 0.8f * mh), mh);
+        }
     }
 
     // Viento solar: refrescar la orientacion/longitud/color de las flechas cuando
@@ -954,6 +1088,9 @@ void App::update(float dt) {
         impl->faradayLayer.setScale(impl->faradayScale);
         lastFaraday = now;
     }
+
+    // Slice QTH-DX: seguir cambios de endpoints (el volumen va cada 5 s).
+    if (impl->sliceOn) rebuildSlice(false);
 }
 
 void App::applyRelief() {
@@ -1008,6 +1145,9 @@ void App::saveSettings() {
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
     fprintf(f, "cineSpeed %g\n", (double)impl->cineSpeed);
     fprintf(f, "replaySpeed %g\n", (double)impl->replaySpeed);
+    fprintf(f, "volumeVisible %d\n", impl->volumeVisible ? 1 : 0);
+    fprintf(f, "volumeOpacity %g\n", (double)impl->volumeOpacity);
+    fprintf(f, "sliceOn %d\n", impl->sliceOn ? 1 : 0);
     fprintf(f, "camRX %g\n", (double)impl->camera.rotateX);
     fprintf(f, "camRY %g\n", (double)impl->camera.rotateY);
     fprintf(f, "camDist %g\n", (double)impl->camera.distance);
@@ -1065,6 +1205,9 @@ void App::loadSettings() {
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
+        else if (k == "volumeVisible") impl->volumeVisible = clB(v);
+        else if (k == "volumeOpacity") impl->volumeOpacity = glm::clamp((float)v, 0.0f, 2.5f);
+        else if (k == "sliceOn") impl->sliceOn = clB(v);
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
         else if (k == "camRY") impl->camera.rotateY = (float)v;
         else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 20.0f);
@@ -1089,8 +1232,10 @@ void App::fetchWorker() {
     AuroraAdapter au;
     au.setGridSize(72, 72);
     RadioPropagationAdapter rp;
+    XrayAdapter xr;
     EsaAdapter esa;   // solo mock offline para el TEC
     bool haveTec = false;
+    bool haveXray = false;
     bool firstPass = true;
 
     auto noteDone = [&]() {
@@ -1187,6 +1332,18 @@ void App::fetchWorker() {
         }
         noteDone();
 
+        // 6) Rayos X GOES (capa D / fulguraciones).
+        {
+            bool real = xr.fetch(epoch);
+            if (xr.getLatest().valid && (real || !haveXray)) {
+                auto b = std::make_shared<Impl::XrayBundle>();
+                b->latest = xr.getLatest();
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->xray = b; }
+                haveXray = true;
+            }
+        }
+        noteDone();
+
         if (firstPass) {
             firstPass = false;
             impl->initialLoadDone.store(true);
@@ -1231,6 +1388,58 @@ void App::consumeBundles() {
     if (rp && rp != impl->lastRadio) {
         impl->lastRadio = rp;
     }
+    auto xr = impl->getXray();
+    if (xr && xr != impl->lastXray) {
+        impl->lastXray = xr;
+    }
+}
+
+// Cortina vertical A (pinned) -> B (hover) muestreada de lastVolume.
+// Sin GL salvo updateSlice (hilo principal). Convencion verificada del motor.
+void App::rebuildSlice(bool force) {
+    const StationPoint* A = nullptr;
+    const StationPoint* B = nullptr;
+    int n = impl->ionosondeLayer.getStationCount();
+    if (!impl->pinnedCode.empty()) {
+        for (int i = 0; i < n; i++) {
+            const StationPoint* c = impl->ionosondeLayer.getSample(i);
+            if (c && c->code == impl->pinnedCode) { A = c; break; }
+        }
+    }
+    if (impl->hoveredStation >= 0 && impl->hoveredStation < n)
+        B = impl->ionosondeLayer.getSample(impl->hoveredStation);
+    if (!A || !B || A->code == B->code || !impl->lastVolume.valid) return;
+    if (!force && A->code == impl->sliceA && B->code == impl->sliceB) return;
+    impl->sliceA = A->code;
+    impl->sliceB = B->code;
+
+    glm::vec3 da = densityDir(A->latDeg, A->lonDeg);
+    glm::vec3 db = densityDir(B->latDeg, B->lonDeg);
+    std::vector<float> vals((size_t)SliceLayer::SEG * SliceLayer::LVL);
+    float peak = 0.0f;
+    float dot = glm::clamp(glm::dot(da, db), -1.0f, 1.0f);
+    float omega = acosf(dot);
+    bool useSlerp = omega > 1e-4f && omega < 3.14159265f - 1e-4f;
+    const float kPi = 3.14159265f;
+    for (int j = 0; j < SliceLayer::LVL; j++) {
+        float f = (float)j / (float)(SliceLayer::LVL - 1);
+        float altKm = 60.0f + (500.0f - 60.0f) * powf(f, 1.5f);
+        for (int i = 0; i < SliceLayer::SEG; i++) {
+            float s = (float)i / (float)(SliceLayer::SEG - 1);
+            glm::vec3 dir = useSlerp
+                ? (da * sinf((1.0f - s) * omega) + db * sinf(s * omega)) / sinf(omega)
+                : glm::normalize(da * (1.0f - s) + db * s);
+            float lat = asinf(glm::clamp(dir.y, -1.0f, 1.0f)) * 180.0f / kPi;
+            float lon = (kPi - atan2f(dir.z, dir.x)) * 180.0f / kPi;
+            if (lon > 180.0f) lon -= 360.0f;
+            if (lon < -180.0f) lon += 360.0f;
+            float v = sampleVolume(impl->lastVolume, lat, lon, altKm);
+            vals[(size_t)j * SliceLayer::SEG + i] = v;
+            if (v > peak) peak = v;
+        }
+    }
+    impl->sliceLayer.updateSlice(da, db, vals, "viridis");
+    impl->slicePeakLog = 8.0f + 4.5f * peak;  // misma normalizacion que el volumen
 }
 
 void App::pushHistoryFrame(const GridData& grid, double ts) {    if (!grid.valid || grid.values.empty()) return;
@@ -1253,6 +1462,8 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
     static const int VAR_AUTO_CM[8] = { 0, 2, 1, 3, 3, 2, 1, 3 };  // TEC,foF2,MUF,hmF2,NmF2,LUF,FOT,SpF
 
     if (impl->mapVariable == 0) {
+        impl->tecLayer.setDisplaceCentered(false);
+        impl->shellLayer.setDisplaceCentered(false);
         impl->tecLayer.clearRange();
         if (auto t = impl->getTec()) {
             if (t->grid.valid) updateMainGrid(t->grid);
@@ -1261,9 +1472,14 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
         int var = impl->mapVariable - 1;   // 0=foF2,1=MUF,2=hmF2,3=NmF2
         GridData g = giroInterpGrid(impl->giro.getSamples(), var, 72, 72);
         if (!g.valid) return;
+        bool centered = (var == 2);   // hmF2: relieve de alturas reales
+        impl->tecLayer.setDisplaceCentered(centered);
+        impl->shellLayer.setDisplaceCentered(centered);
         impl->tecLayer.clearRange();
         updateMainGrid(g);
     } else if (impl->mapVariable >= 5 && impl->mapVariable <= 7) {
+        impl->tecLayer.setDisplaceCentered(false);
+        impl->shellLayer.setDisplaceCentered(false);
         float kpProxy = currentKp();
         double epoch = (double)std::time(nullptr);  // derive*() espera Unix UTC
         int var = impl->mapVariable - 5;   // 0=LUF,1=FOT,2=Spread-F
@@ -1419,6 +1635,8 @@ void App::render() {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         if (impl->tecLayer.isVisible()) impl->tecLayer.render(view, proj);
         if (impl->shellLayer.isVisible()) impl->shellLayer.render(view, proj);
+        if (impl->volumeLayer.isVisible()) impl->volumeLayer.render(view, proj, camPos);
+        if (impl->sliceOn && impl->sliceLayer.isVisible()) impl->sliceLayer.render(view, proj);
         if (impl->refShells.isVisible()) impl->refShells.render(view, proj);
         if (impl->ionosondeLayer.isVisible()) impl->ionosondeLayer.render(view, proj);
         if (impl->solarWindLayer.isVisible()) impl->solarWindLayer.render(view, proj);
@@ -1606,10 +1824,32 @@ void App::render() {
         impl->shellLayer.setVisible(impl->outerShell);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Second nested isosurface (inferno, +0.025 radius, 0.45 opacity) sharing the same grid.");
+    if (ImGui::Checkbox("Volumetric density", &impl->volumeVisible)) {
+        impl->volumeLayer.setVisible(impl->volumeVisible);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real raymarched electron density Ne(lat, lon, h) rebuilt from station profiles (Chapman + Epstein) every ~5 s. Heavier on the GPU; follows live and replay.");
+    if (ImGui::SliderFloat("Volume opacity", &impl->volumeOpacity, 0.0f, 2.5f)) {
+        impl->volumeOpacity = glm::clamp(impl->volumeOpacity, 0.0f, 2.5f);
+        impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Brightness of the volumetric rendering. Visual only.");
+    if (ImGui::Checkbox("Path slice", &impl->sliceOn)) {
+        impl->sliceLayer.setVisible(impl->sliceOn);
+        if (!impl->sliceOn) { impl->sliceA.clear(); impl->sliceB.clear(); }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Vertical Ne(h) curtain between the pinned station (A, click to pin) and the hovered station (B). Same volume data, viridis scale.");
+    if (impl->sliceOn) {
+        if (!impl->sliceA.empty() && !impl->sliceB.empty() && impl->sliceLayer.hasData()) {
+            ImGui::Text("%s -> %s  pk %.1f", impl->sliceA.c_str(), impl->sliceB.c_str(), impl->slicePeakLog);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Path endpoints and peak log10 electron density [m^-3] along it. Higher peak = easier reflection on HF.");
+        } else {
+            ImGui::TextDisabled("Pin a station (A), hover another (B).");
+        }
+    }
     if (ImGui::Checkbox("Ref shells E/F1/F2", &impl->refShellsVisible)) {
         impl->refShells.setVisible(impl->refShellsVisible);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Reference altitude rings at 110 km (E, green), 200 km (F1, yellow) and 300 km (F2, orange). No data, just height cues.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Reference altitude rings: E fixed at 110 km, F1/F2 follow the measured hmF2 median (dynamic). No data of their own, just height cues.");
 
     // ---- GIRO ionosondas (Fase 3) ----
     ImGui::Separator();
@@ -1926,6 +2166,16 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Daily planetary Ap (nT, from Kp). <10 quiet, >30 active, >50 storm.");
     ImGui::Text("SSN: %.0f", sw.ssn);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Sunspot Number. Cycle 25 peak ~100-150. Higher SSN means higher MUF/FOT.");
+    {
+        auto xB = impl->getXray();
+        if (xB && xB->latest.valid) {
+            const XraySample& xr = xB->latest;
+            ImGui::Text("X-ray: %c%.1f (%.0e W/m2)", xr.fclass, xr.fsub, (double)xr.flux);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("GOES X-ray flux, 0.1-0.8 nm band (dayside D-layer driver). M/X flares switch on daytime absorption on low bands.");
+        } else {
+            ImGui::TextDisabled("X-ray: waiting for data...");
+        }
+    }
 
     ImGui::Separator();
     ImGui::Text("Trends");
@@ -2257,6 +2507,8 @@ void App::shutdown() {
     impl->shutdownRequested.store(true);
     if (impl->fetchThread.joinable()) impl->fetchThread.join();
     impl->tecLayer.destroy();
+    impl->volumeLayer.destroy();
+    impl->sliceLayer.destroy();
     impl->shellLayer.destroy();
     impl->ionosondeLayer.destroy();
     impl->solarWindLayer.destroy();
