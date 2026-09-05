@@ -143,6 +143,7 @@ struct App::Impl {
     bool giroStationsVisible = true;
     bool auroraVisible = true;
     bool showEarth = true, showAtmosphere = true, showStars = true;
+    bool terminatorVisible = true;
     float nightLevel = 0.45f;   // night-side brightness (earth.frag u_night)
     float cloudAmt = 0.55f;     // 0 = clear, 1 = overcast (earth.frag u_cloudAmt)
     float tecOpacity = 1.0f;
@@ -725,7 +726,7 @@ bool App::init(int width, int height, const char* title) {
             "void main(){ gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0); }\n",
             "#version 400 core\n"
             "out vec4 fragColor;\n"
-            "void main(){ fragColor = vec4(0.85, 0.32, 0.08, 0.22); }\n"
+            "void main(){ fragColor = vec4(0.80, 0.38, 0.12, 0.18); }\n"
         );
     }
 
@@ -1135,6 +1136,7 @@ void App::saveSettings() {
     fprintf(f, "giroPointSize %g\n", (double)impl->giroPointSize);
     fprintf(f, "aurOpacity %g\n", (double)impl->aurOpacity);
     fprintf(f, "showEarth %d\n", impl->showEarth ? 1 : 0);
+    fprintf(f, "showTerminator %d\n", impl->terminatorVisible ? 1 : 0);
     fprintf(f, "showAtmosphere %d\n", impl->showAtmosphere ? 1 : 0);
     fprintf(f, "showStars %d\n", impl->showStars ? 1 : 0);
     fprintf(f, "nightLevel %g\n", (double)impl->nightLevel);
@@ -1195,6 +1197,7 @@ void App::loadSettings() {
         else if (k == "giroPointSize") impl->giroPointSize = glm::clamp((float)v, 3.0f, 30.0f);
         else if (k == "aurOpacity") impl->aurOpacity = glm::clamp((float)v, 0.0f, 1.5f);
         else if (k == "showEarth") impl->showEarth = clB(v);
+        else if (k == "showTerminator") impl->terminatorVisible = clB(v);
         else if (k == "showAtmosphere") impl->showAtmosphere = clB(v);
         else if (k == "showStars") impl->showStars = clB(v);
         else if (k == "nightLevel") impl->nightLevel = glm::clamp((float)v, 0.05f, 1.0f);
@@ -1617,7 +1620,7 @@ void App::render() {
     // en el bright-pass (el bloom solo ilumina la Tierra; atmosfera, TEC y
     // resto salen nitidos sin quemarse a blanco).
     bool additiveDrawn = false;
-    if (impl->showAtmosphere || impl->tecLayer.isVisible() || impl->ionosondeLayer.isVisible() || impl->solarWindLayer.isVisible() || impl->faradayLayer.isVisible() || impl->auroraLayer.isVisible() || impl->shellLayer.isVisible() || impl->refShells.isVisible()) {
+    if (impl->showAtmosphere || impl->terminatorVisible || impl->tecLayer.isVisible() || impl->ionosondeLayer.isVisible() || impl->solarWindLayer.isVisible() || impl->faradayLayer.isVisible() || impl->auroraLayer.isVisible() || impl->shellLayer.isVisible() || impl->refShells.isVisible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
@@ -1640,7 +1643,7 @@ void App::render() {
         if (impl->volumeLayer.isVisible()) impl->volumeLayer.render(view, proj, camPos);
         if (impl->sliceOn && impl->sliceLayer.isVisible()) impl->sliceLayer.render(view, proj);
         // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
-        {
+        if (impl->terminatorVisible) {
             impl->terminatorShader.use();
             glm::mat4 tmodel = glm::mat4(1.0f);
             impl->terminatorShader.setMat4("u_model", tmodel);
@@ -1776,6 +1779,8 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Atmospheric rim glow (fresnel). Purely visual, no data.");
     ImGui::Checkbox("Stars", &impl->showStars);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Starfield background. Decorative only.");
+    ImGui::Checkbox("Terminator", &impl->terminatorVisible);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Thin ring on the day/night boundary (follows the real sun). Turn off if you prefer a clean globe.");
     ImGui::Separator();
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
