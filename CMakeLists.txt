@@ -41,12 +41,22 @@ set(SOURCES
     src/Globe/Atmosphere.cpp
     src/Globe/Terminator.cpp
     src/Globe/Stars.cpp
-    src/Ionosphere/TecLayer.cpp
+    src/Ionosphere/GridLayer.cpp
     src/Ionosphere/VolumeRenderer.cpp
     src/Ionosphere/IonosondeLayer.cpp
+    src/Ionosphere/SolarWindLayer.cpp
+    src/Ionosphere/FaradayLayer.cpp
+    src/Ionosphere/RefShells.cpp
     src/Data/DataManager.cpp
     src/Data/EsaAdapter.cpp
+    src/Data/GloTecAdapter.cpp
+    src/Data/GiroAdapter.cpp
     src/Data/NoaaAdapter.cpp
+    src/Data/SolarIndicesAdapter.cpp
+    src/Data/SolarWindAdapter.cpp
+    src/Data/RadioPropagationAdapter.cpp
+    src/Data/AuroraAdapter.cpp
+    src/Data/EbroAdapter.cpp
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp

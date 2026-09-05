@@ -52,7 +52,7 @@ void Earth::init() {
             verts.push_back(x);
             verts.push_back(y);
             verts.push_back(z);
-            float u = (float)j / slices;
+            float u = 1.0f - (float)j / slices;
             verts.push_back(u);
             verts.push_back((float)i / stacks);
         }
@@ -93,11 +93,16 @@ void Earth::init() {
     glBindVertexArray(0);
 
     texture = loadTexture("textures/earth-day.jpg");
+    nightTexture = loadTexture("textures/earth-night.jpg");
 }
 
 void Earth::render() {
     glBindVertexArray(vao);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, nightTexture);
+    glActiveTexture(GL_TEXTURE0);
     glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 }
@@ -107,4 +112,5 @@ void Earth::destroy() {
     if (vbo) glDeleteBuffers(1, &vbo);
     if (ebo) glDeleteBuffers(1, &ebo);
     if (texture) glDeleteTextures(1, &texture);
+    if (nightTexture) glDeleteTextures(1, &nightTexture);
 }

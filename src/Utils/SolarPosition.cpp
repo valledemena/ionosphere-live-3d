@@ -34,13 +34,16 @@ glm::vec3 getDirection(double utcSeconds) {
     float y = (float)(sin(lon) * cos(obliquity));
     float z = (float)(sin(lon) * sin(obliquity));
 
-    // Rotate by Earth's rotation (approximate, ignoring equation of time)
+    // Earth-fixed frame: rotate by -GMST about z (Earth has turned +GMST
+    // eastward underneath the Sun), then map equatorial (x, y, z-up) to our
+    // mesh frame (-X = lon 0, +Z = lon 90E, +Y = north).
+    // (El codigo anterior rotaba +GMST: longitudes espejadas.)
     double GMST = fmod(280.46061837 + 360.98564736629 * j2000 + 0.000387933 * T * T, 360.0);
     double rotation = GMST * DEG2RAD;
-    float rx = x * (float)cos(rotation) - y * (float)sin(rotation);
-    float ry = x * (float)sin(rotation) + y * (float)cos(rotation);
+    float fx = x * (float)cos(rotation) + y * (float)sin(rotation);
+    float fy = -x * (float)sin(rotation) + y * (float)cos(rotation);
 
-    return glm::normalize(glm::vec3(rx, z, -ry));
+    return glm::normalize(glm::vec3(-fx, z, fy));
 }
 
 }

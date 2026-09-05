@@ -10,5 +10,6 @@ public:
 private:
     GLuint vao = 0, vbo = 0, ebo = 0;
     GLuint texture = 0;
+    GLuint nightTexture = 0;   // Black Marble (luces nocturnas, textures/earth-night.jpg)
     int indexCount = 0;
 };

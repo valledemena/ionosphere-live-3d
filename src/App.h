@@ -2,6 +2,9 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+
+struct GridData;   // Ionosphere/GridLayer.h (solo referencia en la interfaz)
 
 class App {
 public:
@@ -15,6 +18,15 @@ private:
     void processInput();
     void update(float dt);
     void render();
+    void applyColorLayer();   // aplica la variable de mapa elegida a la capa de colores esferica
+    void applyRelief();       // amplitud de relieve efectiva (storm swell) a ambas cascaras
+    void updateMainGrid(const GridData& grid);  // TEC + outer shell a la vez
+    void pushHistoryFrame(const GridData& grid, double ts);  // anillo ordenado, dedup, cap 36
+    void saveSettings();      // GUI -> settings.cfg (working dir)
+    void loadSettings();      // settings.cfg -> GUI (si existe)
+    void fetchWorker();       // hilo background: red+parse, publica bundles
+    void consumeBundles();    // hilo principal: aplica bundles frescos a capas/UI
+    float currentKp() const;  // Kp del ultimo bundle (2.0 si no hay)
 
     GLFWwindow* window = nullptr;
     int winW = 1280, winH = 720;

@@ -1,0 +1,52 @@
+#pragma once
+#include <string>
+#include <vector>
+
+#include "Ionosphere/GridLayer.h"  // TECGrid
+
+// GloTecAdapter: obtiene el TEC ionosférico real desde NOAA SWPC GloTEC.
+//
+// El endpoint ofrece productos en varias resoluciones. Usamos el GeoJSON
+// "geojson_2d_urt.json" que contiene un indice de archivos:
+//   [{ url: "/products/glotec/glotec_icao_<fecha>.geojson", time_tag: "..." }]
+// y el archivo es una FeatureCollection de 5184 features (72 lon x 72 lat,
+// paso lon 5deg,  lat 2.5deg), cada una con properties {tec, anomaly, hmF2,
+// NmF2, quality_flag}.
+//
+// El grid resultante usa el mismo layout que TecLayer::updateTexture() espera:
+//   values[latIdx * width + lonIdx], fila 0 = lat -90 (sur), col 0 = lon -180
+// (aqui col 0 = lon -177.5, desplazamiento de media celda aceptado).
+// Una entrada del indice GloTEC (fichero historico disponible).
+struct GloTecFrame {
+    std::string url;      // tal cual viene en el indice (normalmente absoluta o /products/...)
+    double timeUtc = 0.0; // time_tag del indice
+};
+
+class GloTecAdapter {
+public:
+    GloTecAdapter();
+    void init();
+    bool fetchTEC(double utc);
+    // Historico para el replay: lista completa del indice + descarga de un
+    // frame concreto a un GridData independiente (thread-safe entre adapters
+    // distintos; no llamar concurrente sobre el MISMO adapter).
+    bool fetchIndex(std::vector<GloTecFrame>& out);
+    bool fetchFrame(const std::string& url, double timeUtc, GridData& out);
+    void setGridSize(int w, int h) { gridW_ = w; gridH_ = h; }
+    const TECGrid& getGrid() const { return grid_; }
+    double getLastFetchTime() const { return lastFetchUtc_; }
+    const std::string& getErrorMessage() const { return error_; }
+
+private:
+    static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
+    bool fetchURL(const std::string& url, std::string& response);
+    // Extrae todos los valores 'tec' y 'coordinates' (lon, lat) del GeoJSON
+    // y rellena grid_. Devuelve true si encontro el numero esperado de celdas.
+    bool parseGeoJSON(const std::string& json);
+
+    TECGrid grid_;
+    int gridW_ = 72;
+    int gridH_ = 72;
+    double lastFetchUtc_ = 0.0;
+    std::string error_;
+};

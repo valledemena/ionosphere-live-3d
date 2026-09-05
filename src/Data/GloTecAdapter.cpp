@@ -1,0 +1,304 @@
+#include "GloTecAdapter.h"
+#include <curl/curl.h>
+#include <cstdio>
+#include <cmath>
+#include <cctype>
+#include <cstdlib>
+#include <algorithm>
+
+// Indice GloTEC: lista de archivos geojson disponibles (el ultimo es el mas reciente).
+#define GLOTEC_INDEX_URL "https://services.swpc.noaa.gov/products/glotec/geojson_2d_urt.json"
+
+static void skipWsCl(const std::string& s, size_t& i) {
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' ||
+                            s[i] == '\r' || s[i] == ':' || s[i] == ',')) i++;
+}
+
+// Lee un numero flotante en s[i..] y devuelve su valor; avanza i hasta el fin del token.
+static double readNumber(const std::string& s, size_t& i) {
+    skipWsCl(s, i);
+    size_t start = i;
+    while (i < s.size() && (isdigit((unsigned char)s[i]) || s[i] == '.' ||
+                            s[i] == '-' || s[i] == '+')) i++;
+    if (i == start) return 0.0;
+    return atof(s.substr(start, i - start).c_str());
+}
+
+// Lee una cadena entre comillas (sin escapes). Devuelve el contenido.
+static bool readString(const std::string& s, size_t& i, std::string& out) {
+    skipWsCl(s, i);
+    if (i >= s.size() || s[i] != '"') return false;
+    i++;  // abrir comilla
+    out.clear();
+    while (i < s.size() && s[i] != '"') { out.push_back(s[i]); i++; }
+    if (i >= s.size()) return false;
+    i++;  // cerrar comilla
+    return true;
+}
+
+// Localiza el inicio de un objeto "{..." desde 'from', devolviendo la posicion del '{'.
+// Recorre strings correctamente.
+static size_t findOpenBrace(const std::string& s, size_t from) {
+    for (size_t i = from; i < s.size(); i++) {
+        if (s[i] == '{') return i;
+        if (s[i] == '"') { size_t j = i + 1; while (j < s.size() && s[j] != '"') j++; i = j; }
+    }
+    return std::string::npos;
+}
+
+// Dada la posicion de '{' de un objeto, extrae el valor numerico de la clave
+// 'key' dentro de ese objeto (nivel directo). Devuelve true y pone en 'value'
+// y 'after' la posicion tras el valor.
+static bool objectNumber(const std::string& s, size_t open, size_t close,
+                         const std::string& key, double& value, size_t& after) {
+    size_t i = open + 1;
+    while (i < close && i < s.size()) {
+        std::string k;
+        if (!readString(s, i, k)) { i++; continue; }
+        size_t v = i;
+        while (v < close && v < s.size() && s[v] != ':' && s[v] != ',') v++;
+        // v apunta a ':' o ','; saltar ws y ':' 
+        v++;
+        skipWsCl(s, v);
+        if (k == key) {
+            value = readNumber(s, v);
+            after = v;
+            return true;
+        }
+        i = v;
+    }
+    return false;
+}
+
+GloTecAdapter::GloTecAdapter() = default;
+
+void GloTecAdapter::init() {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    grid_.width = gridW_;
+    grid_.height = gridH_;
+    grid_.values.assign(gridW_ * gridH_, 0.0f);
+    grid_.valid = false;
+    printf("[OK] GloTecAdapter initialized (%dx%d)\n", gridW_, gridH_);
+}
+
+size_t GloTecAdapter::writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
+    size_t total = size * nmemb;
+    userp->append((char*)contents, total);
+    return total;
+}
+
+bool GloTecAdapter::fetchURL(const std::string& url, std::string& response) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+    response.clear();
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "IonosphereLive3D/1.0");
+
+    CURLcode res = curl_easy_perform(curl);
+    long http = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        error_ = std::string("curl: ") + curl_easy_strerror(res);
+        return false;
+    }
+    if (http != 200) {
+        error_ = "HTTP " + std::to_string(http);
+        return false;
+    }
+    return true;
+}
+
+bool GloTecAdapter::parseGeoJSON(const std::string& json) {
+    const std::string& S = json;
+    // Dimensiones aqui (no solo en init): el worker usa instancias sin init().
+    grid_.width = gridW_;
+    grid_.height = gridH_;
+    grid_.values.assign(gridW_ * gridH_, 0.0f);
+
+    // Cada feature: "type":"Feature","geometry":{"type":"Point","coordinates":[lon,lat]},
+    //               "properties":{"tec":..,"anomaly":..,"hmF2":..,"NmF2":..,"quality_flag":..}
+    // Orden probado: barrido por lat desde el sur (-90), luego lon ascendente.
+    size_t latCount[72] = {0};  // numero de celdas rellenadas por banda de lat
+    size_t pos = 0;
+    bool anyError = false;
+    while (true) {
+        auto fc = S.find("\"Feature\"", pos);
+        if (fc == std::string::npos) break;
+
+        auto cStart = S.find("\"coordinates\"", fc);
+        auto arrOpen = S.find('[', cStart);
+        if (arrOpen == std::string::npos) { anyError = true; break; }
+        size_t a = arrOpen + 1;
+        double lon = readNumber(S, a);
+        double lat = readNumber(S, a);
+
+        auto fEnd = S.find("},\"properties\"", fc);
+        auto closeObj = S.find('}', cStart);
+        if (closeObj == std::string::npos || closeObj == 0) { anyError = true; break; }
+
+        // Buscar el 'tec' dentro de properties de esta feature: entre closeObj y el
+        // siguiente '"type"' de la siguiente feature (o fin).
+        auto nextFeat = S.find("\"Feature\"", fc + 1);
+        if (nextFeat == std::string::npos) nextFeat = S.size();
+        auto tecK = S.find("\"tec\"", closeObj);
+        // El bloque de metadatos "tec":{...} esta al final tras las features;
+        // nos detenemos si pasamos de donde empieza el siguiente feature de properties.
+        if (tecK == std::string::npos || tecK > nextFeat) { break; }  // sin mas datos de features
+
+        auto tcol = S.find(':', tecK);
+        size_t tv = tcol + 1;
+        double tec = readNumber(S, tv);
+
+        // Calcular indice de celda. GloTEC: lon -177.5..177.5 (72), lat -88.75..88.75 (72)
+        int lonIdx = (int)llround((lon + 177.5) / 5.0);
+        int latG = (int)llround((lat + 88.75) / 2.5);
+        lonIdx = std::max(0, std::min(gridW_ - 1, lonIdx));
+        latG   = std::max(0, std::min(gridH_ - 1, latG));
+        int idx = latG * gridW_ + lonIdx;
+        if (idx < (int)grid_.values.size()) {
+            grid_.values[idx] = (float)tec;
+            latCount[latG]++;
+        }
+
+        pos = fc + 1;
+    }
+
+    // Validar cobertura: cada banda de lat debe tener ~72 celdas (no exigimos 72 exacto
+    // porque lon -180 cae fuera del rango GloTEC -177.5..177.5).
+    size_t filled = 0;
+    for (int i = 0; i < gridH_; i++) filled += std::min<size_t>(latCount[i], (size_t)gridW_);
+    return !anyError && filled > 0;
+}
+
+static double gloIsoToEpoch(const std::string& t) {
+    if (t.size() < 19) return 0.0;
+    int Y  = atoi(t.substr(0, 4).c_str());
+    int Mo = atoi(t.substr(5, 2).c_str());
+    int D  = atoi(t.substr(8, 2).c_str());
+    int H  = atoi(t.substr(11, 2).c_str());
+    int Mi = atoi(t.substr(14, 2).c_str());
+    int S  = atoi(t.substr(17, 2).c_str());
+    auto daysFromCivil = [](int y, int m, int dd) -> long long {
+        y -= m <= 2;
+        long long era = (y >= 0 ? y : y - 399) / 400;
+        unsigned yoe = (unsigned)(y - era * 400);
+        unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+        unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + (long long)doe - 719468;
+    };
+    return (double)daysFromCivil(Y, Mo, D) * 86400.0 + H * 3600.0 + Mi * 60.0 + S;
+}
+
+// Extrae "url" y "time_tag" de cada objeto del indice:
+// [{"url":"...","time_tag":"..."}, ...] (orden cronologico).
+bool GloTecAdapter::fetchIndex(std::vector<GloTecFrame>& out) {
+    out.clear();
+    std::string index;
+    if (!fetchURL(GLOTEC_INDEX_URL, index)) {
+        fprintf(stderr, "[GloTecAdapter] Index failed: %s\n", error_.c_str());
+        return false;
+    }
+    size_t pos = 0;
+    while (true) {
+        size_t open = findOpenBrace(index, pos);
+        if (open == std::string::npos) break;
+        // fin del objeto: buscar cierre simple (objetos planos, sin anidar)
+        size_t close = index.find('}', open);
+        if (close == std::string::npos) break;
+        // leer pares "clave":"valor" dentro de [open, close]
+        std::string url, ts;
+        size_t i = open + 1;
+        while (i < close) {
+            std::string k;
+            if (!readString(index, i, k)) { i++; continue; }
+            size_t v = i;
+            while (v < close && index[v] != ':') v++;
+            v++;
+            std::string val;
+            if (!readString(index, v, val)) { i = v; continue; }
+            if (k == "url") url = val;
+            else if (k == "time_tag") ts = val;
+            i = v;
+        }
+        if (!url.empty()) {
+            GloTecFrame f;
+            f.url = url;
+            f.timeUtc = gloIsoToEpoch(ts);
+            out.push_back(f);
+        }
+        pos = close + 1;
+    }
+    std::sort(out.begin(), out.end(),
+              [](const GloTecFrame& a, const GloTecFrame& b) { return a.timeUtc < b.timeUtc; });
+    printf("[GloTecAdapter] Index OK: %d frames\n", (int)out.size());
+    return !out.empty();
+}
+
+bool GloTecAdapter::fetchFrame(const std::string& url, double timeUtc, GridData& out) {
+    std::string full = (!url.empty() && url[0] == '/') ? "https://services.swpc.noaa.gov" + url : url;
+    std::string js;
+    if (!fetchURL(full, js)) return false;
+    if (!parseGeoJSON(js)) return false;
+    out = grid_;
+    out.timestamp = (timeUtc > 0.0) ? timeUtc : grid_.timestamp;
+    out.valid = true;
+    return true;
+}
+
+bool GloTecAdapter::fetchTEC(double utc) {    // 1) Obtener el indice y extraer la URL del archivo mas reciente.
+    std::string index;
+    if (!fetchURL(GLOTEC_INDEX_URL, index)) {
+        fprintf(stderr, "[GloTecAdapter] No se pudo obtener el indice: %s\n", error_.c_str());
+        return false;
+    }
+
+    // El indice es [{"url":"/products/glotec/...geojson","time_tag":"..."}, ...].
+    // Extraer el ultimo "url" (el mas reciente).
+    std::string lastUrl;
+    size_t p = 0, found = 0;
+    while ((found = index.find("\"url\"", p)) != std::string::npos) {
+        size_t col = found;
+        while (col < index.size() && index[col] != ':') col++;
+        size_t v = col + 1;
+        std::string u;
+        if (readString(index, v, u)) lastUrl = u;
+        p = found + 5;
+    }
+    if (lastUrl.empty()) {
+        error_ = "indice GloTEC vacio";
+        fprintf(stderr, "[GloTecAdapter] Error: %s\n", error_.c_str());
+        return false;
+    }
+
+    std::string full = (lastUrl[0] == '/') ? "https://services.swpc.noaa.gov" + lastUrl : lastUrl;
+
+    // 2) Descargar el GeoJSON
+    std::string geojson;
+    if (!fetchURL(full, geojson)) {
+        fprintf(stderr, "[GloTecAdapter] No se pudo obtener GeoJSON: %s\n", error_.c_str());
+        return false;
+    }
+
+    // 3) Parsear y rellenar el grid
+    if (!parseGeoJSON(geojson)) {
+        error_ = "parseGeoJSON fallo (sin celdas)";
+        fprintf(stderr, "[GloTecAdapter] %s\n", error_.c_str());
+        return false;
+    }
+
+    grid_.timestamp = utc;
+    grid_.valid = true;
+    lastFetchUtc_ = utc;
+
+    float minv = 1e9f, maxv = -1e9f;
+    for (float v : grid_.values) { minv = fminf(minv, v); maxv = fmaxf(maxv, v); }
+    printf("[GloTecAdapter] TEC real GloTEC OK (%dx%d): min=%.2f max=%.2f TECU\n",
+           grid_.width, grid_.height, minv, maxv);
+    return true;
+}
