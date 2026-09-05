@@ -17,6 +17,7 @@
 #include <string>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 #include <mutex>
 #include <thread>
 #include <memory>
@@ -119,10 +120,12 @@ struct App::Impl {
     float bloomThreshold = 0.35f;  // bright-pass threshold (scene luminance)
     float bloomIntensity = 1.0f;   // blur pass gain
     float bloomStrength = 0.6f;    // composite add amount
-    bool cineMode = false;         // cinema: auto-rotate + hidden UI (key C)
+    bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
-    bool cPrev = false;
+    bool hideUI = false;           // ocultar toda la UI (key H)
+    bool cPrev = false, hPrev = false;
     float cineHintUntil = 0.0f;
+    char hintMsg[64] = "";
     // Espejos persistentes de UI (antes static locales / locales de panel).
     float altKm = 300.0f;
     int giroMode = 0;
@@ -265,12 +268,26 @@ static GridData giroInterpGrid(const std::vector<StationSample>& samples, int va
     const float maxDist = 50.0f;   // radio de influencia en grados
     const float cellLat = 180.0f / H;   // 2.5
     const float cellLon = 360.0f / W;   // 5
+    // Fondo = mediana global (en vez de 0): sin acantilados en oceanos.
+    // Peso debil (~estacion a 16deg) para no aplanar los picos locales.
+    const float wBg = 0.004f;
+    std::vector<float> mvals;
+    mvals.reserve(pts.size());
+    for (const auto& p : pts) {
+        float vv = giroValueOf(p, var);
+        if (vv > 0.0f) mvals.push_back(vv);
+    }
+    float med = 0.0f;
+    if (!mvals.empty()) {
+        std::sort(mvals.begin(), mvals.end());
+        med = mvals[mvals.size() / 2];
+    }
 
     for (int latIdx = 0; latIdx < H; latIdx++) {
         float latG = -90.0f + cellLat * latIdx;
         for (int lonIdx = 0; lonIdx < W; lonIdx++) {
             float lonG = -180.0f + cellLon * lonIdx;
-            double wSum = 0.0, vSum = 0.0;
+            double wSum = wBg, vSum = (double)wBg * med;
             for (const auto& p : pts) {
                 float dlat = p.latDeg - latG;
                 float dlon = p.lonDeg - lonG;
@@ -285,9 +302,7 @@ static GridData giroInterpGrid(const std::vector<StationSample>& samples, int va
                 wSum += w;
                 vSum += (double)w * val;
             }
-            if (wSum > 0.0) {
-                g.values[latIdx * W + lonIdx] = (float)(vSum / wSum);
-            }
+            g.values[latIdx * W + lonIdx] = (float)(vSum / wSum);
         }
     }
     g.valid = true;
@@ -343,12 +358,25 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
     const float maxDist = 50.0f;
     const float cellLat = 180.0f / H;
     const float cellLon = 360.0f / W;
+    // Fondo = mediana global (sin acantilados en oceanos).
+    const float wBg = 0.004f;
+    std::vector<float> mvals;
+    mvals.reserve(pts.size());
+    for (const auto& p : pts) {
+        float vv = RadioPropagationAdapter::stationValue(p, var, utc, kpProxy);
+        if (vv > 0.0f) mvals.push_back(vv);
+    }
+    float med = 0.0f;
+    if (!mvals.empty()) {
+        std::sort(mvals.begin(), mvals.end());
+        med = mvals[mvals.size() / 2];
+    }
 
     for (int latIdx = 0; latIdx < H; latIdx++) {
         float latG = -90.0f + cellLat * latIdx;
         for (int lonIdx = 0; lonIdx < W; lonIdx++) {
             float lonG = -180.0f + cellLon * lonIdx;
-            double wSum = 0.0, vSum = 0.0;
+            double wSum = wBg, vSum = (double)wBg * med;
             for (const auto& p : pts) {
                 float dlat = p.latDeg - latG;
                 float dlon = p.lonDeg - lonG;
@@ -362,9 +390,7 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
                 wSum += w;
                 vSum += (double)w * val;
             }
-            if (wSum > 0.0) {
-                g.values[latIdx * W + lonIdx] = (float)(vSum / wSum);
-            }
+            g.values[latIdx * W + lonIdx] = (float)(vSum / wSum);
         }
     }
     g.valid = true;
@@ -763,13 +789,24 @@ void App::processInput() {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
-    // Cinema toggle (key C, edge-triggered) + slow auto-rotation.
+    // Cinema (C): solo auto-rotacion. Hide UI (H): oculta todo (opcion aparte).
     bool cDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
     if (cDown && !impl->cPrev) {
         impl->cineMode = !impl->cineMode;
+        snprintf(impl->hintMsg, sizeof(impl->hintMsg), "CINEMA %s - press C to exit",
+                 impl->cineMode ? "ON" : "OFF");
         impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
     }
     impl->cPrev = cDown;
+    bool hDown = glfwGetKey(window, GLFW_KEY_H) == GLFW_PRESS;
+    if (hDown && !impl->hPrev) {
+        impl->hideUI = !impl->hideUI;
+        if (impl->hideUI) {
+            snprintf(impl->hintMsg, sizeof(impl->hintMsg), "UI HIDDEN - press H to restore");
+            impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+        }
+    }
+    impl->hPrev = hDown;
     if (impl->cineMode) {
         impl->camera.rotateY += deltaTime * impl->cineSpeed;
     }
@@ -808,6 +845,7 @@ void App::processInput() {
 
 void App::update(float dt) {
     impl->updateSunDirection();
+    impl->terminator.update(impl->sunDirection);  // anillo dia/noche real (~1 KB/frame)
 
     // Catalogo GIRO listo (hilo background) -> aplicar puntos y arrancar datos.
     if (impl->catalogReady.load() && !impl->catalogApplied) {
@@ -951,6 +989,9 @@ void App::saveSettings() {
     fprintf(f, "nightLevel %g\n", (double)impl->nightLevel);
     fprintf(f, "cloudAmt %g\n", (double)impl->cloudAmt);
     fprintf(f, "bloomEnabled %d\n", impl->bloomEnabled ? 1 : 0);
+    fprintf(f, "bloomThreshold %g\n", (double)impl->bloomThreshold);
+    fprintf(f, "bloomIntensity %g\n", (double)impl->bloomIntensity);
+    fprintf(f, "bloomStrength %g\n", (double)impl->bloomStrength);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
     fprintf(f, "reliefAmp %g\n", (double)impl->reliefAmp);
     fprintf(f, "stormSwell %d\n", impl->stormSwell ? 1 : 0);
@@ -970,6 +1011,7 @@ void App::saveSettings() {
     fprintf(f, "camRX %g\n", (double)impl->camera.rotateX);
     fprintf(f, "camRY %g\n", (double)impl->camera.rotateY);
     fprintf(f, "camDist %g\n", (double)impl->camera.distance);
+    fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
     fclose(f);
 }
 
@@ -982,7 +1024,13 @@ void App::loadSettings() {
     char key[64];
     double v;
     auto clB = [](double x) { return x != 0.0; };
-    while (fscanf(f, "%63s %lf", key, &v) == 2) {
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "pinned %63s", key) == 1) {
+            if (std::string(key) != "-") impl->pinnedCode = key;
+            continue;
+        }
+        if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
         std::string k = key;
         if (k == "mapVariable") impl->mapVariable = glm::clamp((int)v, 0, 7);
         else if (k == "manualColormap") impl->manualColormap = glm::clamp((int)v, 0, 3);
@@ -998,6 +1046,9 @@ void App::loadSettings() {
         else if (k == "nightLevel") impl->nightLevel = glm::clamp((float)v, 0.05f, 1.0f);
         else if (k == "cloudAmt") impl->cloudAmt = glm::clamp((float)v, 0.0f, 1.0f);
         else if (k == "bloomEnabled") impl->bloomEnabled = clB(v);
+        else if (k == "bloomThreshold") impl->bloomThreshold = glm::clamp((float)v, 0.0f, 1.0f);
+        else if (k == "bloomIntensity") impl->bloomIntensity = glm::clamp((float)v, 0.0f, 3.0f);
+        else if (k == "bloomStrength") impl->bloomStrength = glm::clamp((float)v, 0.0f, 2.0f);
         else if (k == "reliefOn") impl->reliefOn = clB(v);
         else if (k == "reliefAmp") impl->reliefAmp = glm::clamp((float)v, 0.0f, 0.10f);
         else if (k == "stormSwell") impl->stormSwell = clB(v);
@@ -1407,21 +1458,21 @@ void App::render() {
     glActiveTexture(GL_TEXTURE0);
     glEnable(GL_DEPTH_TEST);
 
-    // --- ImGui --- (hidden in cinema mode, except a brief exit hint;
-    // always shown while initial live data is loading)
+    // --- ImGui --- (Hide UI lo oculta todo salvo el aviso breve;
+    // siempre visible mientras llegan los datos iniciales)
     bool loading = !impl->initialLoadDone.load();
-    bool uiHidden = impl->cineMode && (float)glfwGetTime() >= impl->cineHintUntil && !loading;
+    bool uiHidden = impl->hideUI && (float)glfwGetTime() >= impl->cineHintUntil && !loading;
     if (!uiHidden) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    if (impl->cineMode) {
+    if ((float)glfwGetTime() < impl->cineHintUntil && impl->hintMsg[0] != '\0') {
         ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 110.0f, (float)winH - 40.0f), ImGuiCond_Always);
         ImGui::Begin("##cinehint", nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs |
             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.85f), "CINEMA - press C to exit");
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.85f), "%s", impl->hintMsg);
         ImGui::End();
     }
 
@@ -1460,13 +1511,22 @@ void App::render() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Final mix: how much glow is added over the scene. 0 = no visible effect even if Bloom is on.");
     if (ImGui::Checkbox("Cinema (C)", &impl->cineMode)) {
+        snprintf(impl->hintMsg, sizeof(impl->hintMsg), "CINEMA %s - press C to exit",
+                 impl->cineMode ? "ON" : "OFF");
         impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Cinema mode: slow auto-rotation and hidden UI. Press C to exit.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Cinema mode: slow auto-rotation. UI stays visible (use Hide UI to clear the screen).");
     if (ImGui::SliderFloat("Cine speed", &impl->cineSpeed, 0.005f, 0.30f, "%.3f rad/s")) {
         impl->cineSpeed = glm::clamp(impl->cineSpeed, 0.005f, 0.30f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Auto-rotation speed in cinema mode (radians per second). 0.05 = one turn every ~2 min.");
+    if (ImGui::Checkbox("Hide UI (H)", &impl->hideUI)) {
+        if (impl->hideUI) {
+            snprintf(impl->hintMsg, sizeof(impl->hintMsg), "UI HIDDEN - press H to restore");
+            impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Hide every panel and window. The hint fades after 4 s; press H to bring the UI back.");
     ImGui::End();
 
     // Layer panel
@@ -1816,8 +1876,9 @@ void App::render() {
 #endif
                 strftime(tgbuf, sizeof(tgbuf), "%H:%M", &gg);
             }
-            ImGui::Text("TEC: %dx%d GloTEC %s", tecStatusB->grid.width, tecStatusB->grid.height, tgbuf);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real GloTEC grid (NOAA SWPC) with its data time (UTC).");
+            ImGui::Text("TEC: %dx%d GloTEC %s (+%.0fs)", tecStatusB->grid.width, tecStatusB->grid.height, tgbuf,
+                fmax(0.0, difftime(std::time(nullptr), (std::time_t)tecStatusB->grid.timestamp)));
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real GloTEC grid (NOAA SWPC) with its data time (UTC) and age ticking every second.");
             ImGui::Text("Source: NOAA SWPC GloTEC");
         }
     } else {
@@ -2076,9 +2137,9 @@ void App::render() {
             ImGui::SameLine();
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - tw);
             ImGui::TextUnformatted(bmx);
-            // Timestamp del dato + modo (como las imagenes 1 y 4).
+            // Timestamp del dato + modo (como las imagenes 1 y 4) + edad tickeando.
             double dts = (double)std::time(nullptr);
-            const char* dmode = "LIVE";
+            bool isReplayTs = false;
             {
                 std::lock_guard<std::mutex> tlk(impl->tecHistMutex);
                 if (impl->replayMode && impl->tecHist.size() >= 2) {
@@ -2086,12 +2147,12 @@ void App::render() {
                     if (ri0 >= impl->tecHist.size() - 1) ri0 = impl->tecHist.size() - 2;
                     double rf = impl->replayPos - (double)ri0;
                     dts = impl->tecHist[ri0].timestamp * (1.0 - rf) + impl->tecHist[ri0 + 1].timestamp * rf;
-                    dmode = "REPLAY";
+                    isReplayTs = true;
                 } else if (!impl->tecHist.empty()) {
                     dts = impl->tecHist.back().timestamp;
                 }
             }
-            char dbuf[48] = "--:--";
+            char dbuf[48] = "--:--:--";
             {
                 std::time_t tt = (std::time_t)dts;
                 std::tm g;
@@ -2100,16 +2161,18 @@ void App::render() {
 #else
                 gmtime_r(&tt, &g);
 #endif
-                strftime(dbuf, sizeof(dbuf), "%H:%M UTC", &g);
+                strftime(dbuf, sizeof(dbuf), "%H:%M:%S", &g);
             }
-            ImGui::Text("%s  %s", dbuf, dmode);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Time of the displayed TEC grid (UTC) and timeline mode.");
-            {
-                double ageMin = ((double)std::time(nullptr) - dts) / 60.0;
-                if (ageMin > 30.0) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "(stale %.0f min)", ageMin);
-                    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Data older than 30 min: source unreachable, showing the last valid grid.");
-                }
+            double ageSec = difftime(std::time(nullptr), (std::time_t)dts);
+            if (isReplayTs) {
+                ImGui::Text("FRAME %s REPLAY", dbuf);
+                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frame time (UTC) of the displayed replay grid. Scrub or play to move it.");
+            } else if (ageSec > 1800.0) {
+                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "DATA %s LIVE (stale %.0fm)", dbuf, ageSec / 60.0);
+                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Data older than 30 min: source unreachable, showing the last valid grid.");
+            } else {
+                ImGui::Text("DATA %s LIVE (+%.0fs)", dbuf, ageSec < 0.0 ? 0.0 : ageSec);
+                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Data time (UTC) of the displayed TEC grid + its age ticking every second. New frame every ~5 min (or 10 min from preload).");
             }
         } else {
             ImGui::TextDisabled(impl->tecLayer.isVisible() ? "waiting for data..." : "color layer hidden");
