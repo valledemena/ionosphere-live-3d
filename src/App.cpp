@@ -128,6 +128,8 @@ struct App::Impl {
     float bloomThreshold = 0.35f;  // bright-pass threshold (scene luminance)
     float bloomIntensity = 1.0f;   // blur pass gain
     float bloomStrength = 0.6f;    // composite add amount
+    bool toneMap = true;           // ACES en composite (bypass exacto si off)
+    float exposure = 1.0f;         // a mano (sin calibrar por defecto)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
     bool hideUI = false;           // ocultar toda la UI (key H)
@@ -162,6 +164,8 @@ struct App::Impl {
     float reliefAmp = 0.025f;  // amplitud base (radio planetario = 1.0)
     bool stormSwell = true;    // amp efectiva x (1 + Kp/6): respira con el evento
     bool outerShell = true;    // segunda isosuperficie anidada
+    float shellOpacity = 0.45f;
+    int shellColormap = 1;     // 0=viridis,1=inferno,2=plasma,3=turbo (como Variable)
 
     // Viento solar (Fase 4): estado de la capa de flechas 3D.
     bool swArrowsVisible = false;
@@ -886,7 +890,11 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setAltitude(impl->altKm / 6371.0f);
     impl->shellLayer.setVisible(impl->outerShell);
     impl->shellLayer.setAltitude(impl->altKm / 6371.0f + 0.025f);
-    impl->ionosondeLayer.setVisible(impl->giroStationsVisible);
+    impl->shellLayer.setOpacity(impl->shellOpacity);
+    {
+        static const char* autoCM[4] = { "viridis", "inferno", "plasma", "turbo" };
+        impl->shellLayer.setColormap(autoCM[impl->shellColormap & 3]);
+    }    impl->ionosondeLayer.setVisible(impl->giroStationsVisible);
     impl->ionosondeLayer.setMode(impl->giroMode);
     impl->ionosondeLayer.setPointSize(impl->giroPointSize);
     impl->solarWindLayer.setVisible(impl->swArrowsVisible);
@@ -1185,10 +1193,14 @@ void App::saveSettings() {
     fprintf(f, "bloomThreshold %g\n", (double)impl->bloomThreshold);
     fprintf(f, "bloomIntensity %g\n", (double)impl->bloomIntensity);
     fprintf(f, "bloomStrength %g\n", (double)impl->bloomStrength);
+    fprintf(f, "toneMap %d\n", impl->toneMap ? 1 : 0);
+    fprintf(f, "exposure %g\n", (double)impl->exposure);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
     fprintf(f, "reliefAmp %g\n", (double)impl->reliefAmp);
     fprintf(f, "stormSwell %d\n", impl->stormSwell ? 1 : 0);
     fprintf(f, "outerShell %d\n", impl->outerShell ? 1 : 0);
+    fprintf(f, "shellOpacity %g\n", (double)impl->shellOpacity);
+    fprintf(f, "shellColormap %d\n", impl->shellColormap);
     fprintf(f, "refShellsVisible %d\n", impl->refShellsVisible ? 1 : 0);
     fprintf(f, "swArrowsVisible %d\n", impl->swArrowsVisible ? 1 : 0);
     fprintf(f, "swArrowMode %d\n", impl->swArrowMode);
@@ -1248,10 +1260,14 @@ void App::loadSettings() {
         else if (k == "bloomThreshold") impl->bloomThreshold = glm::clamp((float)v, 0.0f, 1.0f);
         else if (k == "bloomIntensity") impl->bloomIntensity = glm::clamp((float)v, 0.0f, 3.0f);
         else if (k == "bloomStrength") impl->bloomStrength = glm::clamp((float)v, 0.0f, 2.0f);
+        else if (k == "toneMap") impl->toneMap = clB(v);
+        else if (k == "exposure") impl->exposure = glm::clamp((float)v, 0.2f, 2.5f);
         else if (k == "reliefOn") impl->reliefOn = clB(v);
         else if (k == "reliefAmp") impl->reliefAmp = glm::clamp((float)v, 0.0f, 0.10f);
         else if (k == "stormSwell") impl->stormSwell = clB(v);
         else if (k == "outerShell") impl->outerShell = clB(v);
+        else if (k == "shellOpacity") impl->shellOpacity = glm::clamp((float)v, 0.0f, 2.0f);
+        else if (k == "shellColormap") impl->shellColormap = glm::clamp((int)v, 0, 3);
         else if (k == "refShellsVisible") impl->refShellsVisible = clB(v);
         else if (k == "swArrowsVisible") impl->swArrowsVisible = clB(v);
         else if (k == "swArrowMode") impl->swArrowMode = glm::clamp((int)v, 0, 1);
@@ -1729,6 +1745,8 @@ void App::render() {
 
     impl->compositeShader.setBool("u_bloomEnabled", impl->bloomEnabled);
     impl->compositeShader.setFloat("u_bloomStrength", impl->bloomStrength);
+    impl->compositeShader.setBool("u_toneMap", impl->toneMap);
+    impl->compositeShader.setFloat("u_exposure", impl->exposure);
 
     // Draw fullscreen quad with persistent VAO
     glBindVertexArray(impl->quadVAO);
@@ -1790,6 +1808,12 @@ void App::render() {
         impl->bloomStrength = glm::clamp(impl->bloomStrength, 0.0f, 2.0f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Final mix: how much glow is added over the scene. 0 = no visible effect even if Bloom is on.");
+    ImGui::Checkbox("Tone map", &impl->toneMap);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("ACES tone mapping on scene+bloom: highlights roll off instead of clipping to flat white. Off = original image, for A/B comparison.");
+    if (ImGui::SliderFloat("Exposure", &impl->exposure, 0.2f, 2.5f)) {
+        impl->exposure = glm::clamp(impl->exposure, 0.2f, 2.5f);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Manual exposure for the tone mapping curve. Only applies when Tone map is on.");
     if (ImGui::Checkbox("Cinema (C)", &impl->cineMode)) {
         snprintf(impl->hintMsg, sizeof(impl->hintMsg), "CINEMA %s - press C to exit",
                  impl->cineMode ? "ON" : "OFF");
@@ -1866,10 +1890,10 @@ void App::render() {
         impl->shellLayer.setAltitude(impl->altKm / 6371.0f + 0.025f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Height of the color shell above the surface (100-800 km). The outer shell follows +0.025. Visual only.");
-    if (ImGui::SliderFloat("TEC opacity", &impl->tecOpacity, 0.0f, 2.0f)) {
+    if (ImGui::SliderFloat("Layer opacity", &impl->tecOpacity, 0.0f, 2.0f)) {
         impl->tecLayer.setOpacity(impl->tecOpacity);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the color layer (applies to any variable, not just TEC).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the main color layer (TEC, foF2, MUF, hmF2, NmF2, LUF, FOT or Spread-F — whichever is selected).");
     // ---- Relieve 3D estilo volumetric (imagen 1) ----
     if (ImGui::Checkbox("3D relief", &impl->reliefOn)) {
         applyRelief();
@@ -1887,7 +1911,17 @@ void App::render() {
     if (ImGui::Checkbox("Outer shell", &impl->outerShell)) {
         impl->shellLayer.setVisible(impl->outerShell);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Second nested isosurface (inferno, +0.025 radius, 0.45 opacity) sharing the same grid.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Second nested isosurface (+0.025 radius) sharing the same grid and variable.");
+    if (ImGui::SliderFloat("Shell opacity", &impl->shellOpacity, 0.0f, 2.0f)) {
+        impl->shellOpacity = glm::clamp(impl->shellOpacity, 0.0f, 2.0f);
+        impl->shellLayer.setOpacity(impl->shellOpacity);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the outer shell. Visual only.");
+    if (ImGui::Combo("Shell colormap", &impl->shellColormap, colormaps, 4)) {
+        impl->shellColormap = glm::clamp(impl->shellColormap, 0, 3);
+        impl->shellLayer.setColormap(colormaps[impl->shellColormap & 3]);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Palette of the outer shell (independent from the main layer).");
     if (ImGui::Checkbox("F2 peak shell", &impl->peakShellVisible)) {
         impl->peakShell.setVisible(impl->peakShellVisible);
     }

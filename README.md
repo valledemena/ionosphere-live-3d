@@ -11,13 +11,16 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 
 **Globe & realism**
 - Day/night Earth with soft twilight band, ocean sun glitter (Blinn-Phong),
-  NASA Black Marble city lights on the night side, procedural animated clouds.
+  NASA Black Marble city lights on the night side (HiRes 13K where the GPU
+  allows, anisotropic filtering), procedural animated clouds.
 - Milky-Way starfield (1600 tinted stars), fresnel atmosphere, bloom
-  post-processing (threshold/intensity/strength), real-sun terminator line.
+  post-processing (threshold/intensity/strength), ACES tone mapping with
+  bypass toggle + manual exposure, real-sun terminator line (toggleable).
 - 3D relief: the data shell deforms radially with the local value and
-  "breathes" with Kp (storm swell), plus a nested outer shell (volumetric look).
-- Reference altitude rings E/F1/F2 (110/200/300 km). Cinema mode (auto-rotate,
-  `C`) and full UI hide (`H`).
+  "breathes" with Kp (storm swell), plus a nested outer shell with its own
+  opacity/colormap controls.
+- Reference altitude rings E/F1/F2 (E fixed, F1/F2 follow measured hmF2).
+  Cinema mode (auto-rotate, `C`) and full UI hide (`H`).
 
 **Ionosphere layers** (spherical color shell, 8 variables)
 - **TEC** (TECU, NOAA GloTEC, 10-min cadence) with session replay + history preload.
@@ -31,6 +34,9 @@ auroral oval and more — all switchable, with a time-travel replay mode.
   flare boost; nested outer shell + storm-swell relief.
 - **Path slice**: vertical Ne(h) curtain between pinned (A) and hovered (B)
   station with peak log-density readout.
+- **F2 peak shell**: floats at the real measured hmF2 per column, colored by
+  peak log-density (derived from the volume, always consistent with it).
+- **Model TEC**: TEC integrated from the volume (compare vs measured GloTEC).
 
 **Stations & radio**
 - GIRO points colored by metric, hover tooltips with foF2 sparkline (~2 h),
@@ -40,8 +46,9 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 - Faraday rotation 3D vectors driven by local TEC; NOAA Ovation auroral oval.
 
 **Space weather HUD**
-- Kp/Dst/F10.7/Ap/SSN (all live NOAA SWPC, per-field mock fallback),
-  solar-wind speed/density/Bz arrows + 24 h plots, Carrington rotation + sun disk.
+- Kp/Dst/F10.7/Ap/SSN (all live NOAA SWPC, per-field mock fallback), GOES
+  X-ray flux/class for flares, solar-wind speed/density/Bz arrows + 24 h
+  plots, Carrington rotation + sun disk.
 
 **Time & UX**
 - Timeline: LIVE vs REPLAY (TEC frames + GIRO history scrub, loop, 0.5–8 fps).
@@ -84,11 +91,12 @@ Textures and shaders are copied next to the binary automatically.
 ## Layout
 
 ```
-src/App.cpp          # composition, timeline, replay, all panels
+src/App.cpp          # composition, timeline, replay, all panels, persistence
 src/Data/            # one adapter per source (fetch + parse + fallback)
 src/Ionosphere/      # GridLayer, IonosondeLayer, SolarWindLayer,
-                     #   FaradayLayer, RefShells
-src/Globe/           # Earth (+night), Stars, Atmosphere, Terminator
-src/Render/  src/UI/  src/Utils/   # camera/shaders/FBO, stubs, sun math
-shaders/  textures/  data/
+                     #   FaradayLayer, RefShells, VolumeRenderer, SliceLayer,
+                     #   LayerProfile/DensityVolume (pure profile math)
+src/Globe/           # Earth (+night HiRes), Stars, Atmosphere, Terminator
+src/Render/  src/UI/  src/Utils/   # camera/shaders/FBO, stubs, sun math, colormaps
+shaders/  textures/  data/  docs/
 ```
