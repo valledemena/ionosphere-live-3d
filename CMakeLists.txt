@@ -59,6 +59,7 @@ set(SOURCES
     src/Data/AuroraAdapter.cpp
     src/Data/EbroAdapter.cpp
     src/Data/XrayAdapter.cpp
+    src/Data/DiasAdapter.cpp
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp

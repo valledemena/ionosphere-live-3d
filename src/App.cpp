@@ -43,6 +43,7 @@
 #include "Data/AuroraAdapter.h"
 #include "Data/EbroAdapter.h"
 #include "Data/XrayAdapter.h"
+#include "Data/DiasAdapter.h"
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
@@ -109,6 +110,7 @@ struct App::Impl {
     IonosondeLayer ionosondeLayer;
     DataManager dataManager;
     GiroAdapter giro;
+    DiasAdapter dias;   // complemento europeo (misma StationSample)
     SolarWindLayer solarWindLayer;
     FaradayLayer faradayLayer;
     RefShells refShells;
@@ -236,6 +238,33 @@ struct App::Impl {
         sunDirection = SolarPosition::getDirection(utc);
     }
 };
+
+// Fusion GIRO+DIAS para puntos (solo live; en replay solo GIRO con historia).
+// Regla: GIRO valido gana (primaria probada); DIAS rellena huecos con coords
+// resueltas contra el catalogo GIRO (el pager no trae lat/lon).
+static std::vector<StationSample> mergeDias(const std::vector<StationSample>& giro,
+                                            const std::vector<StationSample>& dias) {
+    std::vector<StationSample> out = giro;
+    for (const auto& d : dias) {
+        if (!d.valid) continue;
+        const StationSample* cat = nullptr;
+        bool covered = false;
+        for (const auto& g : giro) {
+            if (g.code != d.code) continue;
+            cat = &g;
+            if (g.valid) covered = true;
+            break;
+        }
+        if (covered || !cat) continue;
+        StationSample c = d;
+        c.latDeg = cat->latDeg;
+        c.lonDeg = cat->lonDeg;
+        c.name = cat->name;
+        if (c.latDeg == 0.0f && c.lonDeg == 0.0f) continue;  // sin posicion
+        out.push_back(c);
+    }
+    return out;
+}
 
 // Convierte muestras GIRO a puntos de render para la capa de ionosondas.
 static std::vector<StationPoint> giroPointsFrom(const std::vector<StationSample>& src) {
@@ -795,6 +824,8 @@ bool App::init(int width, int height, const char* title) {
                 self->impl->catalogReady.store(true);
         }).detach();
     }
+    impl->dias.init();
+    impl->dias.fetchAsync((double)std::time(nullptr));  // complemento EU en background
 
     // Viento solar (Fase 4): capa de flechas 3D (datos via worker).
     impl->solarWindLayer.init();
@@ -1004,7 +1035,7 @@ void App::update(float dt) {
     consumeBundles();
 
     // GIRO: refresco periodico de las estaciones en background (5 min).
-    // Ebro directo: idem. La red NOAA la hace el worker (sin congelar).
+    // Ebro directo: idem. DIAS complemento: idem. La red NOAA la hace el worker.
     static double lastIndexFetch = -1.0;
     double now = glfwGetTime();
     if (lastIndexFetch < 0 || (now - lastIndexFetch) > 300.0) {
@@ -1012,6 +1043,9 @@ void App::update(float dt) {
             impl->giro.fetchStationsAsync();
         }
         impl->ebro.fetchAsync((double)std::time(nullptr));
+        if (!impl->dias.isFetching()) {
+            impl->dias.fetchAsync((double)std::time(nullptr));
+        }
         lastIndexFetch = now;
     }
 
@@ -1057,12 +1091,18 @@ void App::update(float dt) {
     // Reflejar en la capa de ionosondas el estado de las muestras GIRO (streaming
     // incremental: el hilo background va completando estaciones poco a poco).
     // En replay se muestran las muestras interpoladas al tiempo de replay.
+    // En live se fusiona DIAS (rellena huecos GIRO con coords del catalogo).
     impl->ionosondeLayer.setFetching(impl->giro.isFetching() && !impl->replayMode);
     impl->ionosondeLayer.setProgress(impl->giro.getProgress());
     impl->ionosondeLayer.setDataIndicator(impl->giro.getDataIndicator());
     static double lastSamplesApply = -1.0;
     if (lastSamplesApply < 0 || (now - lastSamplesApply) > 2.0) {
-        impl->ionosondeLayer.updateSamples(giroPointsFrom(gsAct));
+        if (impl->replayMode) {
+            impl->ionosondeLayer.updateSamples(giroPointsFrom(gsAct));
+        } else {
+            impl->ionosondeLayer.updateSamples(
+                giroPointsFrom(mergeDias(impl->giro.getSamples(), impl->dias.copySamples())));
+        }
         lastSamplesApply = now;
     }
 
@@ -1984,6 +2024,19 @@ void App::render() {
                     impl->ionosondeLayer.getDataIndicator());
         ImGui::Text("Range: %.2f .. %.2f", minV, maxV);
     }
+    {
+        int nDias = impl->dias.getStationCount();
+        if (impl->dias.isFetching()) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Fetching DIAS...");
+        } else if (nDias > 0) {
+            ImGui::Text("DIAS: %d pts (EU)", nDias);
+        } else if (!impl->dias.getErrorMessage().empty()) {
+            ImGui::TextDisabled("DIAS: %s", impl->dias.getErrorMessage().c_str());
+        } else {
+            ImGui::TextDisabled("DIAS: waiting for data...");
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DIAS Ionostream (NOA Athens): full EU profiles over plain HTTPS (no FTP). Fills stations missing in GIRO; GIRO wins ties. EB040 does not flow here (verified).");
+    }
 
     // Tooltip + hover/pin: nearest station under the cursor on the globe.
     // Click (no drag) on a station pins it; click on empty space unpins.
@@ -2010,13 +2063,20 @@ void App::render() {
                     giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
                 ImGui::Text("B0 %s km  B1 %s",
                     giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
-                // Sparkline foF2 de la serie GIRO (~2 h, 5 min).
+                // Sparkline foF2 de la serie (~2 h, 5 min). Busca en GIRO y DIAS.
                 {
                     std::vector<float> fh;
                     for (const auto& s : impl->giro.copySamples()) {
                         if (s.code != sp->code) continue;
                         for (const auto& h : s.history) fh.push_back(h.foF2);
                         break;
+                    }
+                    if (fh.size() < 2) {
+                        for (const auto& s : impl->dias.copySamples()) {
+                            if (s.code != sp->code) continue;
+                            for (const auto& h : s.history) fh.push_back(h.foF2);
+                            break;
+                        }
                     }
                     if (fh.size() >= 2) {
                         float mn = fh[0], mx = fh[0];
