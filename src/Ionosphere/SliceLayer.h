@@ -20,7 +20,8 @@ public:
     //   cmap: nombre de paleta (viridis/inferno/...).
     void updateSlice(const glm::vec3& a, const glm::vec3& b,
                      const std::vector<float>& values,
-                     const std::string& cmap);
+                     const std::string& cmap,
+                     float altMinKm = 60.0f, float altMaxKm = 500.0f);
     void render(const glm::mat4& view, const glm::mat4& projection);
     void destroy();
 

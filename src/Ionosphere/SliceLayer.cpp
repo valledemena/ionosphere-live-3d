@@ -65,7 +65,8 @@ void SliceLayer::init() {
 
 void SliceLayer::updateSlice(const glm::vec3& a, const glm::vec3& b,
                              const std::vector<float>& values,
-                             const std::string& cmap) {
+                             const std::string& cmap,
+                             float altMinKm, float altMaxKm) {
     if (vao_ == 0) return;
     if ((int)values.size() != SEG * LVL) return;
     glm::vec3 na = glm::normalize(a), nb = glm::normalize(b);
@@ -77,7 +78,7 @@ void SliceLayer::updateSlice(const glm::vec3& a, const glm::vec3& b,
     verts.reserve(SEG * LVL * 5);
     for (int j = 0; j < LVL; j++) {
         float f = (LVL <= 1) ? 0.0f : (float)j / (float)(LVL - 1);
-        float altKm = 60.0f + (500.0f - 60.0f) * powf(f, 1.5f);
+        float altKm = altMinKm + (altMaxKm - altMinKm) * powf(f, 1.5f);
         float r = 1.0f + altKm / 6371.0f;
         for (int i = 0; i < SEG; i++) {
             float s = (SEG <= 1) ? 0.0f : (float)i / (float)(SEG - 1);

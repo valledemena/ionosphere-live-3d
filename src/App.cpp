@@ -203,6 +203,11 @@ struct App::Impl {
     bool volumeVisible = false;
     float volumeOpacity = 1.0f;
     DensityVolume lastVolume;   // ultimo volumen construido (para el slice)
+    // Cascaras derivadas del volumen (Fase 2/3, plan volume-derived-shells).
+    GridLayer peakShell;        // F2: geometria hm real + color logNe
+    bool peakShellVisible = false;
+    GridLayer tecColShell;      // TEC modelado (integral) a 300 km planos
+    bool tecColVisible = false;
     // Slice QTH-DX: A = pineada, B = hover.
     SliceLayer sliceLayer;
     bool sliceOn = false;
@@ -802,6 +807,17 @@ bool App::init(int width, int height, const char* title) {
     impl->volumeLayer.setColormap("viridis");
     impl->volumeLayer.setOpacityScale(1.0f);
     impl->volumeLayer.setVisible(false);
+    // Cascaras derivadas (Fase 2/3): arrancan ocultas, se rellenan con el volumen.
+    impl->peakShell.init();
+    impl->peakShell.setColormap("plasma");
+    impl->peakShell.setAltitude(0.0f);   // manda la geometria (hm real)
+    impl->peakShell.setOpacity(0.9f);
+    impl->peakShell.setVisible(false);
+    impl->tecColShell.init();
+    impl->tecColShell.setColormap("viridis");
+    impl->tecColShell.setAltitude(0.0f);   // geometria plana a 300 km
+    impl->tecColShell.setOpacity(0.7f);
+    impl->tecColShell.setVisible(false);
     // Cortina QTH-DX (se rellena al haber volumen + pin + hover).
     impl->sliceLayer.init();
     impl->sliceLayer.setVisible(false);
@@ -881,6 +897,8 @@ bool App::init(int width, int height, const char* title) {
     impl->auroraLayer.setOpacity(impl->aurOpacity);
     impl->volumeLayer.setVisible(impl->volumeVisible);
     impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
+    impl->peakShell.setVisible(impl->peakShellVisible);
+    impl->tecColShell.setVisible(impl->tecColVisible);
     impl->sliceLayer.setVisible(impl->sliceOn);
     impl->refShells.setVisible(impl->refShellsVisible);
     applyColorLayer();
@@ -1067,17 +1085,39 @@ void App::update(float dt) {
         float flare = 1.0f;
         if (impl->lastXray && impl->lastXray->latest.valid)
             flare = XrayAdapter::flareFactor(impl->lastXray->latest.flux);
-        DensityVolume vol = buildDensityVolume(profs, 72, 72, 48, 60.0f, 500.0f,
+        DensityVolume vol = buildDensityVolume(profs, 72, 72, 60, 60.0f, 700.0f,
                                                sd.x, sd.y, sd.z, flare);
         vol.timestamp = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
         impl->volumeLayer.updateVolume(vol);
         impl->lastVolume = vol;
         if (impl->sliceOn) rebuildSlice(true);
+        // Fases 2/3: cascaras derivadas del volumen (barato, cada 5 s).
+        {
+            PeakGrids pk = extractPeakGrids(vol);
+            if (pk.logNe.valid)
+                impl->peakShell.updateFromGrids(pk.logNe, pk.hmKm);
+            GridData tecModel, flatH;
+            tecModel.width = flatH.width = vol.lonRes;
+            tecModel.height = flatH.height = vol.latRes;
+            tecModel.values.reserve((size_t)vol.lonRes * vol.latRes);
+            flatH.values.reserve((size_t)vol.lonRes * vol.latRes);
+            for (int la = 0; la < vol.latRes; la++) {
+                for (int lo = 0; lo < vol.lonRes; lo++) {
+                    tecModel.values.push_back(integrateTEC(vol, la, lo));
+                    flatH.values.push_back(300.0f);
+                }
+            }
+            tecModel.valid = flatH.valid = vol.valid;
+            tecModel.timestamp = flatH.timestamp = vol.timestamp;
+            impl->tecColShell.updateFromGrids(tecModel, flatH);
+        }
         std::vector<float> hv;
         for (const auto& s : gsAct) if (s.valid && s.hmF2 > 0.0f) hv.push_back(s.hmF2);
         if (!hv.empty()) {
             std::sort(hv.begin(), hv.end());
             float mh = hv[hv.size() / 2];
+            if (mh > 650.0f)
+                printf("[App] WARNING: median hmF2 %.0f km approaches volume ceiling (700 km)\n", mh);
             impl->refShells.updateAltitudes(110.0f, std::max(150.0f, 0.8f * mh), mh);
         }
     }
@@ -1162,6 +1202,8 @@ void App::saveSettings() {
     fprintf(f, "cineSpeed %g\n", (double)impl->cineSpeed);
     fprintf(f, "replaySpeed %g\n", (double)impl->replaySpeed);
     fprintf(f, "volumeVisible %d\n", impl->volumeVisible ? 1 : 0);
+    fprintf(f, "peakShellVisible %d\n", impl->peakShellVisible ? 1 : 0);
+    fprintf(f, "tecColVisible %d\n", impl->tecColVisible ? 1 : 0);
     fprintf(f, "volumeOpacity %g\n", (double)impl->volumeOpacity);
     fprintf(f, "sliceOn %d\n", impl->sliceOn ? 1 : 0);
     fprintf(f, "camRX %g\n", (double)impl->camera.rotateX);
@@ -1223,6 +1265,8 @@ void App::loadSettings() {
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
         else if (k == "volumeVisible") impl->volumeVisible = clB(v);
+        else if (k == "peakShellVisible") impl->peakShellVisible = clB(v);
+        else if (k == "tecColVisible") impl->tecColVisible = clB(v);
         else if (k == "volumeOpacity") impl->volumeOpacity = glm::clamp((float)v, 0.0f, 2.5f);
         else if (k == "sliceOn") impl->sliceOn = clB(v);
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
@@ -1438,9 +1482,11 @@ void App::rebuildSlice(bool force) {
     float omega = acosf(dot);
     bool useSlerp = omega > 1e-4f && omega < 3.14159265f - 1e-4f;
     const float kPi = 3.14159265f;
+    const float sAltMin = impl->lastVolume.altMinKm;
+    const float sAltMax = impl->lastVolume.altMaxKm;
     for (int j = 0; j < SliceLayer::LVL; j++) {
         float f = (float)j / (float)(SliceLayer::LVL - 1);
-        float altKm = 60.0f + (500.0f - 60.0f) * powf(f, 1.5f);
+        float altKm = sAltMin + (sAltMax - sAltMin) * powf(f, 1.5f);
         for (int i = 0; i < SliceLayer::SEG; i++) {
             float s = (float)i / (float)(SliceLayer::SEG - 1);
             glm::vec3 dir = useSlerp
@@ -1455,7 +1501,7 @@ void App::rebuildSlice(bool force) {
             if (v > peak) peak = v;
         }
     }
-    impl->sliceLayer.updateSlice(da, db, vals, "viridis");
+    impl->sliceLayer.updateSlice(da, db, vals, "viridis", sAltMin, sAltMax);
     impl->slicePeakLog = 8.0f + 4.5f * peak;  // misma normalizacion que el volumen
 }
 
@@ -1640,6 +1686,8 @@ void App::render() {
         }
         if (impl->tecLayer.isVisible()) impl->tecLayer.render(view, proj);
         if (impl->shellLayer.isVisible()) impl->shellLayer.render(view, proj);
+        if (impl->peakShell.isVisible()) impl->peakShell.render(view, proj);
+        if (impl->tecColShell.isVisible()) impl->tecColShell.render(view, proj);
         if (impl->volumeLayer.isVisible()) impl->volumeLayer.render(view, proj, camPos);
         if (impl->sliceOn && impl->sliceLayer.isVisible()) impl->sliceLayer.render(view, proj);
         // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
@@ -1840,6 +1888,14 @@ void App::render() {
         impl->shellLayer.setVisible(impl->outerShell);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Second nested isosurface (inferno, +0.025 radius, 0.45 opacity) sharing the same grid.");
+    if (ImGui::Checkbox("F2 peak shell", &impl->peakShellVisible)) {
+        impl->peakShell.setVisible(impl->peakShellVisible);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("F2 peak extracted from the volume: floats at the real measured hmF2 per column, colored by peak log-density (plasma). Rises and reddens in storms.");
+    if (ImGui::Checkbox("Model TEC", &impl->tecColVisible)) {
+        impl->tecColShell.setVisible(impl->tecColVisible);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC integrated from the volume (model, flat at 300 km). Compare against measured GloTEC: ocean/night bias reveals the median background fill.");
     if (ImGui::Checkbox("Volumetric density", &impl->volumeVisible)) {
         impl->volumeLayer.setVisible(impl->volumeVisible);
     }
@@ -2376,6 +2432,8 @@ void App::render() {
         ImGui::Begin("Legend");
         ImGui::Text("%s [%s] (%s)", LEG_NAMES[li], LEG_UNITS[li], impl->tecLayer.getColormapName().c_str());
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Active scale of the spherical color layer. It follows the Variable selector and the manual Colormap override.");
+        if (impl->peakShell.isVisible()) ImGui::TextDisabled("F2peak [logNe] (plasma)");
+        if (impl->tecColShell.isVisible()) ImGui::TextDisabled("modelTEC [TECU] (viridis)");
         if (impl->tecLayer.getGrid().valid && impl->tecLayer.isVisible()) {
             float mn, mx;
             impl->tecLayer.getDisplayRange(mn, mx);
@@ -2524,6 +2582,8 @@ void App::shutdown() {
     if (impl->fetchThread.joinable()) impl->fetchThread.join();
     impl->tecLayer.destroy();
     impl->volumeLayer.destroy();
+    impl->peakShell.destroy();
+    impl->tecColShell.destroy();
     impl->sliceLayer.destroy();
     impl->shellLayer.destroy();
     impl->ionosondeLayer.destroy();

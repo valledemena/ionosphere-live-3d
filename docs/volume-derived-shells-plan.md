@@ -92,15 +92,10 @@ float integrateTEC(const DensityVolume& v, int latIdx, int lonIdx) {
 
 Refinamiento sub-muestra del pico (el paso cerca de la F2 es ~10-13 km;
 sin esto la `hmKm` discreta salta ±5-6 km y la validación §6 lo marcaría
-como bug siendo solo resolución): parábola de 3 puntos alrededor del máximo:
-
-```cpp
-float y0 = d[i-1], y1 = d[i], y2 = d[i+1];
-float denom = (y0 - 2*y1 + y2);
-float delta = (fabsf(denom) > 1e-6f) ? 0.5f*(y0-y2)/denom : 0.0f;
-delta = clamp(delta, -1.0f, 1.0f);
-float hmRefined = h[i] + delta * (h[i+1]-h[i]);  // paso local aprox
-```
+como bug siendo solo resolución): parábola de Lagrange por los 3 puntos
+con sus alturas REALES (el espaciado ^1.5 no es uniforme; la versión en
+índice sesga ~8 km hacia el lado denso, medido en test). Ver
+`extractPeakGrids` (vértice clampado al tramo + valor interpolado).
 
 Rango vertical (decisión explícita): `altMaxKm` 500 → **700**,
 `altRes` 48 → **60** (coste +25% en build, ~nulo en raymarch: los pasos son

@@ -24,6 +24,10 @@ public:
 
     void init();
     void updateFromGrid(const GridData& grid);
+    // Geometria de alturas reales + color de valores (Fase 1, plan
+    // volume-derived-shells): r = 1 + hKm/6371 (+ heightOffset_ de ajuste).
+    // heights en km, mismo layout; se interpola bilineal igual que values.
+    void updateFromGrids(const GridData& values, const GridData& heights);
     void render(const glm::mat4& view, const glm::mat4& projection);
     void destroy();
 
@@ -101,6 +105,8 @@ private:
     float lastMin_ = 0.0f, lastMax_ = 1.0f, rangeMid_ = 0.5f;
     float displaceAmp_ = 0.0f;
     bool displaceCentered_ = false;
+    bool absoluteHeights_ = false;  // updateFromGrids: geometria de heightGrid_
+    GridData heightGrid_;
 
     bool meshDirty_ = true;
     bool textureDirty_ = true;

@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <algorithm>
 
+static float sampleGridBilinear(const GridData& g, float u, float v);
+
 // --- Vertex shader (compartido) ---
 static const char* gridVertSrc = R"(
 #version 400 core
@@ -91,15 +93,24 @@ void GridLayer::buildPositions(std::vector<float>& vertices) const {
             float theta = 2.0f * 3.14159f * (float)slice / (float)slices;
             float u = 1.0f - (float)slice / (float)slices;
             float v = (float)stack / (float)stacks;
-            float n;
-            if (displaceCentered_) {
-                // Alturas reales (hmF2): (valor - midRango)/rango -> [-0.5, 0.5].
-                float range = lastMax_ - lastMin_ + 1e-6f;
-                n = (sampleRaw(u, v) - rangeMid_) / range;
+            float r;
+            if (absoluteHeights_) {
+                // Alturas reales (km) -> radio, con clamp de seguridad.
+                float h = sampleGridBilinear(heightGrid_, u, v);
+                if (h < 0.0f) h = 0.0f;
+                if (h > 1600.0f) h = 1600.0f;
+                r = 1.0f + heightOffset_ + h / 6371.0f;
             } else {
-                n = sampleNorm(u, v);
+                float n;
+                if (displaceCentered_) {
+                    // Alturas reales (hmF2): (valor - midRango)/rango -> [-0.5, 0.5].
+                    float range = lastMax_ - lastMin_ + 1e-6f;
+                    n = (sampleRaw(u, v) - rangeMid_) / range;
+                } else {
+                    n = sampleNorm(u, v);
+                }
+                r = base + displaceAmp_ * n;
             }
-            float r = base + displaceAmp_ * n;
             float x = r * sinf(phi) * cosf(theta);
             float y = r * cosf(phi);
             float z = r * sinf(phi) * sinf(theta);
@@ -206,10 +217,36 @@ void GridLayer::createMesh() {
 
 void GridLayer::updateFromGrid(const GridData& grid) {
     grid_ = grid;
+    absoluteHeights_ = false;
     textureDirty_ = true;
     updateTexture();
     // El relieve depende de los datos: refrescar posiciones si hay malla y amp.
     if (displaceAmp_ > 0.0f && vao_ != 0) updatePositions();
+}
+
+void GridLayer::updateFromGrids(const GridData& values, const GridData& heights) {
+    grid_ = values;
+    heightGrid_ = heights;
+    absoluteHeights_ = true;
+    textureDirty_ = true;
+    updateTexture();
+    if (vao_ != 0) updatePositions();
+}
+
+static float sampleGridBilinear(const GridData& g, float u, float v) {
+    if (g.values.empty() || g.width < 2 || g.height < 2) return 0.0f;
+    const int W = g.width, H = g.height;
+    float gx = u * W - 0.5f;
+    float gy = (H - 0.5f) - v * H;
+    int x0 = (int)floorf(gx), y0 = (int)floorf(gy);
+    float fx = gx - x0, fy = gy - y0;
+    auto at = [&](int x, int y) -> float {
+        x %= W; if (x < 0) x += W;
+        y = std::max(0, std::min(H - 1, y));
+        return g.values[y * W + x];
+    };
+    return at(x0, y0) * (1 - fx) * (1 - fy) + at(x0 + 1, y0) * fx * (1 - fy) +
+           at(x0, y0 + 1) * (1 - fx) * fy + at(x0 + 1, y0 + 1) * fx * fy;
 }
 
 void GridLayer::updateTexture() {

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <glm/glm.hpp>
 #include "Ionosphere/LayerProfile.h"
+#include "Ionosphere/GridLayer.h"   // GridData (layout 72x72 compartido)
 
 // Volumen de densidad electronica para raymarching.
 // Layout: data[(altIdx*latRes + latIdx)*lonRes + lonIdx],
@@ -63,7 +64,84 @@ inline glm::vec3 densityDir(float latDeg, float lonDeg) {
     return glm::vec3(sn * cosf(theta), cs, sn * sinf(theta));
 }
 
-// Muestreo trilineal del volumen (0..1). Rejilla GridData + niveles ^1.5.
+// Picos por columna extraidos del volumen (Fase 1, plan volume-derived-shells).
+//   logNe: log10(Ne) del pico (para color). hmKm: altura del pico en km
+//   (refinada por parabola; umbral: picos bajo logNe 8.5 -> hmKm = 0 = hueco).
+struct PeakGrids {
+    GridData logNe;   // mismas dims que el grid 2D (lonRes x latRes)
+    GridData hmKm;
+};
+
+inline PeakGrids extractPeakGrids(const DensityVolume& v) {
+    PeakGrids out;
+    out.logNe.width = v.lonRes; out.logNe.height = v.latRes;
+    out.hmKm.width = v.lonRes;  out.hmKm.height = v.latRes;
+    out.logNe.values.assign((size_t)v.lonRes * v.latRes, 0.0f);
+    out.hmKm.values.assign((size_t)v.lonRes * v.latRes, 0.0f);
+    out.logNe.valid = out.hmKm.valid = false;
+    if (!v.valid || v.data.empty() || v.lonRes < 1 || v.latRes < 1 || v.altRes < 3) return out;
+    const int W = v.lonRes, H = v.latRes, A = v.altRes;
+    auto at = [&](int x, int y, int a) -> float {
+        return v.data[((size_t)a * H + y) * W + x];
+    };
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            int bi = 0;
+            for (int a = 1; a < A; a++)
+                if (at(x, y, a) > at(x, y, bi)) bi = a;
+            float peak = at(x, y, bi);
+            float hm = volumeAltKm(bi, A, v.altMinKm, v.altMaxKm);
+            if (bi > 0 && bi + 1 < A) {
+                // Refinamiento sub-muestra: parabola por los 3 puntos con sus
+                // alturas REALES (espaciado ^1.5 no uniforme; la version en
+                // indice sesga hacia el lado denso). Vertice de Lagrange.
+                float x0 = volumeAltKm(bi - 1, A, v.altMinKm, v.altMaxKm);
+                float x1 = hm;
+                float x2 = volumeAltKm(bi + 1, A, v.altMinKm, v.altMaxKm);
+                float y0 = at(x, y, bi - 1), y1 = peak, y2 = at(x, y, bi + 1);
+                float den = x0 * (y1 - y2) + x1 * (y2 - y0) + x2 * (y0 - y1);
+                if (fabsf(den) > 1e-9f) {
+                    float xs = 0.5f * (x0 * x0 * (y1 - y2) + x1 * x1 * (y2 - y0) +
+                                       x2 * x2 * (y0 - y1)) / den;
+                    if (xs < x0) xs = x0;
+                    if (xs > x2) xs = x2;
+                    // Valor en el vertice: t en [-1,1] sobre el tramo local.
+                    float t = (xs - x1) / (0.5f * (x2 - x0) + 1e-9f);
+                    if (t < -1.0f) t = -1.0f;
+                    if (t > 1.0f) t = 1.0f;
+                    hm = xs;
+                    peak = y1 - 0.25f * (y0 - y2) * t;
+                }
+            }
+            float logNe = 8.0f + 4.5f * peak;   // des-normalizar (mismo rango)
+            out.logNe.values[(size_t)y * W + x] = logNe;
+            out.hmKm.values[(size_t)y * W + x] = (logNe < 8.5f) ? 0.0f : hm;
+        }
+    }
+    out.logNe.valid = out.hmKm.valid = true;
+    out.logNe.timestamp = out.hmKm.timestamp = v.timestamp;
+    return out;
+}
+
+// TEC[TECU] = (1/1e16) * integral trapezoidal de Ne[m^-3] dh[m].
+// Des-normaliza (el volumen guarda log10 0..1) y usa el Δh real por tramo
+// (alturas en ^1.5, NO uniformes).
+inline float integrateTEC(const DensityVolume& v, int latIdx, int lonIdx) {
+    if (!v.valid || v.data.empty()) return 0.0f;
+    const int W = v.lonRes, H = v.latRes, A = v.altRes;
+    if (latIdx < 0 || latIdx >= H || lonIdx < 0 || lonIdx >= W || A < 2) return 0.0f;
+    double tec = 0.0;
+    for (int a = 0; a + 1 < A; a++) {
+        float n0 = v.data[((size_t)a * H + latIdx) * W + lonIdx];
+        float n1 = v.data[((size_t)(a + 1) * H + latIdx) * W + lonIdx];
+        double Ne0 = pow(10.0, 8.0 + 4.5 * n0);
+        double Ne1 = pow(10.0, 8.0 + 4.5 * n1);
+        double dh = (volumeAltKm(a + 1, A, v.altMinKm, v.altMaxKm) -
+                     volumeAltKm(a, A, v.altMinKm, v.altMaxKm)) * 1000.0;
+        tec += 0.5 * (Ne0 + Ne1) * dh;
+    }
+    return (float)(tec / 1.0e16);
+}
 inline float sampleVolume(const DensityVolume& v, float latDeg, float lonDeg, float altKm) {
     if (!v.valid || v.data.empty() || v.lonRes < 2 || v.latRes < 2 || v.altRes < 2) return 0.0f;
     const int W = v.lonRes, H = v.latRes, A = v.altRes;
