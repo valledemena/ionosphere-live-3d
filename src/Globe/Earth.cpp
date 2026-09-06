@@ -29,8 +29,31 @@ static GLuint loadTexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Anisotropia: nitidez en angulos rasantes (limbo). Si la extension no
+    // existe, maxAniso queda en 1.0 y se omite (sin error visible).
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
+#ifndef GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT 0x84FF
+#endif
+    GLfloat maxAniso = 1.0f;
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxAniso);
+    glGetError();  // limpiar posible GL_INVALID_ENUM si no hay extension
+    GLfloat aniso = maxAniso > 16.0f ? 16.0f : maxAniso;
+    if (aniso > 1.0f) glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
     if (loaded) stbi_image_free(data);
     return tex;
+}
+
+static bool imageFitsGL(const char* path) {
+    // stbi_info lee solo la cabecera (barato, sin decodificar pixeles).
+    int w = 0, h = 0, ch = 0;
+    if (!stbi_info(path, &w, &h, &ch)) return false;
+    GLint maxTex = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+    printf("[Earth] %s: %dx%d (GL max %d)\n", path, w, h, (int)maxTex);
+    return w > 0 && h > 0 && w <= maxTex && h <= maxTex;
 }
 
 void Earth::init() {
@@ -93,7 +116,12 @@ void Earth::init() {
     glBindVertexArray(0);
 
     texture = loadTexture("textures/earth-day.jpg");
-    nightTexture = loadTexture("textures/earth-night.jpg");
+    // Noche HiRes (Black Marble 3km, 13500px) si cabe en la GPU;
+    // si no, la estandar (3600px). Sin red ni descargas en runtime.
+    if (imageFitsGL("textures/earth-night-hires.jpg"))
+        nightTexture = loadTexture("textures/earth-night-hires.jpg");
+    else
+        nightTexture = loadTexture("textures/earth-night.jpg");
 }
 
 void Earth::render() {
