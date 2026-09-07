@@ -1798,12 +1798,14 @@ void App::render() {
     bool showPeak = impl->peakShell.isVisible() && soloOk(Impl::SoloTarget::Peak);
     bool showModel = impl->tecColShell.isVisible() && soloOk(Impl::SoloTarget::Model);
     bool showVol = impl->volumeLayer.isVisible() && soloOk(Impl::SoloTarget::Volume);
+    bool showVolScene = showVol && impl->volumeMode == 0;   // con tonemap
+    bool showVolCat = showVol && impl->volumeMode == 1;     // post-composite, exacto
     bool showPts = impl->ionosondeLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showSW = impl->solarWindLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showFar = impl->faradayLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showAur = impl->auroraLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showSlice = impl->sliceOn && impl->sliceLayer.isVisible() && solo == Impl::SoloTarget::None;
-    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showPts || showSW || showFar || showAur || showShell || showVol || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
+    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showPts || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
@@ -1825,7 +1827,7 @@ void App::render() {
         if (showShell) impl->shellLayer.render(view, proj);
         if (showPeak) impl->peakShell.render(view, proj);
         if (showModel) impl->tecColShell.render(view, proj);
-        if (showVol) impl->volumeLayer.render(view, proj, camPos);
+        if (showVolScene) impl->volumeLayer.render(view, proj, camPos);
         if (showSlice) impl->sliceLayer.render(view, proj);
         // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
         if (impl->terminatorVisible) {
@@ -1876,6 +1878,18 @@ void App::render() {
 
     glActiveTexture(GL_TEXTURE0);
     glEnable(GL_DEPTH_TEST);
+
+    // --- Pass 3b: capa categorica DESPUES del composite (colores exactos,
+    // sin tonemap ni bloom; oclusion terrestre analitica en el shader).
+    if (showVolCat) {
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        impl->volumeLayer.render(view, proj, camPos);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
 
     // --- ImGui --- (Hide UI lo oculta todo salvo el aviso breve;
     // siempre visible mientras llegan los datos iniciales)

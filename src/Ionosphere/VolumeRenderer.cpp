@@ -59,6 +59,16 @@ void main() {
     }
     if (tExit <= tEnter) discard;
 
+    // Oclusion terrestre analitica (radio 1.0): permite dibujar este pase
+    // DESPUES del composite sin depth buffer compartido (modo categorico).
+    if (u_colorMode == 1) {
+        float tEA, tEB;
+        if (raySphere(ro, rd, 1.0, tEA, tEB) && tEA > tEnter) {
+            tExit = min(tExit, tEA);
+        }
+        if (tExit <= tEnter) discard;
+    }
+
     float dt = (tExit - tEnter) / float(u_steps);
     vec3 accumColor = vec3(0.0);
     float accumAlpha = 0.0;
