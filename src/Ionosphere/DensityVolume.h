@@ -14,6 +14,7 @@ struct DensityVolume {
     int lonRes = 72, latRes = 72, altRes = 48;
     float altMinKm = 60.0f, altMaxKm = 500.0f;
     std::vector<float> data;
+    std::vector<unsigned char> layer;  // rama ganadora por muestra (0=D,1=E,2=F1,3=F2)
     double timestamp = 0.0;
     bool valid = false;
 };
@@ -186,6 +187,7 @@ inline DensityVolume buildDensityVolume(const std::vector<LayerProfile>& profile
     vol.altMinKm = altMinKm;
     vol.altMaxKm = altMaxKm;
     vol.data.assign((size_t)lonRes * latRes * altRes, 0.0f);
+    vol.layer.assign((size_t)lonRes * latRes * altRes, 0);
     vol.valid = false;
     if ((int)profiles.size() != lonRes * latRes) return vol;
 
@@ -204,11 +206,15 @@ inline DensityVolume buildDensityVolume(const std::vector<LayerProfile>& profile
             const LayerProfile& p = profiles[(size_t)latIdx * lonRes + lonIdx];
             for (int a = 0; a < altRes; a++) {
                 float h = volumeAltKm(a, altRes, altMinKm, altMaxKm);
-                float ne = evalNeTotal(p, h, cosChi, flareFactor);
+                int w = -1;
+                float ne = evalNeTotal(p, h, cosChi, flareFactor, &w);
+                if (w < 0) w = 0;
+                if (w > 3) w = 3;
                 float l10 = (ne > 0.0f) ? log10f(ne) : 0.0f;
                 float n = (l10 - 8.0f) / (12.5f - 8.0f);
                 n = std::max(0.0f, std::min(1.0f, n));
                 vol.data[((size_t)a * latRes + latIdx) * lonRes + lonIdx] = n;
+                vol.layer[((size_t)a * latRes + latIdx) * lonRes + lonIdx] = (unsigned char)w;
             }
         }
     }

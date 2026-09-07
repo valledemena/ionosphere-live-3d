@@ -66,6 +66,7 @@ void RefShells::init() {
 }
 
 void RefShells::rebuild() {
+    if (vao_ == 0 || vbo_ == 0) return;
     struct Shell { float altKm; glm::vec3 col; };
     glm::vec3 colE(0.10f, 0.45f, 0.20f);
     glm::vec3 colF1(0.50f, 0.42f, 0.10f);
@@ -86,7 +87,7 @@ void RefShells::rebuild() {
     };
 
     for (const auto& sh : shells) {
-        float r = 1.0f + sh.altKm / 6371.0f;
+        float r = 1.0f + (sh.altKm / 6371.0f) * explode_;
         for (float lat : parallels) {
             const int N = 72;
             for (int k = 0; k < N; k++) {

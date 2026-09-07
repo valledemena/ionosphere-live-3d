@@ -20,6 +20,8 @@ public:
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
+    // Vista explotada: multiplica (r-1) al reconstruir.
+    void setExplode(float f) { explode_ = glm::clamp(f, 1.0f, 5.0f); rebuild(); }
 
 private:
     void rebuild();
@@ -31,4 +33,5 @@ private:
     int vertexCount_ = 0;
     bool visible_ = false;
     float altE_ = 110.0f, altF1_ = 200.0f, altF2_ = 300.0f;
+    float explode_ = 1.0f;
 };

@@ -65,16 +65,27 @@ inline float chapmanAlpha(float Nm, float hm, float H, float h) {
 // Densidad total [m^-3] a altura hKm.
 //   cosChi: coseno del angulo cenital solar en la celda (<=0 de noche).
 //   flareFactor: multiplicador de fulguracion (>=1, ver XrayAdapter).
-inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float flareFactor) {
+//   winner: si no es null, recibe la rama ganadora del max() (0=D,1=E,2=F1,3=F2;
+//   -1 si ninguna). Empates -> la mas baja (comparacion estricta en orden).
+inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float flareFactor,
+                         int* winner = nullptr) {
     float best = 0.0f;
+    int win = -1;
 
     // D: sin fo medible; fondo Chapman Nm=1e9*sqrt(cosChi), H=10, hm=75.
     if (cosChi > 0.0f) {
         float NmD = 1.0e9f * sqrtf(cosChi) * flareFactor;
-        best = std::max(best, chapmanAlpha(NmD, 75.0f, 10.0f, hKm));
+        float v = chapmanAlpha(NmD, 75.0f, 10.0f, hKm);
+        if (v > best) { best = v; win = 0; }
     }
-    if (p.hasE)  best = std::max(best, chapmanAlpha(p.NmE, p.hmE, 10.0f, hKm));
-    if (p.hasF1) best = std::max(best, chapmanAlpha(p.NmF1, p.hmF1, 25.0f, hKm));
+    if (p.hasE) {
+        float v = chapmanAlpha(p.NmE, p.hmE, 10.0f, hKm);
+        if (v > best) { best = v; win = 1; }
+    }
+    if (p.hasF1) {
+        float v = chapmanAlpha(p.NmF1, p.hmF1, 25.0f, hKm);
+        if (v > best) { best = v; win = 2; }
+    }
     if (p.hasF2) {
         float NeF2 = 0.0f;
         if (hKm <= p.hmF2) {
@@ -93,7 +104,8 @@ inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float f
             float Htop = 60.0f * (1.0f + (hKm - p.hmF2) / 300.0f);
             NeF2 = p.NmF2 * expf(-(hKm - p.hmF2) / Htop);
         }
-        best = std::max(best, NeF2);
+        if (NeF2 > best) { best = NeF2; win = 3; }
     }
+    if (winner) *winner = win;
     return best;
 }

@@ -21,12 +21,17 @@ void main() {
 static const char* volFragSrc = R"(
 #version 400 core
 in vec3 vWorldPos;
-uniform sampler3D u_density;    // log10(Ne) normalizado 0..1
+uniform sampler3D u_density;    // log10(Ne) normalizado 0..1 (filtrado)
+uniform sampler3D u_layer;      // rama ganadora 0..3 (SIN filtrar: texelFetch)
 uniform sampler1D u_colormap;
 uniform vec3 u_camPos;
 uniform float u_innerR, u_outerR;
 uniform float u_opacityScale;
 uniform int u_steps;
+uniform int u_colorMode;        // 0 = densidad, 1 = capas fijas
+uniform ivec3 u_volRes;         // dims para texelFetch
+uniform int u_isoOn;            // realce de isosuperficies logNe 10.5/11/11.5
+uniform float u_isoWidth;
 out vec4 fragColor;
 
 bool raySphere(vec3 ro, vec3 rd, float r, out float t0, out float t1) {
@@ -77,8 +82,31 @@ void main() {
         vec2 uv = vec2(lon / (2.0 * 3.14159265) + 0.5, lat / 3.14159265 + 0.5);
 
         float d = texture(u_density, vec3(uv, altNorm)).r;
-        vec3 col = texture(u_colormap, d).rgb;
+        vec3 col;
+        if (u_colorMode == 1) {
+            // Categórico: ID exacto por texelFetch (el LINEAR corrompería
+            // fronteras: 1.7 no es ninguna capa). D=naranja, E=verde,
+            // F1=amarillo, F2=cian.
+            ivec3 ip = ivec3(clamp(vec3(floor(uv.x * float(u_volRes.x)),
+                                           floor(uv.y * float(u_volRes.y)),
+                                           floor(altNorm * float(u_volRes.z))),
+                                   vec3(0.0), vec3(u_volRes) - 1));
+            int w = int(texelFetch(u_layer, ip, 0).r * 255.0 + 0.5);
+            if (w == 0)      col = vec3(1.00, 0.55, 0.10);
+            else if (w == 1) col = vec3(0.20, 0.85, 0.30);
+            else if (w == 2) col = vec3(1.00, 0.90, 0.20);
+            else             col = vec3(0.20, 0.80, 1.00);
+        } else {
+            col = texture(u_colormap, d).rgb;
+        }
         float a = clamp(d * d * u_opacityScale * dt * 40.0, 0.0, 1.0);
+        if (u_isoOn != 0) {
+            // Iso-bandas logNe 10.5/11/11.5 (normalizado 0.556/0.667/0.778).
+            float m = min(min(abs(d - 0.556), abs(d - 0.667)), abs(d - 0.778));
+            float band = 1.0 - smoothstep(0.0, u_isoWidth, m);
+            col = mix(col, vec3(1.0), band * 0.55);
+            a = max(a, band * 0.35);
+        }
 
         accumColor += (1.0 - accumAlpha) * a * col;
         accumAlpha += (1.0 - accumAlpha) * a;
@@ -103,6 +131,14 @@ void VolumeRenderer::init() {
 
     glGenTextures(1, &colormapTex_);
     setColormap("viridis");
+
+    glGenTextures(1, &layerTex_);
+    glBindTexture(GL_TEXTURE_3D, layerTex_);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &volVertSrc, nullptr);
@@ -181,6 +217,11 @@ void VolumeRenderer::updateVolume(const DensityVolume& vol) {
     glBindTexture(GL_TEXTURE_3D, tex3D_);
     glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, lonRes_, latRes_, altRes_, 0,
                  GL_RED, GL_UNSIGNED_BYTE, bytes.data());
+    if (vol.layer.size() == vol.data.size()) {
+        glBindTexture(GL_TEXTURE_3D, layerTex_);
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_R8, lonRes_, latRes_, altRes_, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, vol.layer.data());
+    }
     hasVolume_ = true;
 }
 
@@ -188,8 +229,8 @@ void VolumeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
                             const glm::vec3& camPosWorld) {
     if (!visible_ || !hasVolume_) return;
 
-    float outerR = 1.0f + altMaxKm_ / 6371.0f;
-    float innerR = 1.0f + altMinKm_ / 6371.0f;
+    float outerR = 1.0f + (altMaxKm_ / 6371.0f) * explode_;
+    float innerR = 1.0f + (altMinKm_ / 6371.0f) * explode_;
     glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(outerR));
 
     glUseProgram(shader_);
@@ -202,13 +243,20 @@ void VolumeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     glUniform1f(glGetUniformLocation(shader_, "u_outerR"), outerR);
     glUniform1f(glGetUniformLocation(shader_, "u_opacityScale"), opacityScale_);
     glUniform1i(glGetUniformLocation(shader_, "u_steps"), steps_);
+    glUniform1i(glGetUniformLocation(shader_, "u_colorMode"), mode_);
+    glUniform1i(glGetUniformLocation(shader_, "u_isoOn"), isoOn_ ? 1 : 0);
+    glUniform1f(glGetUniformLocation(shader_, "u_isoWidth"), 0.02f);
+    glUniform3i(glGetUniformLocation(shader_, "u_volRes"), lonRes_, latRes_, altRes_);
     glUniform1i(glGetUniformLocation(shader_, "u_density"), 0);
     glUniform1i(glGetUniformLocation(shader_, "u_colormap"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "u_layer"), 2);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, tex3D_);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_1D, colormapTex_);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_3D, layerTex_);
     glActiveTexture(GL_TEXTURE0);
 
     GLboolean wasCull = glIsEnabled(GL_CULL_FACE);
@@ -228,9 +276,10 @@ void VolumeRenderer::destroy() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (ebo_) glDeleteBuffers(1, &ebo_);
     if (tex3D_) glDeleteTextures(1, &tex3D_);
+    if (layerTex_) glDeleteTextures(1, &layerTex_);
     if (colormapTex_) glDeleteTextures(1, &colormapTex_);
     if (shader_) glDeleteProgram(shader_);
-    vao_ = vbo_ = ebo_ = tex3D_ = colormapTex_ = shader_ = 0;
+    vao_ = vbo_ = ebo_ = tex3D_ = layerTex_ = colormapTex_ = shader_ = 0;
     indexCount_ = 0;
     hasVolume_ = false;
 }

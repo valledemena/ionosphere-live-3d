@@ -27,16 +27,24 @@ public:
 
     void setColormap(const std::string& name);
     const std::string& getColormapName() const { return colormapName_; }
+    // 0 = densidad (colormap continuo), 1 = capas (4 colores fijos por ganador).
+    void setColorMode(int m) { mode_ = m & 1; }
+    int getColorMode() const { return mode_; }
+    // Iso-bandas logNe 10.5/11/11.5 (huesos de la densidad).
+    void setIsoBands(bool b) { isoOn_ = b; }
     // (Sin setDensityRange a proposito: la normalizacion log10 [8,12.5] se hace
     // en CPU al construir el volumen; un setter aqui mentiria.)
     void setOpacityScale(float k) { opacityScale_ = glm::clamp(k, 0.0f, 3.0f); }
     float getOpacityScale() const { return opacityScale_; }
+    // Vista explotada: multiplica (r-1) de ambas esferas.
+    void setExplode(float f) { explode_ = glm::clamp(f, 1.0f, 5.0f); }
     void setStepCount(int n) { steps_ = glm::clamp(n, 16, 256); }
 
     bool hasVolume() const { return hasVolume_; }
 
 private:
     GLuint tex3D_ = 0;
+    GLuint layerTex_ = 0;   // R8 sin filtrar (IDs 0..3, ver texelFetch abajo)
     GLuint vao_ = 0, vbo_ = 0, ebo_ = 0;
     GLuint colormapTex_ = 0;
     GLuint shader_ = 0;
@@ -44,7 +52,10 @@ private:
     int lonRes_ = 0, latRes_ = 0, altRes_ = 0;
     float altMinKm_ = 60.0f, altMaxKm_ = 500.0f;
     float opacityScale_ = 1.0f;
+    float explode_ = 1.0f;
+    bool isoOn_ = false;
     int steps_ = 64;
+    int mode_ = 0;
     bool visible_ = false;
     bool hasVolume_ = false;
     std::string colormapName_ = "viridis";

@@ -32,10 +32,12 @@ persistencia y arranca apagado; nada altera datos, solo representación.
    clampedo (pasar dims como `uniform ivec3 u_volRes`). Cero cambios en C++.
 2. **Combo Densidad/Capas** en Layers + leyenda que cambia con el modo
    (escala continua vs 4 etiquetas). Tooltip EN.
-   BYPASS TONEMAP (review): ACES invalidaría cualquier calibración al mover
-   exposure. La capa categórica se renderiza DESPUÉS del composite
-   (directo a pantalla, como ImGui; el raymarch no necesita depth buffer:
-   la oclusión es analítica) para que los 4 colores salgan exactos.
+   BYPASS TONEMAP + BLOOM (review): la capa categórica se renderiza DESPUÉS
+   del composite (directo a pantalla, como ImGui) y SIN bloom. Motivo
+   decisivo (no solo precedente): el `texelFetch` fija fronteras exactas y
+   el blur las volvería a difuminar en pantalla, deshaciendo lo arreglado
+   en el sampler. Si el plano resulta "pegote", alternativa aprobada: rim
+   fino por gradiente de normal en el mismo pase (nunca blur posterior).
 3. **Regla de altitud HUD**: barra vertical 60–700 km fija en lateral, marcas
    D/E/F1/F2 nominales + indicador móvil del pico real bajo cursor/pineada
    (máximo de columna vía `sampleVolume`, bajo demanda al cambiar hover —
@@ -60,9 +62,11 @@ persistencia y arranca apagado; nada altera datos, solo representación.
 1. **Slice generalizado**: endpoints lat/lon libres (no solo estaciones) +
    modo punto-fijo (cortina de ±2° con offset perpendicular explícito —
    A=B degenera, no reutilizar).
-2. **PiP de limbo**: segundo render a 1/4 de resolución con cámara pegada al
-   limbo (scissor/viewport en esquina), mismos shaders. Toggle + selección
-   de borde (sube a auto: punto medio del limbo visible).
+2. **PiP de limbo**: lupa x3 del limbo este con el propio framebuffer
+   (IMPLEMENTADO ASI en vez de segundo render: cero coste de render, misma
+   imagen, sigue al limbo automaticamente; ver `Limb x3` en App.cpp).
+   Alternativa anotada y descartada: segundo render a 1/4 (doble coste +
+   refactor de `render()`; reconsiderar solo si la lupa no basta).
    Alternativa anotada (no elegida): corte ortográfico muestreado con la
    función de transferencia del volumen horneada (como `SliceLayer`) —
    más barato pero un escalón de acabado por debajo; reconsiderar si el

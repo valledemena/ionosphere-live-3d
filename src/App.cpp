@@ -18,6 +18,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cstdint>
 #include <mutex>
 #include <thread>
 #include <memory>
@@ -183,6 +184,10 @@ struct App::Impl {
     // URSI para que sobreviva al refresco incremental de muestras).
     int hoveredStation = -1;
     std::string pinnedCode;
+    // Hover-solo en leyenda: que entrada aislar (None = todo normal).
+    // Se calcula en ImGui y se aplica en el render 3D del frame siguiente.
+    enum class SoloTarget { None, Main, Peak, Model, Volume };
+    SoloTarget legendSolo = SoloTarget::None;
     bool mouseLeftPrev = false;
     double mouseDownX = 0.0, mouseDownY = 0.0;
 
@@ -208,7 +213,12 @@ struct App::Impl {
     VolumeRenderer volumeLayer;
     bool volumeVisible = false;
     float volumeOpacity = 1.0f;
+    int volumeMode = 0;          // 0 = densidad, 1 = capas fijas
+    bool pipVisible = false;     // lupa del limbo (magnifier, sin re-render)
+    bool labelsVisible = false;  // etiquetas 3D con lider
+    float explodeFactor = 1.0f;  // vista explotada x1..x5
     DensityVolume lastVolume;   // ultimo volumen construido (para el slice)
+    bool isoBands = false;      // realce de isosuperficies logNe en el volumen
     // Cascaras derivadas del volumen (Fase 2/3, plan volume-derived-shells).
     GridLayer peakShell;        // F2: geometria hm real + color logNe
     bool peakShellVisible = false;
@@ -217,6 +227,9 @@ struct App::Impl {
     // Slice QTH-DX: A = pineada, B = hover.
     SliceLayer sliceLayer;
     bool sliceOn = false;
+    int sliceSrc = 0;   // 0 = pin+hover, 1 = manual A/B, 2 = punto fijo ±2°
+    float sliceLatA = 40.0f, sliceLonA = -4.0f;    // manual A / centro punto
+    float sliceLatB = 40.0f, sliceLonB = -100.0f;  // manual B
     std::string sliceA, sliceB;
     float slicePeakLog = 0.0f;  // log10(Ne) maximo del trayecto
     // Anillo protegido (el hilo de precarga escribe mientras el render lee).
@@ -918,9 +931,7 @@ bool App::init(int width, int height, const char* title) {
     loadSettings();
     impl->tecLayer.setVisible(impl->tecVisible);
     impl->tecLayer.setOpacity(impl->tecOpacity);
-    impl->tecLayer.setAltitude(impl->altKm / 6371.0f);
-    impl->shellLayer.setVisible(impl->outerShell);
-    impl->shellLayer.setAltitude(impl->altKm / 6371.0f + 0.025f);
+    applyAltitudes();
     impl->shellLayer.setOpacity(impl->shellOpacity);
     {
         static const char* autoCM[4] = { "viridis", "inferno", "plasma", "turbo" };
@@ -936,12 +947,19 @@ bool App::init(int width, int height, const char* title) {
     impl->auroraLayer.setOpacity(impl->aurOpacity);
     impl->volumeLayer.setVisible(impl->volumeVisible);
     impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
+    impl->volumeLayer.setColorMode(impl->volumeMode);
+    impl->volumeLayer.setIsoBands(impl->isoBands);
+    impl->volumeLayer.setExplode(impl->explodeFactor);
+    impl->refShells.setExplode(impl->explodeFactor);
     impl->peakShell.setVisible(impl->peakShellVisible);
     impl->tecColShell.setVisible(impl->tecColVisible);
     impl->sliceLayer.setVisible(impl->sliceOn);
     impl->refShells.setVisible(impl->refShellsVisible);
     applyColorLayer();
     applyRelief();
+    applyAltitudes();
+    impl->volumeLayer.setExplode(impl->explodeFactor);
+    impl->refShells.setExplode(impl->explodeFactor);
 
     printf("[OK] All initialized\n");
     return true;
@@ -1206,6 +1224,13 @@ void App::applyRelief() {
     impl->shellLayer.setDisplace(amp);
 }
 
+void App::applyAltitudes() {
+    float f = impl->explodeFactor;
+    impl->tecLayer.setAltitude(impl->altKm / 6371.0f * f);
+    impl->shellLayer.setAltitude((impl->altKm / 6371.0f + 0.025f) * f);
+    impl->auroraLayer.setAltitude(110.0f / 6371.0f * f);
+}
+
 void App::updateMainGrid(const GridData& grid) {
     impl->tecLayer.updateFromGrid(grid);
     impl->shellLayer.updateFromGrid(grid);
@@ -1254,6 +1279,16 @@ void App::saveSettings() {
     fprintf(f, "cineSpeed %g\n", (double)impl->cineSpeed);
     fprintf(f, "replaySpeed %g\n", (double)impl->replaySpeed);
     fprintf(f, "volumeVisible %d\n", impl->volumeVisible ? 1 : 0);
+    fprintf(f, "pipVisible %d\n", impl->pipVisible ? 1 : 0);
+    fprintf(f, "volumeMode %d\n", impl->volumeMode);
+    fprintf(f, "isoBands %d\n", impl->isoBands ? 1 : 0);
+    fprintf(f, "sliceSrc %d\n", impl->sliceSrc);
+    fprintf(f, "sliceLatA %g\n", (double)impl->sliceLatA);
+    fprintf(f, "sliceLonA %g\n", (double)impl->sliceLonA);
+    fprintf(f, "sliceLatB %g\n", (double)impl->sliceLatB);
+    fprintf(f, "sliceLonB %g\n", (double)impl->sliceLonB);
+    fprintf(f, "labelsVisible %d\n", impl->labelsVisible ? 1 : 0);
+    fprintf(f, "explodeFactor %g\n", (double)impl->explodeFactor);
     fprintf(f, "peakShellVisible %d\n", impl->peakShellVisible ? 1 : 0);
     fprintf(f, "tecColVisible %d\n", impl->tecColVisible ? 1 : 0);
     fprintf(f, "volumeOpacity %g\n", (double)impl->volumeOpacity);
@@ -1321,6 +1356,16 @@ void App::loadSettings() {
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
         else if (k == "volumeVisible") impl->volumeVisible = clB(v);
+        else if (k == "pipVisible") impl->pipVisible = clB(v);
+        else if (k == "volumeMode") impl->volumeMode = glm::clamp((int)v, 0, 1);
+        else if (k == "isoBands") impl->isoBands = clB(v);
+        else if (k == "sliceSrc") impl->sliceSrc = glm::clamp((int)v, 0, 2);
+        else if (k == "sliceLatA") impl->sliceLatA = glm::clamp((float)v, -90.0f, 90.0f);
+        else if (k == "sliceLonA") impl->sliceLonA = glm::clamp((float)v, -180.0f, 180.0f);
+        else if (k == "sliceLatB") impl->sliceLatB = glm::clamp((float)v, -90.0f, 90.0f);
+        else if (k == "sliceLonB") impl->sliceLonB = glm::clamp((float)v, -180.0f, 180.0f);
+        else if (k == "labelsVisible") impl->labelsVisible = clB(v);
+        else if (k == "explodeFactor") impl->explodeFactor = glm::clamp((float)v, 1.0f, 5.0f);
         else if (k == "peakShellVisible") impl->peakShellVisible = clB(v);
         else if (k == "tecColVisible") impl->tecColVisible = clB(v);
         else if (k == "volumeOpacity") impl->volumeOpacity = glm::clamp((float)v, 0.0f, 2.5f);
@@ -1511,27 +1556,46 @@ void App::consumeBundles() {
     }
 }
 
-// Cortina vertical A (pinned) -> B (hover) muestreada de lastVolume.
-// Sin GL salvo updateSlice (hilo principal). Convencion verificada del motor.
+// Cortina vertical muestreada de lastVolume. Fuentes:
+//   0 = A pineada -> B hover (estaciones); 1 = A/B manual; 2 = punto fijo ±2°.
 void App::rebuildSlice(bool force) {
-    const StationPoint* A = nullptr;
-    const StationPoint* B = nullptr;
-    int n = impl->ionosondeLayer.getStationCount();
-    if (!impl->pinnedCode.empty()) {
-        for (int i = 0; i < n; i++) {
-            const StationPoint* c = impl->ionosondeLayer.getSample(i);
-            if (c && c->code == impl->pinnedCode) { A = c; break; }
+    glm::vec3 da(0), db(0);
+    std::string na, nb;
+    char coord[48];
+    if (impl->sliceSrc == 1) {
+        da = densityDir(impl->sliceLatA, impl->sliceLonA);
+        db = densityDir(impl->sliceLatB, impl->sliceLonB);
+        snprintf(coord, sizeof(coord), "%.1f,%.0f", (double)impl->sliceLatA, (double)impl->sliceLonA);
+        na = coord;
+        snprintf(coord, sizeof(coord), "%.1f,%.0f", (double)impl->sliceLatB, (double)impl->sliceLonB);
+        nb = coord;
+    } else if (impl->sliceSrc == 2) {
+        da = densityDir(impl->sliceLatA, impl->sliceLonA - 2.0f);
+        db = densityDir(impl->sliceLatA, impl->sliceLonA + 2.0f);
+        snprintf(coord, sizeof(coord), "%.1f,%.0f", (double)impl->sliceLatA, (double)impl->sliceLonA);
+        na = nb = coord;
+    } else {
+        const StationPoint* A = nullptr;
+        const StationPoint* B = nullptr;
+        int n = impl->ionosondeLayer.getStationCount();
+        if (!impl->pinnedCode.empty()) {
+            for (int i = 0; i < n; i++) {
+                const StationPoint* c = impl->ionosondeLayer.getSample(i);
+                if (c && c->code == impl->pinnedCode) { A = c; break; }
+            }
         }
+        if (impl->hoveredStation >= 0 && impl->hoveredStation < n)
+            B = impl->ionosondeLayer.getSample(impl->hoveredStation);
+        if (!A || !B || A->code == B->code) return;
+        if (!force && A->code == impl->sliceA && B->code == impl->sliceB) return;
+        na = A->code; nb = B->code;
+        da = densityDir(A->latDeg, A->lonDeg);
+        db = densityDir(B->latDeg, B->lonDeg);
     }
-    if (impl->hoveredStation >= 0 && impl->hoveredStation < n)
-        B = impl->ionosondeLayer.getSample(impl->hoveredStation);
-    if (!A || !B || A->code == B->code || !impl->lastVolume.valid) return;
-    if (!force && A->code == impl->sliceA && B->code == impl->sliceB) return;
-    impl->sliceA = A->code;
-    impl->sliceB = B->code;
-
-    glm::vec3 da = densityDir(A->latDeg, A->lonDeg);
-    glm::vec3 db = densityDir(B->latDeg, B->lonDeg);
+    if (!impl->lastVolume.valid) return;
+    if (!force && na == impl->sliceA && nb == impl->sliceB) return;
+    impl->sliceA = na;
+    impl->sliceB = nb;
     std::vector<float> vals((size_t)SliceLayer::SEG * SliceLayer::LVL);
     float peak = 0.0f;
     float dot = glm::clamp(glm::dot(da, db), -1.0f, 1.0f);
@@ -1722,7 +1786,24 @@ void App::render() {
     // en el bright-pass (el bloom solo ilumina la Tierra; atmosfera, TEC y
     // resto salen nitidos sin quemarse a blanco).
     bool additiveDrawn = false;
-    if (impl->showAtmosphere || impl->terminatorVisible || impl->tecLayer.isVisible() || impl->ionosondeLayer.isVisible() || impl->solarWindLayer.isVisible() || impl->faradayLayer.isVisible() || impl->auroraLayer.isVisible() || impl->shellLayer.isVisible() || impl->refShells.isVisible()) {
+    // Hover-solo de leyenda (frame anterior): aislar una entrada ionosferica.
+    // Fondo (Tierra/estrellas) y referencia (atmosfera/terminador/anillos)
+    // siempre se dibujan; el resto solo si no hay solo o si es el elegido.
+    Impl::SoloTarget solo = impl->legendSolo;
+    auto soloOk = [&](Impl::SoloTarget t) {
+        return solo == Impl::SoloTarget::None || solo == t;
+    };
+    bool showTec = impl->tecLayer.isVisible() && soloOk(Impl::SoloTarget::Main);
+    bool showShell = impl->shellLayer.isVisible() && soloOk(Impl::SoloTarget::Main);
+    bool showPeak = impl->peakShell.isVisible() && soloOk(Impl::SoloTarget::Peak);
+    bool showModel = impl->tecColShell.isVisible() && soloOk(Impl::SoloTarget::Model);
+    bool showVol = impl->volumeLayer.isVisible() && soloOk(Impl::SoloTarget::Volume);
+    bool showPts = impl->ionosondeLayer.isVisible() && solo == Impl::SoloTarget::None;
+    bool showSW = impl->solarWindLayer.isVisible() && solo == Impl::SoloTarget::None;
+    bool showFar = impl->faradayLayer.isVisible() && solo == Impl::SoloTarget::None;
+    bool showAur = impl->auroraLayer.isVisible() && solo == Impl::SoloTarget::None;
+    bool showSlice = impl->sliceOn && impl->sliceLayer.isVisible() && solo == Impl::SoloTarget::None;
+    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showPts || showSW || showFar || showAur || showShell || showVol || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
@@ -1740,12 +1821,12 @@ void App::render() {
             impl->atmosphereShader.setVec3("u_cameraPos", camPos);
             impl->atmosphere.render();
         }
-        if (impl->tecLayer.isVisible()) impl->tecLayer.render(view, proj);
-        if (impl->shellLayer.isVisible()) impl->shellLayer.render(view, proj);
-        if (impl->peakShell.isVisible()) impl->peakShell.render(view, proj);
-        if (impl->tecColShell.isVisible()) impl->tecColShell.render(view, proj);
-        if (impl->volumeLayer.isVisible()) impl->volumeLayer.render(view, proj, camPos);
-        if (impl->sliceOn && impl->sliceLayer.isVisible()) impl->sliceLayer.render(view, proj);
+        if (showTec) impl->tecLayer.render(view, proj);
+        if (showShell) impl->shellLayer.render(view, proj);
+        if (showPeak) impl->peakShell.render(view, proj);
+        if (showModel) impl->tecColShell.render(view, proj);
+        if (showVol) impl->volumeLayer.render(view, proj, camPos);
+        if (showSlice) impl->sliceLayer.render(view, proj);
         // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
         if (impl->terminatorVisible) {
             impl->terminatorShader.use();
@@ -1756,10 +1837,10 @@ void App::render() {
             impl->terminator.render();
         }
         if (impl->refShells.isVisible()) impl->refShells.render(view, proj);
-        if (impl->ionosondeLayer.isVisible()) impl->ionosondeLayer.render(view, proj);
-        if (impl->solarWindLayer.isVisible()) impl->solarWindLayer.render(view, proj);
-        if (impl->faradayLayer.isVisible()) impl->faradayLayer.render(view, proj);
-        if (impl->auroraLayer.isVisible()) impl->auroraLayer.render(view, proj);
+        if (showPts) impl->ionosondeLayer.render(view, proj);
+        if (showSW) impl->solarWindLayer.render(view, proj);
+        if (showFar) impl->faradayLayer.render(view, proj);
+        if (showAur) impl->auroraLayer.render(view, proj);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
@@ -1926,8 +2007,7 @@ void App::render() {
     if (impl->colormapOverride) ImGui::TextColored(ImVec4(0.7f,0.9f,0.7f,1), "Manual override ON");
     if (ImGui::SliderFloat("Altitude (km)", &impl->altKm, 100.0f, 800.0f)) {
         impl->altKm = glm::clamp(impl->altKm, 100.0f, 800.0f);
-        impl->tecLayer.setAltitude(impl->altKm / 6371.0f);
-        impl->shellLayer.setAltitude(impl->altKm / 6371.0f + 0.025f);
+        applyAltitudes();
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Height of the color shell above the surface (100-800 km). The outer shell follows +0.025. Visual only.");
     if (ImGui::SliderFloat("Layer opacity", &impl->tecOpacity, 0.0f, 2.0f)) {
@@ -1974,22 +2054,57 @@ void App::render() {
         impl->volumeLayer.setVisible(impl->volumeVisible);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real raymarched electron density Ne(lat, lon, h) rebuilt from station profiles (Chapman + Epstein) every ~5 s. Heavier on the GPU; follows live and replay.");
+    ImGui::Checkbox("Limb zoom", &impl->pipVisible);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Magnifier following the east limb: same framebuffer, x3 zoom, no extra render cost. Shows shell stacking edge-on.");
     if (ImGui::SliderFloat("Volume opacity", &impl->volumeOpacity, 0.0f, 2.5f)) {
         impl->volumeOpacity = glm::clamp(impl->volumeOpacity, 0.0f, 2.5f);
         impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Brightness of the volumetric rendering. Visual only.");
+    const char* volModes[] = { "Density", "Layers" };
+    if (ImGui::Combo("Volume mode", &impl->volumeMode, volModes, 2)) {
+        impl->volumeMode = impl->volumeMode & 1;
+        impl->volumeLayer.setColorMode(impl->volumeMode);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Density: continuous viridis scale. Layers: 4 fixed colors by winning layer (D orange, E green, F1 yellow, F2 cyan), exact boundaries (unfiltered).");
+    if (ImGui::Checkbox("Iso bands", &impl->isoBands)) {
+        impl->volumeLayer.setIsoBands(impl->isoBands);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Highlight shells at logNe 10.5/11/11.5 (white bands). Works in both volume modes.");
+    ImGui::Checkbox("Labels", &impl->labelsVisible);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Floating labels anchored in 3D (station F2 peak, aurora oval, TEC shell) with leader lines.");
+    if (ImGui::SliderFloat("Explode", &impl->explodeFactor, 1.0f, 5.0f)) {
+        impl->explodeFactor = glm::clamp(impl->explodeFactor, 1.0f, 5.0f);
+        applyAltitudes();
+        impl->volumeLayer.setExplode(impl->explodeFactor);
+        impl->refShells.setExplode(impl->explodeFactor);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale.");
     if (ImGui::Checkbox("Path slice", &impl->sliceOn)) {
         impl->sliceLayer.setVisible(impl->sliceOn);
         if (!impl->sliceOn) { impl->sliceA.clear(); impl->sliceB.clear(); }
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Vertical Ne(h) curtain between the pinned station (A, click to pin) and the hovered station (B). Same volume data, viridis scale.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Vertical Ne(h) curtain with viridis scale. Source below; rebuilt with the volume.");
+    const char* sliceSrcs[] = { "Pin+Hover", "Manual A/B", "Fixed point" };
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::Combo("Slice src", &impl->sliceSrc, sliceSrcs, 3);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Curtain endpoints: pinned+hovered stations, manual coordinates, or a fixed ±2° curtain around one point.");
+    if (impl->sliceOn && impl->sliceSrc >= 1) {
+        ImGui::SliderFloat("A lat", &impl->sliceLatA, -90.0f, 90.0f);
+        ImGui::SliderFloat("A lon", &impl->sliceLonA, -180.0f, 180.0f);
+        if (impl->sliceSrc == 1) {
+            ImGui::SliderFloat("B lat", &impl->sliceLatB, -90.0f, 90.0f);
+            ImGui::SliderFloat("B lon", &impl->sliceLonB, -180.0f, 180.0f);
+        }
+    }
     if (impl->sliceOn) {
         if (!impl->sliceA.empty() && !impl->sliceB.empty() && impl->sliceLayer.hasData()) {
             ImGui::Text("%s -> %s  pk %.1f", impl->sliceA.c_str(), impl->sliceB.c_str(), impl->slicePeakLog);
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Path endpoints and peak log10 electron density [m^-3] along it. Higher peak = easier reflection on HF.");
-        } else {
+        } else if (impl->sliceSrc == 0) {
             ImGui::TextDisabled("Pin a station (A), hover another (B).");
+        } else {
+            ImGui::TextDisabled("Waiting for volume...");
         }
     }
     if (ImGui::Checkbox("Ref shells E/F1/F2", &impl->refShellsVisible)) {
@@ -2526,8 +2641,23 @@ void App::render() {
         ImGui::Begin("Legend");
         ImGui::Text("%s [%s] (%s)", LEG_NAMES[li], LEG_UNITS[li], impl->tecLayer.getColormapName().c_str());
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Active scale of the spherical color layer. It follows the Variable selector and the manual Colormap override.");
+        // Hover-solo: aislar la entrada bajo el cursor (se aplica en el
+        // render 3D del frame siguiente; None = todo normal).
+        impl->legendSolo = App::Impl::SoloTarget::None;
+        if (ImGui::IsItemHovered()) impl->legendSolo = App::Impl::SoloTarget::Main;
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Hover to isolate this layer (solo).");
         if (impl->peakShell.isVisible()) ImGui::TextDisabled("F2peak [logNe] (plasma)");
+        if (ImGui::IsItemHovered() && impl->peakShell.isVisible()) impl->legendSolo = App::Impl::SoloTarget::Peak;
         if (impl->tecColShell.isVisible()) ImGui::TextDisabled("modelTEC [TECU] (viridis)");
+        if (ImGui::IsItemHovered() && impl->tecColShell.isVisible()) impl->legendSolo = App::Impl::SoloTarget::Model;
+        if (impl->volumeLayer.isVisible()) {
+            ImGui::Text("Volume [%s] (%s)", impl->volumeMode == 1 ? "layer" : "logNe",
+                        impl->volumeLayer.getColormapName().c_str());
+            if (ImGui::IsItemHovered()) {
+                impl->legendSolo = App::Impl::SoloTarget::Volume;
+                ImGui::SetItemTooltip("Hover to isolate the volume. Mode Layers shows fixed D/E/F1/F2 colors.");
+            }
+        }
         if (impl->tecLayer.getGrid().valid && impl->tecLayer.isVisible()) {
             float mn, mx;
             impl->tecLayer.getDisplayRange(mn, mx);
@@ -2598,7 +2728,96 @@ void App::render() {
         ImGui::End();
     }
 
-    // ---- Timeline: Live vs session replay of the TEC layer ----
+    // ---- Altitude ruler (Fase 1): 60-700 km + pico bajo pin/hover ----
+    {
+        ImGui::SetNextWindowPos(ImVec2((float)winW - 345.0f, 290.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(112, 300), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Altitude");
+        // Ancla: pineada, si no hover.
+        const StationPoint* anchor = nullptr;
+        {
+            int n = impl->ionosondeLayer.getStationCount();
+            if (!impl->pinnedCode.empty()) {
+                for (int i = 0; i < n; i++) {
+                    const StationPoint* c = impl->ionosondeLayer.getSample(i);
+                    if (c && c->code == impl->pinnedCode) { anchor = c; break; }
+                }
+            }
+            if (!anchor && impl->hoveredStation >= 0 && impl->hoveredStation < n)
+                anchor = impl->ionosondeLayer.getSample(impl->hoveredStation);
+        }
+        float peakAlt = -1.0f, peakLog = 0.0f;
+        if (anchor && anchor->valid && impl->lastVolume.valid) {
+            for (int a = 0; a < impl->lastVolume.altRes; a++) {
+                float h = volumeAltKm(a, impl->lastVolume.altRes,
+                                      impl->lastVolume.altMinKm, impl->lastVolume.altMaxKm);
+                float v = sampleVolume(impl->lastVolume, anchor->latDeg, anchor->lonDeg, h);
+                float lg = 8.0f + 4.5f * v;
+                if (lg > peakLog) { peakLog = lg; peakAlt = h; }
+            }
+        }
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        const float trackH = 200.0f, trackX = p.x + 24.0f;
+        const float A0 = 60.0f, A1 = 700.0f;
+        auto yOf = [&](float alt) {
+            return p.y + trackH * (1.0f - (alt - A0) / (A1 - A0));
+        };
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddLine(ImVec2(trackX, p.y), ImVec2(trackX, p.y + trackH), IM_COL32(140, 140, 140, 255), 2.0f);
+        struct Mark { float alt; const char* label; };
+        static const Mark marks[] = { {75.0f, "D"}, {110.0f, "E"}, {180.0f, "F1"}, {300.0f, "F2"} };
+        for (const auto& m : marks) {
+            float y = yOf(m.alt);
+            dl->AddLine(ImVec2(trackX - 5.0f, y), ImVec2(trackX + 5.0f, y), IM_COL32(140, 140, 140, 255), 1.0f);
+            dl->AddText(ImVec2(trackX + 8.0f, y - 7.0f), IM_COL32(170, 170, 170, 255), m.label);
+        }
+        if (peakAlt > 0.0f) {
+            float y = yOf(peakAlt);
+            dl->AddTriangleFilled(ImVec2(trackX - 9.0f, y - 5.0f), ImVec2(trackX - 9.0f, y + 5.0f),
+                                  ImVec2(trackX - 2.0f, y), IM_COL32(255, 220, 80, 255));
+            char pb[32];
+            snprintf(pb, sizeof(pb), "%.0f km", peakAlt);
+            dl->AddText(ImVec2(trackX + 8.0f, yOf(peakAlt) - 24.0f), IM_COL32(255, 220, 80, 255), pb);
+        } else {
+            dl->AddText(ImVec2(p.x, p.y + trackH + 4.0f), IM_COL32(120, 120, 120, 255), "hover a station");
+        }
+        ImGui::Dummy(ImVec2(100, trackH + 22.0f));
+        ImGui::End();
+    }
+
+    // ---- Limb zoom (Fase 2): lupa del limbo este con el propio framebuffer ----
+    if (impl->pipVisible) {
+        ImGui::SetNextWindowPos(ImVec2((float)winW - 440.0f, (float)winH - 270.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(340, 230), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Limb x3");
+        glm::vec3 vd = glm::normalize(-camPos);
+        glm::vec3 rr = glm::cross(vd, glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::vec2 uvc(-1.0f, -1.0f);
+        if (glm::length(rr) > 1e-4f) {
+            glm::vec3 limb = glm::normalize(rr);   // punto del limbo este
+            glm::vec4 c = proj * view * glm::vec4(limb, 1.0f);
+            if (c.w > 0.0f) {
+                glm::vec3 ndc = glm::vec3(c) / c.w;
+                if (ndc.x > -1.0f && ndc.x < 1.0f && ndc.y > -1.0f && ndc.y < 1.0f)
+                    uvc = glm::vec2(ndc.x * 0.5f + 0.5f, ndc.y * 0.5f + 0.5f);
+            }
+        }
+        if (uvc.x >= 0.0f) {
+            // Region ~x3 sin distorsion (mismo aspecto que el display).
+            float hw = 0.055f;
+            float hh = hw * (320.0f / 190.0f) / ((float)winW / (float)winH);
+            float x0 = glm::clamp(uvc.x - hw, 0.0f, 1.0f);
+            float x1 = glm::clamp(uvc.x + hw, 0.0f, 1.0f);
+            float y0 = glm::clamp(uvc.y - hh, 0.0f, 1.0f);
+            float y1 = glm::clamp(uvc.y + hh, 0.0f, 1.0f);
+            ImGui::Image((ImTextureID)(intptr_t)impl->sceneFBO.colorTexture,
+                         ImVec2(320, 190), ImVec2(x0, 1.0f - y1), ImVec2(x1, 1.0f - y0));
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("East limb magnified from the live framebuffer (scene without bloom). Watch shells stack edge-on.");
+        } else {
+            ImGui::TextDisabled("limb behind camera");
+        }
+        ImGui::End();
+    }
     {
         ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 190.0f, (float)winH - 96.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(380, 86), ImGuiCond_FirstUseEver);
@@ -2663,6 +2882,64 @@ void App::render() {
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frame time (UTC) of the stored TEC grid.");
         }
         ImGui::End();
+    }
+
+    // ---- Etiquetas 3D ancladas (Fase 1) ----
+    if (impl->labelsVisible) {
+        auto project = [&](const glm::vec3& w, ImVec2& out) -> bool {
+            if (glm::dot(glm::normalize(w), glm::normalize(camPos)) < 0.15f) return false;  // cara oculta
+            glm::vec4 c = proj * view * glm::vec4(w, 1.0f);
+            if (c.w <= 0.0f) return false;
+            glm::vec3 ndc = glm::vec3(c) / c.w;
+            if (ndc.x < -1.1f || ndc.x > 1.1f || ndc.y < -1.1f || ndc.y > 1.1f || ndc.z > 1.0f) return false;
+            out = ImVec2((ndc.x * 0.5f + 0.5f) * (float)winW, (1.0f - (ndc.y * 0.5f + 0.5f)) * (float)winH);
+            return true;
+        };
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        auto label = [&](const glm::vec3& w, const char* text, ImU32 col) {
+            ImVec2 s;
+            if (!project(w, s)) return;
+            ImVec2 t(s.x + 12.0f, s.y - 26.0f);
+            fg->AddLine(s, t, col, 1.0f);
+            fg->AddCircleFilled(s, 2.5f, col);
+            fg->AddText(t, col, text);
+        };
+        // 1) Pico F2 sobre pineada (si no, hover).
+        if (impl->ionosondeLayer.isVisible()) {
+            const StationPoint* a = nullptr;
+            int n = impl->ionosondeLayer.getStationCount();
+            if (!impl->pinnedCode.empty()) {
+                for (int i = 0; i < n; i++) {
+                    const StationPoint* c = impl->ionosondeLayer.getSample(i);
+                    if (c && c->code == impl->pinnedCode) { a = c; break; }
+                }
+            }
+            if (!a && impl->hoveredStation >= 0 && impl->hoveredStation < n)
+                a = impl->ionosondeLayer.getSample(impl->hoveredStation);
+            if (a && a->valid) {
+                float hm = a->hmF2 > 0.0f ? a->hmF2 : 300.0f;
+                char tb[64];
+                snprintf(tb, sizeof(tb), "%s F2 %.0fkm", a->code.c_str(), hm);
+                label(densityDir(a->latDeg, a->lonDeg) * (1.0f + hm / 6371.0f),
+                      tb, IM_COL32(255, 220, 80, 255));
+            }
+        }
+        // 2) Ovalo auroral (67N, meridiano de medianoche aprox).
+        if (impl->auroraLayer.isVisible()) {
+            glm::vec3 sd = glm::normalize(impl->sunDirection);
+            float slon = glm::degrees(atan2f(sd.z, -sd.x)) + 180.0f;
+            if (slon > 180.0f) slon -= 360.0f;
+            label(densityDir(67.0f, slon) * (1.0f + 110.0f / 6371.0f),
+                  "Aurora oval", IM_COL32(120, 255, 140, 255));
+        }
+        // 3) Shell TEC bajo camara.
+        if (impl->tecLayer.isVisible()) {
+            glm::vec3 cd = glm::normalize(camPos);
+            float clat = glm::degrees(asinf(glm::clamp(cd.y, -1.0f, 1.0f)));
+            float clon = glm::degrees(atan2f(cd.z, -cd.x));
+            label(densityDir(clat, clon) * (1.0f + 300.0f / 6371.0f),
+                  "TEC shell", IM_COL32(140, 200, 255, 255));
+        }
     }
 
     ImGui::Render();

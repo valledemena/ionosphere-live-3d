@@ -20,6 +20,7 @@ private:
     void render();
     void applyColorLayer();   // aplica la variable de mapa elegida a la capa de colores esferica
     void applyRelief();       // amplitud de relieve efectiva (storm swell) a ambas cascaras
+    void applyAltitudes();    // altitudes base x explodeFactor (vista explotada)
     void updateMainGrid(const GridData& grid);  // TEC + outer shell a la vez
     void pushHistoryFrame(const GridData& grid, double ts);  // anillo ordenado, dedup, cap 36
     void saveSettings();      // GUI -> settings.cfg (working dir)
