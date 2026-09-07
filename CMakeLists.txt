@@ -5,8 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# MSYS2 UCRT64 paths
-set(CMAKE_PREFIX_PATH "C:/msys64/ucrt64")
+# MSYS2 UCRT64 paths (solo Windows; Linux/CI usa paquetes del sistema.
+# NOTA: glm no esta vendido en libs/ — en Windows llega desde el paquete
+# mingw de MSYS2 y en Linux desde el include path del sistema.)
+if(WIN32)
+    set(CMAKE_PREFIX_PATH "C:/msys64/ucrt64")
+endif()
 
 # ── Dependencies ──────────────────────────────────────────────────────
 find_package(glfw3 3.4 REQUIRED)
@@ -84,8 +88,16 @@ target_link_libraries(ionosphere-live-3d PRIVATE
     imgui
     glfw
     CURL::libcurl
-    opengl32
 )
+if(WIN32)
+    target_link_libraries(ionosphere-live-3d PRIVATE opengl32)
+else()
+    # Linux: glad resuelve TODOS los entry points de GL en runtime via
+    # glfwGetProcAddress -> no hace falta enlazar libGL.
+    # Threads::Threads para std::thread.
+    find_package(Threads REQUIRED)
+    target_link_libraries(ionosphere-live-3d PRIVATE Threads::Threads)
+endif()
 
 # ── Copy shaders to build dir ───────────────────────────────────────
 add_custom_command(TARGET ionosphere-live-3d POST_BUILD
@@ -93,6 +105,20 @@ add_custom_command(TARGET ionosphere-live-3d POST_BUILD
     ${CMAKE_SOURCE_DIR}/shaders $<TARGET_FILE_DIR:ionosphere-live-3d>/shaders
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_SOURCE_DIR}/textures $<TARGET_FILE_DIR:ionosphere-live-3d>/textures
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/data $<TARGET_FILE_DIR:ionosphere-live-3d>/data
 )
+# M0.3: data/ es estado en runtime (no trackeado en git, no va en los
+# ZIP) -> copiar SOLO si existe, o el POST_BUILD revienta en checkout limpio.
+if(EXISTS "${CMAKE_SOURCE_DIR}/data")
+    add_custom_command(TARGET ionosphere-live-3d POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/data $<TARGET_FILE_DIR:ionosphere-live-3d>/data
+    )
+endif()
+
+# Tests (logica pura: sin GL/GLFW/red — corren en cualquier CI).
+# Condicion 5 de la revision MUSE. M4 anadira test_getbest_parse (fixture
+# real) y M5 test_model_foF2; este target deja la infraestructura CTest lista.
+enable_testing()
+add_executable(test_hop_geometry tests/test_hop_geometry.cpp)
+target_include_directories(test_hop_geometry PRIVATE src)
+add_test(NAME hop_geometry COMMAND test_hop_geometry)

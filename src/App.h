@@ -18,6 +18,7 @@ private:
     void processInput();
     void update(float dt);
     void render();
+    void recreateRenderTargets(int w, int h);  // M0.1: resize diferido (FBOs + aspect)
     void applyColorLayer();   // aplica la variable de mapa elegida a la capa de colores esferica
     void applyRelief();       // amplitud de relieve efectiva (storm swell) a ambas cascaras
     void applyAltitudes();    // altitudes base x explodeFactor (vista explotada)

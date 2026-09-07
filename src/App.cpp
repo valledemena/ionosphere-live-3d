@@ -18,6 +18,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -91,6 +92,10 @@ struct App::Impl {
     std::shared_ptr<const XrayBundle> getXray() const { std::lock_guard<std::mutex> lk(bundleMutex); return xray; }
     // Hilo worker de red + progreso de carga inicial.
     std::thread fetchThread;
+    // M0.2: las precargas en background pasan de detach() a miembros joinables
+    // (cerrar la ventana durante una precarga podia usar impl tras liberarlo).
+    std::thread histPreloadThread;
+    std::thread catalogPreloadThread;
     std::atomic<bool> shutdownRequested{false};
     std::atomic<int> loadTotal{6}, loadDone{0};
     std::atomic<bool> initialLoadDone{false};
@@ -558,8 +563,19 @@ static GridData blendGrids(const GridData& a, const GridData& b, double f) {
     return g;
 }
 
+// M0.1: resize diferido. El callback solo encola el tamaño pedido (puede
+// dispararse dentro de glfwPollEvents en mitad de un frame); el bucle de
+// frames recrea los FBOs con el contexto actual. Los callbacks corren en el
+// hilo principal, pero los atómicos dejan la intención explícita.
+static std::atomic<int> g_pendingResizeW{0};
+static std::atomic<int> g_pendingResizeH{0};
+
 static void framebufferSizeCallback(GLFWwindow* w, int width, int height) {
     glViewport(0, 0, width, height);
+    if (width > 0 && height > 0) {
+        g_pendingResizeW.store(width, std::memory_order_relaxed);
+        g_pendingResizeH.store(height, std::memory_order_relaxed);
+    }
 }
 
 static void mouseCallback(GLFWwindow* w, double xpos, double ypos) {
@@ -581,7 +597,10 @@ bool App::init(int width, int height, const char* title) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_SAMPLES, 4);
+    // (M0/R6) GLFW_SAMPLES eliminado: todos los pases van a FBOs (sceneFBO/
+    // bloomFBO), asi que un backbuffer por defecto multisample no cambia nada
+    // visible (el composite es un quad fullscreen e ImGui hace su propio AA).
+    // El MSAA real (sceneFBO multisample + resolve) llega en M1.
 
     window = glfwCreateWindow(winW, winH, title, nullptr, nullptr);
     if (!window) {
@@ -797,13 +816,16 @@ bool App::init(int width, int height, const char* title) {
     // (~3 h) en background para que el replay tenga pasado real al instante.
     {
         App* self = this;
-        std::thread([self]() {
+        // M0.2: hilo joinable (shutdown lo espera) + chequeos contra
+        // shutdownRequested: cerrar durante la espera nunca bloquea >~1 s aqui.
+        impl->histPreloadThread = std::thread([self]() {
             // Esperar al primer TEC vivo (max 180 s) para no competir con el
             // arranque; sin red se omite la precarga (el replay queda en sesion).
-            bool gated = false;
-            for (int i = 0; i < 180 && !self->impl->liveTecArrived.load(); i++)
+            for (int i = 0; i < 180 && !self->impl->liveTecArrived.load()
+                             && !self->impl->shutdownRequested.load(); i++)
                 std::this_thread::sleep_for(std::chrono::seconds(1));
-            if (!self->impl->liveTecArrived.load()) return;
+            if (!self->impl->liveTecArrived.load() || self->impl->shutdownRequested.load())
+                return;
             self->impl->histLoading.store(true);
             GloTecAdapter loader;   // instancia propia: sin estado compartido
             loader.setGridSize(72, 72);
@@ -812,6 +834,7 @@ bool App::init(int width, int height, const char* title) {
                 size_t take = idx.size() > 18 ? 18 : idx.size();
                 self->impl->histTotal.store((int)take);
                 for (size_t k = idx.size() - take; k < idx.size(); k++) {
+                    if (self->impl->shutdownRequested.load()) break;   // M0.2
                     GridData fr;
                     if (loader.fetchFrame(idx[k].url, idx[k].timeUtc, fr))
                         self->pushHistoryFrame(fr, idx[k].timeUtc);
@@ -820,7 +843,7 @@ bool App::init(int width, int height, const char* title) {
                 printf("[App] History preload done\n");
             }
             self->impl->histLoading.store(false);
-        }).detach();
+        });
     }
 
     // GIRO ionosondas (Fase 3): el catalogo tambien va en background para no
@@ -832,10 +855,13 @@ bool App::init(int width, int height, const char* title) {
     impl->ionosondeLayer.setPointSize(11.0f);
     {
         App* self = this;
-        std::thread([self]() {
-            if (self->impl->giro.fetchCatalog())
+        // M0.2: hilo joinable (shutdown lo espera); el pre-chequeo evita
+        // EMPEZAR un fetch durante el cierre (un fetch en vuelo se espera,
+        // acotado por el timeout interno de curl).
+        impl->catalogPreloadThread = std::thread([self]() {
+            if (!self->impl->shutdownRequested.load() && self->impl->giro.fetchCatalog())
                 self->impl->catalogReady.store(true);
-        }).detach();
+        });
     }
     impl->dias.init();
     impl->dias.fetchAsync((double)std::time(nullptr));  // complemento EU en background
@@ -965,8 +991,33 @@ bool App::init(int width, int height, const char* title) {
     return true;
 }
 
+// M0.1: recrear los recursos GL dependientes del tamaño. Solo se llama desde
+// el bucle de frames (hilo principal, contexto actual). M1 extendera esto con
+// los targets MSAA + resolve: mantenerlo como unico punto de recreacion.
+void App::recreateRenderTargets(int w, int h) {
+    winW = w;
+    winH = h;
+    // destroy() antes de init(): Framebuffer::init genera ids nuevos sin
+    // liberar los viejos (evita un leak de texturas/FBO en cada resize).
+    impl->sceneFBO.destroy();
+    impl->bloomFBO[0].destroy();
+    impl->bloomFBO[1].destroy();
+    if (!impl->sceneFBO.init(w, h))
+        fprintf(stderr, "[App] sceneFBO recreate failed at %dx%d\n", w, h);
+    impl->bloomFBO[0].init(w / 2, h / 2);
+    impl->bloomFBO[1].init(w / 2, h / 2);
+    impl->camera.aspect = (h > 0) ? (float)w / (float)h : 1.0f;
+    glViewport(0, 0, w, h);
+}
+
 void App::run() {
     while (!glfwWindowShouldClose(window)) {
+        // M0.1: resize diferido (el callback solo encola; aqui hay contexto).
+        const int pendingW = g_pendingResizeW.load(std::memory_order_relaxed);
+        const int pendingH = g_pendingResizeH.load(std::memory_order_relaxed);
+        if (pendingW > 0 && pendingH > 0 && (pendingW != winW || pendingH != winH))
+            recreateRenderTargets(pendingW, pendingH);
+
         float currentFrame = (float)glfwGetTime();
         deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
@@ -1782,9 +1833,10 @@ void App::render() {
         glEnable(GL_DEPTH_TEST);
     }
 
-    // --- Overlays: se dibujan DESPUES del bloom para que no participen
-    // en el bright-pass (el bloom solo ilumina la Tierra; atmosfera, TEC y
-    // resto salen nitidos sin quemarse a blanco).
+    // --- Overlays: se dibujan en sceneFBO DESPUES de computar el bloom (no
+    // alimentan el bright-pass: sin realimentacion ni quemado) pero ANTES del
+    // composite: el bloom ya calculado (solo Tierra) se les anade encima y el
+    // tonemap ACES les afecta igual que al resto de la escena.
     bool additiveDrawn = false;
     // Hover-solo de leyenda (frame anterior): aislar una entrada ionosferica.
     // Fondo (Tierra/estrellas) y referencia (atmosfera/terminador/anillos)
@@ -2965,6 +3017,9 @@ void App::shutdown() {
     saveSettings();
     impl->shutdownRequested.store(true);
     if (impl->fetchThread.joinable()) impl->fetchThread.join();
+    // M0.2: esperar las precargas ANTES de destruir impl (leen impl).
+    if (impl->histPreloadThread.joinable()) impl->histPreloadThread.join();
+    if (impl->catalogPreloadThread.joinable()) impl->catalogPreloadThread.join();
     impl->tecLayer.destroy();
     impl->volumeLayer.destroy();
     impl->peakShell.destroy();
