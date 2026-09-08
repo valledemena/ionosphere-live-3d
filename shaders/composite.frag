@@ -24,6 +24,13 @@ void main() {
     }
     // Tonemapping sobre la SUMA (si se comprimieran por separado, el bloom
     // se saltaria la curva y seguiria quemando). Bypass exacto con u_toneMap.
-    if (u_toneMap) col = acesFilm(col * u_exposure);
+    if (u_toneMap) {
+        col = acesFilm(col * u_exposure);
+        // M1: encode sRGB tras ACES. pow LOCAL (NO GL_FRAMEBUFFER_SRGB): el
+        // pase categorico 3b y ImGui dibujan DESPUES del composite a pantalla
+        // con colores ya pensados en sRGB; el flag global los romperia. Con
+        // u_toneMap off el bypass sigue escribiendo lineal (exacto, para A/B).
+        col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
     fragColor = vec4(col, 1.0);
 }

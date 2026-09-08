@@ -23,3 +23,18 @@ bloom ON (0.201/0.69/0.37), exposure 0.524, resto defaults del usuario.
 **Criterio para M1 y siguientes:** ninguna fase degrada estos números >10%
 con toggles OFF; los nuevos defaults (MSAA, atm High) deben validarse contra
 la fila que les corresponda. Si MSAA 4x cuesta >15%, default a 2x.
+
+## Post-M1 (mismo HW, 1360x728, 2026-09-08)
+
+- **MSAA en este driver: NO SOPORTADO (ni 4x ni 2x).** Intel 20.19.15.x:
+  `Framebuffer (MSAA 4x/2x) incomplete` → fallback a 0x con aviso en stderr,
+  app 100% funcional. El coste MSAA aquí es 0 por construcción (resolve no-op).
+  La validación visual del AA queda para una GPU capaz.
+- Vol scene + tone + bloom (MSAA pedido 4x → fallback 0x): **16.1 FPS**
+  (lado noche; baseline 33.1 era lado día — la varianza la domina el contenido,
+  no M1: con fallback el path es idéntico al pre-M1).
+- Migración v1→v2 verificada: `bloomIntensity 0.69 → 0.4761` (= I², D1).
+- Determinismo: mismo binario a 12 s = 80.6% píxeles exactos (resto: twinkle
+  de estrellas); pre-patch = 91.5% / mismo perfil. V1-cero literal imposible
+  en LIVE (sol + nubes con u_time + refresco de datos); igualdad del path
+  MSAA-0 probada por auditoría + perfil idéntico.

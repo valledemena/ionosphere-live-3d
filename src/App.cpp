@@ -137,7 +137,8 @@ struct App::Impl {
     float bloomIntensity = 1.0f;   // blur pass gain
     float bloomStrength = 0.6f;    // composite add amount
     bool toneMap = true;           // ACES en composite (bypass exacto si off)
-    float exposure = 1.0f;         // a mano (sin calibrar por defecto)
+    float exposure = 1.12f;        // M1: calibrado para ACES+sRGB (era 1.0 a mano)
+    int msaaSamples = 4;           // M1: MSAA de escena 0/2/4 (default 4, persistible)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
     bool hideUI = false;           // ocultar toda la UI (key H)
@@ -597,10 +598,10 @@ bool App::init(int width, int height, const char* title) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    // (M0/R6) GLFW_SAMPLES eliminado: todos los pases van a FBOs (sceneFBO/
-    // bloomFBO), asi que un backbuffer por defecto multisample no cambia nada
-    // visible (el composite es un quad fullscreen e ImGui hace su propio AA).
-    // El MSAA real (sceneFBO multisample + resolve) llega en M1.
+    // (M0/R6) GLFW_SAMPLES eliminado: el backbuffer por defecto no importa
+    // (composite = quad fullscreen; ImGui hace su propio AA). El MSAA real
+    // vive desde M1 en el sceneFBO (textura multisample + resolve por blit);
+    // el glEnable(GL_MULTISAMPLE) de abajo es su interruptor global.
 
     window = glfwCreateWindow(winW, winH, title, nullptr, nullptr);
     if (!window) {
@@ -734,6 +735,7 @@ bool App::init(int width, int height, const char* title) {
     }
 
     if (!impl->bloomShader.load("shaders/bloom.vert", "shaders/bloom.frag")) {
+        // M1: fallback en paralelo con shaders/bloom.frag (u_pass + soft-knee).
         impl->bloomShader.loadFromSource(
             "#version 400 core\n"
             "layout(location=0) in vec2 aPos;\n"
@@ -744,21 +746,30 @@ bool App::init(int width, int height, const char* title) {
             "uniform sampler2D u_texture;\n"
             "uniform vec2 u_direction;\n"
             "uniform vec2 u_resolution;\n"
+            "uniform float u_threshold;\n"
+            "uniform float u_intensity;\n"
+            "uniform int u_pass;\n"
             "out vec4 fragColor;\n"
+            "vec3 brightPass(vec3 c){\n"
+            "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+            "  return c * smoothstep(u_threshold, u_threshold + 0.6, l);\n"
+            "}\n"
             "void main(){\n"
             "  float weight[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n"
-            "  vec3 result = texture(u_texture, vUV).rgb * weight[0];\n"
+            "  vec3 result = brightPass(texture(u_texture, vUV).rgb) * weight[0];\n"
             "  vec2 texel = u_direction / u_resolution;\n"
             "  for(int i=1;i<5;i++){\n"
-            "    result += texture(u_texture, vUV + texel * float(i)).rgb * weight[i];\n"
-            "    result += texture(u_texture, vUV - texel * float(i)).rgb * weight[i];\n"
+            "    result += brightPass(texture(u_texture, vUV + texel * float(i)).rgb) * weight[i];\n"
+            "    result += brightPass(texture(u_texture, vUV - texel * float(i)).rgb) * weight[i];\n"
             "  }\n"
+            "  if(u_pass == 1) result *= u_intensity;\n"
             "  fragColor = vec4(result, 1.0);\n"
             "}\n"
         );
     }
 
     if (!impl->compositeShader.load("shaders/composite.vert", "shaders/composite.frag")) {
+        // M1: fallback en paralelo con shaders/composite.frag (ACES + sRGB).
         impl->compositeShader.loadFromSource(
             "#version 400 core\n"
             "layout(location=0) in vec2 aPos;\n"
@@ -769,12 +780,20 @@ bool App::init(int width, int height, const char* title) {
             "uniform sampler2D u_scene;\n"
             "uniform sampler2D u_bloom;\n"
             "uniform bool u_bloomEnabled;\n"
+            "uniform float u_bloomStrength;\n"
+            "uniform bool u_toneMap;\n"
+            "uniform float u_exposure;\n"
             "out vec4 fragColor;\n"
+            "vec3 acesFilm(vec3 x){\n"
+            "  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);\n"
+            "}\n"
             "void main(){\n"
-            "  vec3 scene = texture(u_scene, vUV).rgb;\n"
-            "  vec3 bloom = texture(u_bloom, vUV).rgb;\n"
-            "  vec3 col = scene;\n"
-            "  if(u_bloomEnabled) col += bloom * 0.4;\n"
+            "  vec3 col = texture(u_scene, vUV).rgb;\n"
+            "  if(u_bloomEnabled) col += texture(u_bloom, vUV).rgb * u_bloomStrength;\n"
+            "  if(u_toneMap){\n"
+            "    col = acesFilm(col * u_exposure);\n"
+            "    col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));\n"
+            "  }\n"
             "  fragColor = vec4(col, 1.0);\n"
             "}\n"
         );
@@ -916,8 +935,10 @@ bool App::init(int width, int height, const char* title) {
     // El arranque ya no espera a la red (pantalla de carga con progreso).
     impl->fetchThread = std::thread(&App::fetchWorker, this);
 
-    // Framebuffers
-    impl->sceneFBO.init(winW, winH);
+    // Framebuffers (M1: la escena con MSAA persistible; bloom sin MSAA:
+    // post-proceso sobre quads, no hay geometria que se aliese).
+    const int msaaUsedAtInit = impl->msaaSamples;
+    impl->sceneFBO.init(winW, winH, impl->msaaSamples);
     impl->bloomFBO[0].init(winW / 2, winH / 2);
     impl->bloomFBO[1].init(winW / 2, winH / 2);
 
@@ -955,6 +976,10 @@ bool App::init(int width, int height, const char* title) {
     // Persistencia GUI: aplicar settings.cfg si existe (visibilidades,
     // variables, sliders, camara) y refrescar las capas en consecuencia.
     loadSettings();
+    // M1: settings.cfg puede pedir otro MSAA (la carga corre tras el primer
+    // init de FBOs): un recreate unico si difiere del usado arriba.
+    if (impl->msaaSamples != msaaUsedAtInit)
+        recreateRenderTargets(winW, winH);
     impl->tecLayer.setVisible(impl->tecVisible);
     impl->tecLayer.setOpacity(impl->tecOpacity);
     applyAltitudes();
@@ -991,9 +1016,10 @@ bool App::init(int width, int height, const char* title) {
     return true;
 }
 
-// M0.1: recrear los recursos GL dependientes del tamaño. Solo se llama desde
-// el bucle de frames (hilo principal, contexto actual). M1 extendera esto con
-// los targets MSAA + resolve: mantenerlo como unico punto de recreacion.
+// M0.1: recrear los recursos GL dependientes del tamaño. Se llama desde el
+// bucle de frames (resize diferido) y desde la UI de render (cambio de MSAA):
+// siempre en hilo principal con contexto actual. M1: recrea tambien los
+// targets MSAA/resolve del sceneFBO — sigue siendo el UNICO punto de recreacion.
 void App::recreateRenderTargets(int w, int h) {
     winW = w;
     winH = h;
@@ -1002,7 +1028,7 @@ void App::recreateRenderTargets(int w, int h) {
     impl->sceneFBO.destroy();
     impl->bloomFBO[0].destroy();
     impl->bloomFBO[1].destroy();
-    if (!impl->sceneFBO.init(w, h))
+    if (!impl->sceneFBO.init(w, h, impl->msaaSamples))
         fprintf(stderr, "[App] sceneFBO recreate failed at %dx%d\n", w, h);
     impl->bloomFBO[0].init(w / 2, h / 2);
     impl->bloomFBO[1].init(w / 2, h / 2);
@@ -1290,7 +1316,7 @@ void App::updateMainGrid(const GridData& grid) {
 void App::saveSettings() {
     FILE* f = fopen("settings.cfg", "w");
     if (!f) return;
-    fprintf(f, "ionolive1\n");
+    fprintf(f, "ionolive2\n");   // M1: bloomIntensity lineal (v1 = cuadratica)
     fprintf(f, "mapVariable %d\n", impl->mapVariable);
     fprintf(f, "manualColormap %d\n", impl->manualColormap);
     fprintf(f, "colormapOverride %d\n", impl->colormapOverride ? 1 : 0);
@@ -1311,6 +1337,7 @@ void App::saveSettings() {
     fprintf(f, "bloomStrength %g\n", (double)impl->bloomStrength);
     fprintf(f, "toneMap %d\n", impl->toneMap ? 1 : 0);
     fprintf(f, "exposure %g\n", (double)impl->exposure);
+    fprintf(f, "msaaSamples %d\n", impl->msaaSamples);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
     fprintf(f, "reliefAmp %g\n", (double)impl->reliefAmp);
     fprintf(f, "stormSwell %d\n", impl->stormSwell ? 1 : 0);
@@ -1356,7 +1383,15 @@ void App::loadSettings() {
     if (!f) return;
     char tag[32] = {0};
     if (!fgets(tag, sizeof(tag), f)) { fclose(f); return; }
-    if (std::string(tag).find("ionolive1") == std::string::npos) { fclose(f); return; }
+    // M1: ionolive2 = intensidad de bloom LINEAL. Un ionolive1 se acepta y se
+    // marca para la migracion sqrt-once (al final del parseo); una tag
+    // desconocida se ignora como siempre (binario viejo + cfg v2 -> defaults).
+    bool legacyBloom = false;
+    if (std::string(tag).find("ionolive2") != std::string::npos) {
+        // formato actual (post-M1)
+    } else if (std::string(tag).find("ionolive1") != std::string::npos) {
+        legacyBloom = true;
+    } else { fclose(f); return; }
     char key[64];
     double v;
     auto clB = [](double x) { return x != 0.0; };
@@ -1388,6 +1423,10 @@ void App::loadSettings() {
         else if (k == "bloomStrength") impl->bloomStrength = glm::clamp((float)v, 0.0f, 2.0f);
         else if (k == "toneMap") impl->toneMap = clB(v);
         else if (k == "exposure") impl->exposure = glm::clamp((float)v, 0.2f, 2.5f);
+        else if (k == "msaaSamples") {   // M1: solo 0/2/4 validos, resto -> 4
+            int s = (int)v;
+            impl->msaaSamples = (s == 0 || s == 2) ? s : 4;
+        }
         else if (k == "reliefOn") impl->reliefOn = clB(v);
         else if (k == "reliefAmp") impl->reliefAmp = glm::clamp((float)v, 0.0f, 0.10f);
         else if (k == "stormSwell") impl->stormSwell = clB(v);
@@ -1424,6 +1463,18 @@ void App::loadSettings() {
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
         else if (k == "camRY") impl->camera.rotateY = (float)v;
         else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 20.0f);
+    }
+    if (legacyBloom) {
+        // D1 (v2.1, correccion tras la auditoria M1 de MUSE): la intensidad
+        // EFECTIVA vieja era bloomIntensity^2 (u_intensity se aplicaba en H
+        // y en V); el pipeline nuevo la aplica UNA vez (u_pass==1), luego
+        // conservar el look exige I' = I^2 (NO sqrt: la v2 del plan tenia
+        // la formula invertida y dejaba ~+74% de glow). El proximo save ya
+        // escribe ionolive2 y la migracion no vuelve a correr (u_pass).
+        float legacyI = glm::clamp(impl->bloomIntensity, 0.0f, 3.0f);
+        impl->bloomIntensity = glm::clamp(legacyI * legacyI, 0.0f, 3.0f);
+        printf("[App] settings v1 -> v2: bloomIntensity migrada (I^2) = %.4f\n",
+               (double)impl->bloomIntensity);
     }
     fclose(f);
     printf("[App] settings.cfg loaded\n");
@@ -1794,6 +1845,9 @@ void App::render() {
     // que el halo salga nitido y no se queme a blanco con el bloom.)
 
     impl->sceneFBO.unbind();
+    // M1: resolve MSAA -> colorTexture ANTES del bloom (las pasadas 2 y 3
+    // siguen leyendo colorTexture; no-op con samples == 0).
+    impl->sceneFBO.resolve();
 
     // --- Pass 2: Bloom ---
     if (impl->bloomEnabled) {
@@ -1808,6 +1862,7 @@ void App::render() {
         impl->bloomShader.setVec2("u_resolution", glm::vec2((float)impl->bloomFBO[0].width, (float)impl->bloomFBO[0].height));
         impl->bloomShader.setFloat("u_threshold", impl->bloomThreshold);
         impl->bloomShader.setFloat("u_intensity", impl->bloomIntensity);
+        impl->bloomShader.setInt("u_pass", 0);   // M1: pasada H (sin intensity)
         impl->bloomShader.setInt("u_texture", 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->sceneFBO.colorTexture);
@@ -1820,6 +1875,7 @@ void App::render() {
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 1.0f));
+        impl->bloomShader.setInt("u_pass", 1);   // M1: pasada V (aplica intensity)
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->bloomFBO[0].colorTexture);
         glBindVertexArray(impl->quadVAO);
@@ -1899,6 +1955,9 @@ void App::render() {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
         impl->sceneFBO.unbind();
+        // M1: re-resolver tras los overlays (el composite lee colorTexture;
+        // mismo blit que antes del bloom, no-op sin MSAA).
+        impl->sceneFBO.resolve();
         glViewport(0, 0, winW, winH);
         additiveDrawn = true;
     }
@@ -1986,11 +2045,11 @@ void App::render() {
     if (ImGui::SliderFloat("Threshold", &impl->bloomThreshold, 0.0f, 1.0f)) {
         impl->bloomThreshold = glm::clamp(impl->bloomThreshold, 0.0f, 1.0f);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Bright-pass threshold: only pixels brighter than this feed the glow. Lower = stronger, more diffuse glow.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Bright-pass threshold: only pixels brighter than this feed the glow. Lower = stronger, more diffuse glow. Soft knee (0.6 wide): the glow fades in smoothly instead of popping.");
     if (ImGui::SliderFloat("Intensity", &impl->bloomIntensity, 0.0f, 3.0f)) {
         impl->bloomIntensity = glm::clamp(impl->bloomIntensity, 0.0f, 3.0f);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Blur pass gain. Scales the extracted bright areas before compositing.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Blur pass gain, LINEAR since M1 (it used to behave as its square). Scales the extracted bright areas before compositing; old settings are migrated once on load.");
     if (ImGui::SliderFloat("Strength", &impl->bloomStrength, 0.0f, 2.0f)) {
         impl->bloomStrength = glm::clamp(impl->bloomStrength, 0.0f, 2.0f);
     }
@@ -2001,6 +2060,17 @@ void App::render() {
         impl->exposure = glm::clamp(impl->exposure, 0.2f, 2.5f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Manual exposure for the tone mapping curve. Only applies when Tone map is on.");
+    {
+        // M1: MSAA de escena 0/2/4 (persistible). El cambio recrea los targets
+        // en caliente: mismo punto de recreacion que el resize (hilo seguro).
+        const char* msaaNames[3] = { "Off", "2x", "4x" };
+        int msaaIdx = (impl->msaaSamples >= 4) ? 2 : (impl->msaaSamples == 2 ? 1 : 0);
+        if (ImGui::SliderInt("MSAA", &msaaIdx, 0, 2, msaaNames[msaaIdx])) {
+            impl->msaaSamples = msaaIdx * 2;   // 0 / 2 / 4
+            recreateRenderTargets(winW, winH);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Multisample anti-aliasing on the 3D scene (shells, terminator, station points). Rebuilds render targets on change; 0 = off (fastest, for weak GPUs and A/B).");
+    }
     if (ImGui::Checkbox("Cinema (C)", &impl->cineMode)) {
         snprintf(impl->hintMsg, sizeof(impl->hintMsg), "CINEMA %s - press C to exit",
                  impl->cineMode ? "ON" : "OFF");
