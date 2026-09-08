@@ -233,6 +233,7 @@ bool DiasAdapter::parsePager(const std::string& json, std::vector<StationSample>
             hp.B0 = cleanf(r.B0);
             hp.B1 = cleanf(r.B1);
             hp.fmin = cleanf(r.fmin);
+            hp.fxI = cleanf(r.fxI);   // M4/P1: simetria (replay DIAS sin mezclar fxI)
             st.history.push_back(hp);
         }
         out.push_back(st);

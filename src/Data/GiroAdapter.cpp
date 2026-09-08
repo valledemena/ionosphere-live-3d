@@ -8,18 +8,46 @@
 #include <ctime>
 #include <regex>
 #include <algorithm>
+#include <chrono>
+#include <set>
 
-#define GIRO_DIDBASE_URL  "https://giro.uml.edu/didbase/scaled.php"
-#define GIRO_CATALOG_URL  "https://lgdc.uml.edu/common/DIDBFastStationList?orderByField=ursiCode"
+#define GIRO_GETBEST_URL "https://lgdc.uml.edu/fastchar/getbest"
+#define GIRO_CATALOG_URL "https://lgdc.uml.edu/common/DIDBFastStationList?orderByField=ursiCode"
 
-// Columnas de la respuesta de scaled.php (ver header FastChar. Verificado con
-// respuesta real EB040 2026-09-04: M(D)=MUF/foF2 cuadra, B0/B1/fmin presentes):
-// Time CS foF2 QD foF1 QD foE QD foEs QD fxI QD MUF(D) QD M(D) QD
-// h'F2 QD h'F QD h'E QD h'Es QD hmF2 QD B0 QD B1 QD fmin QD
-enum { COL_FOF2 = 2, COL_MUF = 12, COL_HMF2 = 24, COL_CS = 1, COL_TIME = 0,
-       COL_FOF1 = 4, COL_FOE = 6, COL_FOES = 8, COL_FXI = 10,
-       COL_HF2 = 16, COL_HF = 18, COL_HE = 20, COL_HES = 22,
-       COL_B0 = 26, COL_B1 = 28, COL_FMIN = 30 };
+// M4 (7.1): GET getbest por estacion con lista CSV FIJA de caracteres. El
+// orden del CSV es el contrato del parser: en cada fila de la respuesta el
+// valor del caracter k ocupa el token 2+2k (toks[0]=Time, toks[1]=CS); el
+// servidor anade M(D) al final (token 22, se ignora). Verificado en vivo
+// (EB040, 2026-09-08): filas de 24 tokens, "---" = ausente, h'xxx solo
+// genera WARNING (P2: la tabla h' del panel lee EbroAdapter, intacta).
+static const char* GETBEST_CHARS[] = {
+    "foF2", "foF1", "foE", "foEs", "fxI", "hmF2", "B0", "B1", "fmin", "MUF(D)"
+};
+enum { GB_NCHARS = 10, GB_MIN_TOKENS = 2 + 2 * GB_NCHARS };
+enum { GB_CS = 1, GB_FOF2 = 2, GB_FOF1 = 4, GB_FOE = 6, GB_FOES = 8,
+       GB_FXI = 10, GB_HMF2 = 12, GB_B0 = 14, GB_B1 = 16, GB_FMIN = 18,
+       GB_MUF = 20 };
+
+// M4 (7.2, P4): subconjunto prioritario verificado en vivo (plan v2.1,
+// Apendice B). Polling SOLO a estas estaciones; el resto del catalogo se
+// mantiene para el dropdown/puntos (sin datos). EB040 (Roquetes) primera
+// siempre (aceptacion 4). NOTA: el Apendice B lista 50 codigos aunque el
+// texto del plan diga "51" - la lista manda.
+static const char* PRIORITY_STATIONS[] = {
+    "EB040", "EA036", "PQ052", "JR055", "KL154", "KI167", "FF051", "GM037",
+    "AT138", "VT139", "OL246", "LD160", "MZ152", "RV149", "TR170", "RL052",
+    "SO148", "TR169", "DB049", "EG931", "CS839", "BC840", "AC843", "EI764",
+    "PF765", "AU930", "BVJ03", "SMK29", "TNJ20", "CAJ2M", "CXM9B", "BLJ03",
+    "LA42Q", "DW41K", "CB53N", "TO535", "IC437", "DH224", "NI135", "XI434",
+    "CS31K", "TV51R", "MA155", "MO155", "ML10L", "GR13L", "MU12K", "RM041",
+    "NDA81", "TR0P2"
+};
+static const std::set<std::string>& prioritySet() {
+    static const std::set<std::string> s(
+        PRIORITY_STATIONS,
+        PRIORITY_STATIONS + sizeof(PRIORITY_STATIONS) / sizeof(PRIORITY_STATIONS[0]));
+    return s;
+}
 
 GiroAdapter::GiroAdapter() {}
 
@@ -52,41 +80,29 @@ bool GiroAdapter::fetchURL(const std::string& url, std::string& response) {
     return http == 200;
 }
 
-bool GiroAdapter::postURL(const std::string& url, const std::string& body, std::string& response) {
+// M4 (7.1): GET getbest con UA identificable y timeout 12 s por estacion.
+// charName = CSV con el orden FIJO de GETBEST_CHARS (contrato del parser).
+bool GiroAdapter::getbestGet(const std::string& ursi, std::string& response) {
+    std::string url = std::string(GIRO_GETBEST_URL) + "?ursiCode=" + ursi + "&charName=";
+    for (int k = 0; k < GB_NCHARS; k++) {
+        if (k) url += ',';
+        url += GETBEST_CHARS[k];
+    }
     CURL* curl = curl_easy_init();
     if (!curl) return false;
     response.clear();
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 12L);   // 7.1: 12 s por estacion
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "IonosphereLive3D/1.0");
-    // IMPORTANTE: NUNCA usar CURLOPT_CUSTOMREQUEST "POST" -> HTTP 405. Con
-    // POSTFIELDS curl emite POST implicito que el servidor acepta (HTTP 200).
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.size());
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ionosphere-live-3d/1.0 (educational)");
     CURLcode res = curl_easy_perform(curl);
     long http = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
     curl_easy_cleanup(curl);
     if (res != CURLE_OK) return false;
     return http == 200;
-}
-
-std::string GiroAdapter::utcNowStr(int hoursAgo) {
-    std::time_t t = std::time(nullptr) - hoursAgo * 3600;
-    std::tm tmv;
-#ifdef _WIN32
-    gmtime_s(&tmv, &t);
-#else
-    gmtime_r(&t, &tmv);
-#endif
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d",
-             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min);
-    return std::string(buf);
 }
 
 bool GiroAdapter::fetchCatalog() {
@@ -127,8 +143,59 @@ bool GiroAdapter::fetchCatalog() {
     return !samples_.empty();
 }
 
-bool GiroAdapter::parseScaled(const std::string& text, StationSample& out) {
-    // Buscar la linea de datos mas reciente (lineas sin '#', con >=25 tokens).
+// ---- Nucleo de parseo (heredado del parser de scaled.php; M4 lo reutiliza) ----
+
+static std::vector<std::string> tokenizeLine(const std::string& l) {
+    // tokenizar por espacios
+    std::vector<std::string> toks;
+    std::string cur;
+    for (char c : l) {
+        if (c == ' ' || c == '\t') { if (!cur.empty()) { toks.push_back(cur); cur.clear(); } }
+        else cur.push_back(c);
+    }
+    if (!cur.empty()) toks.push_back(cur);
+    return toks;
+}
+
+static float numRow(const std::vector<std::string>& row, int idx) {
+    if (idx >= (int)row.size()) return 0.0f;
+    const std::string& v = row[idx];
+    if (v.empty() || v == "---" || v == "//" || v == "__") return 0.0f;
+    if (v.find_first_not_of("0123456789.-") != std::string::npos) return 0.0f;
+    float f = (float)atof(v.c_str());
+    if (f <= 0.0f) return 0.0f;   // descartar invalidos no positivos
+    return f;
+}
+
+static double rowTime(const std::vector<std::string>& row) {
+    // "2026-09-04T21:30:01.000Z" -> epoch (19 primeros chars).
+    const std::string& t = row[0];
+    if (t.size() < 19) return 0.0;
+    int Y  = atoi(t.substr(0, 4).c_str());
+    int Mo = atoi(t.substr(5, 2).c_str());
+    int D  = atoi(t.substr(8, 2).c_str());
+    int H  = atoi(t.substr(11, 2).c_str());
+    int Mi = atoi(t.substr(14, 2).c_str());
+    int S  = atoi(t.substr(17, 2).c_str());
+    auto daysFromCivil = [](int y, int m, int d) -> long long {
+        y -= m <= 2;
+        long long era = (y >= 0 ? y : y - 399) / 400;
+        unsigned yoe = (unsigned)(y - era * 400);
+        unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + (long long)doe - 719468;
+    };
+    return (double)daysFromCivil(Y, Mo, D) * 86400.0 + H * 3600.0 + Mi * 60.0 + S;
+}
+
+bool GiroAdapter::parseGetbest(const std::string& text, StationSample& out) {
+    // Estacion invalida esta ronda (p.ej. ZZ999): HTTP 200 con
+    // "# STATUS: ERROR (...)" -> silencio, no error global (7.1).
+    if (text.find("STATUS: ERROR") != std::string::npos) return false;
+
+    // Filas de datos: mismo nucleo que el parser de scaled.php (tokenizer,
+    // rowTime, numRow). Las lineas "# STATUS: WARNING (...)" son comentarios:
+    // el servidor ignora h'xxx y eso NO invalida el cuerpo.
     std::vector<std::vector<std::string>> rows;
     size_t start = 0;
     while (start <= text.size()) {
@@ -139,64 +206,33 @@ bool GiroAdapter::parseScaled(const std::string& text, StationSample& out) {
         if (!l.empty() && l.back() == '\r') l.pop_back();
         if (l.empty() || l[0] == '#') continue;
         if (l.compare(0, 4, "Time") == 0) continue;
-        // tokenizar por espacios
-        std::vector<std::string> toks;
-        std::string cur;
-        for (char c : l) {
-            if (c == ' ' || c == '\t') { if (!cur.empty()) { toks.push_back(cur); cur.clear(); } }
-            else cur.push_back(c);
-        }
-        if (!cur.empty()) toks.push_back(cur);
-        if (toks.size() >= 25) rows.push_back(std::move(toks));
+        std::vector<std::string> toks = tokenizeLine(l);
+        // Fila multichar: 2 + 2*10 tokens (con el M(D) auto del servidor = 24).
+        // Una respuesta single-char (4 tokens/fila) se rechaza ENTERA (7.1).
+        if (toks.size() >= GB_MIN_TOKENS) rows.push_back(std::move(toks));
     }
     if (rows.empty()) return false;
 
-    auto numRow = [&](const std::vector<std::string>& row, int idx) -> float {
-        if (idx >= (int)row.size()) return 0.0f;
-        const std::string& v = row[idx];
-        if (v.empty() || v == "---" || v == "//" || v == "__") return 0.0f;
-        if (v.find_first_not_of("0123456789.-") != std::string::npos) return 0.0f;
-        float f = (float)atof(v.c_str());
-        if (f <= 0.0f) return 0.0f;   // descartar invalidos no positivos
-        return f;
-    };
-    auto rowTime = [](const std::vector<std::string>& row) -> double {
-        // "2026-09-04T21:30:01.000Z" -> epoch (19 primeros chars).
-        const std::string& t = row[0];
-        if (t.size() < 19) return 0.0;
-        int Y  = atoi(t.substr(0, 4).c_str());
-        int Mo = atoi(t.substr(5, 2).c_str());
-        int D  = atoi(t.substr(8, 2).c_str());
-        int H  = atoi(t.substr(11, 2).c_str());
-        int Mi = atoi(t.substr(14, 2).c_str());
-        int S  = atoi(t.substr(17, 2).c_str());
-        auto daysFromCivil = [](int y, int m, int d) -> long long {
-            y -= m <= 2;
-            long long era = (y >= 0 ? y : y - 399) / 400;
-            unsigned yoe = (unsigned)(y - era * 400);
-            unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-            unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-            return era * 146097 + (long long)doe - 719468;
-        };
-        return (double)daysFromCivil(Y, Mo, D) * 86400.0 + H * 3600.0 + Mi * 60.0 + S;
-    };
-
-    // Serie completa (cap 36 filas mas recientes) para replay + sparklines.
+    // Historia (7.3): todas las filas, cap 72 mas recientes (6 h @ 5 min; la
+    // respuesta trae 24 h de sobra). P1: la historia lleva foF1/fxI para que
+    // el replay no mezcle foF1 vivo con foF2 historico.
     {
         std::vector<GiroHistoryPoint> hist;
-        size_t start = rows.size() > 36 ? rows.size() - 36 : 0;
-        for (size_t k = start; k < rows.size(); k++) {
+        size_t hstart = rows.size() > 72 ? rows.size() - 72 : 0;
+        for (size_t k = hstart; k < rows.size(); k++) {
             const auto& rw = rows[k];
             GiroHistoryPoint p;
             p.timeUtc = rowTime(rw);
-            p.foF2 = numRow(rw, COL_FOF2);
-            p.muf  = numRow(rw, COL_MUF);
-            p.hmF2 = numRow(rw, COL_HMF2);
-            p.foE  = numRow(rw, COL_FOE);
-            p.foEs = numRow(rw, COL_FOES);
-            p.B0   = numRow(rw, COL_B0);
-            p.B1   = numRow(rw, COL_B1);
-            p.fmin = numRow(rw, COL_FMIN);
+            p.foF2 = numRow(rw, GB_FOF2);
+            p.foF1 = numRow(rw, GB_FOF1);
+            p.muf  = numRow(rw, GB_MUF);
+            p.hmF2 = numRow(rw, GB_HMF2);
+            p.foE  = numRow(rw, GB_FOE);
+            p.foEs = numRow(rw, GB_FOES);
+            p.fxI  = numRow(rw, GB_FXI);
+            p.B0   = numRow(rw, GB_B0);
+            p.B1   = numRow(rw, GB_B1);
+            p.fmin = numRow(rw, GB_FMIN);
             hist.push_back(p);
         }
         out.history = std::move(hist);
@@ -205,10 +241,9 @@ bool GiroAdapter::parseScaled(const std::string& text, StationSample& out) {
     const auto& r = rows.back();   // la fila mas reciente
     auto num = [&](int idx) -> float { return numRow(r, idx); };
 
-    float foF2 = num(COL_FOF2);
-    float muf  = num(COL_MUF);
-    float hmF2 = num(COL_HMF2);
-    float cs   = num(COL_CS);
+    float foF2 = num(GB_FOF2);
+    float muf  = num(GB_MUF);
+    float hmF2 = num(GB_HMF2);
 
     if (foF2 <= 0.0f && muf <= 0.0f && hmF2 <= 0.0f) return false;
 
@@ -216,116 +251,109 @@ bool GiroAdapter::parseScaled(const std::string& text, StationSample& out) {
     out.foF2 = foF2;
     out.muf  = muf;
     out.hmF2 = hmF2;
-    out.cs   = (int)cs;
-    // Columnas extendidas (0 si ausentes esa hora, p.ej. foF1/foE de noche).
-    out.foF1 = num(COL_FOF1);
-    out.foE  = num(COL_FOE);
-    out.foEs = num(COL_FOES);
-    out.fxI  = num(COL_FXI);
-    out.hF2  = num(COL_HF2);
-    out.hF   = num(COL_HF);
-    out.hE   = num(COL_HE);
-    out.hEs  = num(COL_HES);
-    out.B0   = num(COL_B0);
-    out.B1   = num(COL_B1);
-    out.fmin = num(COL_FMIN);
+    out.cs   = (int)num(GB_CS);
+    // Columnas del CSV (0 si ausentes esa hora, p.ej. foF1/foE de noche).
+    out.foF1 = num(GB_FOF1);
+    out.foE  = num(GB_FOE);
+    out.foEs = num(GB_FOES);
+    out.fxI  = num(GB_FXI);
+    out.B0   = num(GB_B0);
+    out.B1   = num(GB_B1);
+    out.fmin = num(GB_FMIN);
+    // h'F2/h'F/h'E/h'Es: getbest los ignora (WARNING) y la tabla h' del panel
+    // lee EbroAdapter directo -> quedan 0 para GIRO (P2, aceptado).
     // NmF2 [m^-3] = 1.24e10 * (foF2[MHz])^2  (foF2=10 MHz -> 1.24e12).
     out.nmF2 = (foF2 > 0.0f) ? (float)(1.24e10 * (double)foF2 * (double)foF2) : 0.0f;
     out.valid = true;
     return true;
 }
 
-bool GiroAdapter::fetchStationsSync(double utc) {
-    std::vector<StationSample> cat;
-    { std::lock_guard<std::mutex> lk(mutex_); cat = samples_; }
-    if (cat.empty()) {
-        if (!fetchCatalog()) return false;
-        { std::lock_guard<std::mutex> lk(mutex_); cat = samples_; }
+// M4 (7.2): una ronda de polling getbest. Cola: SOLO prioritarias en orden
+// fijo (EB040 primera, aceptacion 4), filtradas por cache 10 min / backoff
+// por estacion. Cortesia: concurrencia max 6 y >= 250 ms entre lanzamientos
+// de GET (globales). Devuelve el numero de estaciones actualizadas.
+int GiroAdapter::pollRound(double nowUtc) {
+    std::vector<StationSample> todo;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        for (const char* code : PRIORITY_STATIONS) {
+            for (const auto& s : samples_) {
+                if (s.code != code) continue;
+                auto it = fetchState_.find(code);
+                double interval = (it != fetchState_.end()) ? it->second.intervalSec : 600.0;
+                double lastTry  = (it != fetchState_.end()) ? it->second.lastAttemptUtc : 0.0;
+                if (nowUtc - lastTry >= interval) todo.push_back(s);
+                break;   // solo la primera coincidencia del catalogo
+            }
+        }
     }
+    if (todo.empty()) return 0;
 
-    unsigned nthreads = std::thread::hardware_concurrency();
-    if (nthreads == 0) nthreads = 4;
-    if (nthreads > 16) nthreads = 16;
-
+    const int total = (int)todo.size();
     std::atomic<int> next{0};
     std::atomic<int> ok{0};
-    int total = (int)cat.size();
-
+    std::atomic<long long> lastLaunchMs{0};   // >= 250 ms entre GET (global)
+    auto msNow = []() -> long long {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch()).count();
+    };
     auto worker = [&]() {
         for (;;) {
             int i = next.fetch_add(1);
             if (i >= total) break;
-            StationSample base = cat[i];
-            StationSample s = base;
-            std::string body = "location=" + base.code +
-                               "&date_start=" + utcNowStr(2) +
-                               "&date_end=" + utcNowStr(0) +
-                               "&DMUF=3000&query_submit=Search";
-            const char* chars[] = {"0","1","2","3","7","8","9","10","11","12","13","17","25","26","33"};
-            for (const char* c : chars) body += "&chosenchars%5B%5D=" + std::string(c);
+            for (;;) {   // esperar ventana de lanzamiento (cortesia 250 ms)
+                long long now = msNow();
+                long long last = lastLaunchMs.load();
+                if (now - last >= 250 && lastLaunchMs.compare_exchange_weak(last, now)) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            StationSample s = todo[(size_t)i];
             std::string resp;
-            if (postURL(GIRO_DIDBASE_URL, body, resp) && parseScaled(resp, s)) ok++;
-            { std::lock_guard<std::mutex> lk(mutex_);
-              for (auto& e : samples_) if (e.code == base.code) e = s; }
-            progress_ = (int)(100.0f * (next.load()) / total);
+            // Fallo (HTTP/timeout/429 o STATUS: ERROR) -> backoff de ESA
+            // estacion; su ultimo dato bueno se conserva (aceptacion 5).
+            bool good = getbestGet(s.code, resp) && parseGetbest(resp, s);
+            std::lock_guard<std::mutex> lk(mutex_);
+            FetchState& st = fetchState_[s.code];
+            st.lastAttemptUtc = nowUtc;
+            if (good) {
+                st.intervalSec = 600.0;   // reset al exito (cache 10 min)
+                st.degraded = false;
+                for (auto& e : samples_) if (e.code == s.code) e = s;
+                ok++;
+            } else {
+                st.intervalSec = std::min(st.intervalSec * 2.0, 1800.0);   // x2, cap 30 min
+                st.degraded = true;
+            }
+            progress_ = (int)(100.0f * next.load() / total);
         }
     };
-
+    unsigned nth = std::thread::hardware_concurrency();
+    if (nth == 0) nth = 4;
+    if (nth > 6) nth = 6;   // concurrencia maxima 6 (7.2)
     std::vector<std::thread> pool;
-    pool.reserve(nthreads);
-    for (unsigned t = 0; t < nthreads; t++) pool.emplace_back(worker);
+    pool.reserve(nth);
+    for (unsigned t = 0; t < nth; t++) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
+    return ok.load();
+}
 
-    lastFetchUtc_ = (utc > 0) ? utc : (double)std::time(nullptr);
-    printf("[GiroAdapter] Sincrono: %d/%d estaciones con datos\n", ok.load(), total);
-    return ok.load() > 0;
+bool GiroAdapter::fetchStationsSync(double utc) {
+    if (copySamples().empty() && !fetchCatalog()) return false;
+    double now = (utc > 0) ? utc : (double)std::time(nullptr);
+    int ok = pollRound(now);
+    lastFetchUtc_ = now;
+    printf("[GiroAdapter] Sincrono getbest: %d estaciones actualizadas\n", ok);
+    return ok > 0;
 }
 
 void GiroAdapter::fetchStationsAsync() {
     if (fetching_.exchange(true)) return;   // ya en curso
     std::thread([this]() {
-        std::vector<StationSample> cat;
-        { std::lock_guard<std::mutex> lk(mutex_); cat = samples_; }
-        if (cat.empty()) {
-            if (!fetchCatalog()) { fetching_.store(false); return; }
-            { std::lock_guard<std::mutex> lk(mutex_); cat = samples_; }
-        }
-
-        unsigned nthreads = std::thread::hardware_concurrency();
-        if (nthreads == 0) nthreads = 4;
-        if (nthreads > 16) nthreads = 16;
-
-        std::atomic<int> next{0};
-        std::atomic<int> ok{0};
-        int total = (int)cat.size();
-
-        auto worker = [&]() {
-            for (;;) {
-                int i = next.fetch_add(1);
-                if (i >= total) break;
-                StationSample base = cat[i];
-                StationSample s = base;
-                std::string body = "location=" + base.code +
-                                   "&date_start=" + utcNowStr(2) +
-                                   "&date_end=" + utcNowStr(0) +
-                                   "&DMUF=3000&query_submit=Search";
-                const char* chars[] = {"0","1","2","3","7","8","9","10","11","12","13","17","25","26","33"};
-                for (const char* c : chars) body += "&chosenchars%5B%5D=" + std::string(c);
-                std::string resp;
-                if (postURL(GIRO_DIDBASE_URL, body, resp) && parseScaled(resp, s)) ok++;
-                { std::lock_guard<std::mutex> lk(mutex_);
-                  for (auto& e : samples_) if (e.code == base.code) e = s; }
-                progress_ = (int)(100.0f * next.load() / total);
-            }
-        };
-
-        std::vector<std::thread> pool;
-        pool.reserve(nthreads);
-        for (unsigned t = 0; t < nthreads; t++) pool.emplace_back(worker);
-        for (auto& t : pool) t.join();
-
-        lastFetchUtc_ = (double)std::time(nullptr);
-        printf("[GiroAdapter] Async completado: %d/%d estaciones con datos\n", ok.load(), total);
+        if (copySamples().empty() && !fetchCatalog()) { fetching_.store(false); return; }
+        double now = (double)std::time(nullptr);
+        int ok = pollRound(now);
+        lastFetchUtc_ = now;
+        printf("[GiroAdapter] getbest async: %d estaciones actualizadas\n", ok);
         fetching_.store(false);
     }).detach();
 }
@@ -348,6 +376,34 @@ float GiroAdapter::getLastUpdateAge() const {
     return (float)(now - lastFetchUtc_);
 }
 
+GiroAdapter::GiroNetStatus GiroAdapter::getNetStatus() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    GiroNetStatus st;
+    double now = (double)std::time(nullptr);
+    for (const auto& s : samples_) {
+        if (prioritySet().count(s.code) == 0) continue;   // catalogo: sin polling
+        st.polled++;
+        if (s.valid) st.withData++;
+        if (!s.history.empty()) {
+            double span = now - s.history.front().timeUtc;   // alcance hacia atras
+            if (span > 0.0 && (st.histHours <= 0.0 || span < st.histHours))
+                st.histHours = span / 3600.0;   // la peor estacion limita el replay
+        }
+    }
+    for (const auto& kv : fetchState_) {
+        if (!kv.second.degraded) continue;
+        st.degraded++;
+        double remainMin = (kv.second.intervalSec - (now - kv.second.lastAttemptUtc)) / 60.0;
+        if (remainMin < 0.0) remainMin = 0.0;
+        if (st.degraded == 1 || remainMin < st.retryInMin) st.retryInMin = remainMin;
+    }
+    return st;
+}
+
+bool GiroAdapter::isPolled(const std::string& code) const {
+    return prioritySet().count(code) > 0;   // set estatico: sin lock
+}
+
 std::vector<StationSample> GiroAdapter::sampleHistoryAt(double epoch) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto lerp = [](float a, float b, double f) -> float {
@@ -357,6 +413,7 @@ std::vector<StationSample> GiroAdapter::sampleHistoryAt(double epoch) const {
     };
     auto fromHist = [](StationSample& c, const GiroHistoryPoint& p) {
         c.foF2 = p.foF2; c.muf = p.muf; c.hmF2 = p.hmF2;
+        c.foF1 = p.foF1; c.fxI = p.fxI;   // M4/P1: replay sin mezclar
         c.foE = p.foE; c.foEs = p.foEs; c.B0 = p.B0; c.B1 = p.B1; c.fmin = p.fmin;
         c.nmF2 = (p.foF2 > 0.0f) ? (float)(1.24e10 * (double)p.foF2 * (double)p.foF2) : 0.0f;
         c.timeUtc = p.timeUtc;
@@ -386,6 +443,8 @@ std::vector<StationSample> GiroAdapter::sampleHistoryAt(double epoch) const {
                 p.B0   = lerp(h[i].B0,   h[i + 1].B0, f);
                 p.B1   = lerp(h[i].B1,   h[i + 1].B1, f);
                 p.fmin = lerp(h[i].fmin, h[i + 1].fmin, f);
+                p.foF1 = lerp(h[i].foF1, h[i + 1].foF1, f);   // M4/P1
+                p.fxI  = lerp(h[i].fxI,  h[i + 1].fxI,  f);   // M4/P1
                 fromHist(c, p);
             }
         }

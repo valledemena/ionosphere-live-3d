@@ -832,8 +832,9 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setVisible(true);           // sincronizar el toggle con el checkbox inicial (App.cpp L524)
     impl->tecLayer.setAltitude(300.0f / 6371.0f);  // arrancar a 300 km (radio ~1.047), no pegado a 1.02
     applyRelief();
-    // Precarga del historico GloTEC (indice recuperado): ultimos 18 frames
-    // (~3 h) en background para que el replay tenga pasado real al instante.
+    // Precarga del historico GloTEC (indice recuperado): ultimos 72 frames
+    // (~6 h o mas; M4/P3) en background para que el replay tenga pasado real
+    // al instante.
     {
         App* self = this;
         // M0.2: hilo joinable (shutdown lo espera) + chequeos contra
@@ -851,7 +852,7 @@ bool App::init(int width, int height, const char* title) {
             loader.setGridSize(72, 72);
             std::vector<GloTecFrame> idx;
             if (loader.fetchIndex(idx)) {
-                size_t take = idx.size() > 18 ? 18 : idx.size();
+                size_t take = idx.size() > 72 ? 72 : idx.size();   // M4/P3: ~6 h
                 self->impl->histTotal.store((int)take);
                 for (size_t k = idx.size() - take; k < idx.size(); k++) {
                     if (self->impl->shutdownRequested.load()) break;   // M0.2
@@ -1128,8 +1129,10 @@ void App::update(float dt) {
     // Consumir bundles del hilo worker (red+parse fuera del hilo de render).
     consumeBundles();
 
-    // GIRO: refresco periodico de las estaciones en background (5 min).
-    // Ebro directo: idem. DIAS complemento: idem. La red NOAA la hace el worker.
+    // GIRO: refresco periodico de las estaciones en background (5 min; M4:
+    // el adapter filtra por estacion con cache 10 min/backoff y solo hace
+    // polling a las prioritarias). Ebro directo: idem. DIAS complemento: idem.
+    // La red NOAA la hace el worker.
     static double lastIndexFetch = -1.0;
     double now = glfwGetTime();
     if (lastIndexFetch < 0 || (now - lastIndexFetch) > 300.0) {
@@ -1747,7 +1750,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts) {    if (!grid.valid
     size_t pos = 0;
     while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
     impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
-    while (impl->tecHist.size() > 36) impl->tecHist.erase(impl->tecHist.begin());
+    while (impl->tecHist.size() > 72) impl->tecHist.erase(impl->tecHist.begin());   // M4/P3: cap 72 (~6 h)
 }
 
 void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/NmF2 interpoladas de GIRO.
@@ -2260,12 +2263,14 @@ void App::render() {
 
     // ---- GIRO ionosondas (Fase 3) ----
     ImGui::Separator();
+    // M4 (P4/P5): estado de red GIRO real (polled/withData/degraded/hist).
+    GiroAdapter::GiroNetStatus giroStatus = impl->giro.getNetStatus();
     bool showGIRO = impl->giroStationsVisible;
     if (ImGui::Checkbox("GIRO stations", &showGIRO)) {
         impl->giroStationsVisible = showGIRO;
         impl->ionosondeLayer.setVisible(showGIRO);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("GIRO network (~129 ionosondes). Each dot is a station with foF2/MUF/hmF2/NmF2 from scaled.php. Hover the globe for details, click to pin.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("GIRO network (%d ionosondes in the catalog, %d polled via getbest). Each dot is a station with foF2/MUF/hmF2/NmF2; non-polled ones keep their catalog position without data. Hover the globe for details, click to pin.", impl->giro.getStationCount(), giroStatus.polled);
     const char* giroModes[] = { "foF2 [MHz]", "MUF(D) [MHz]", "hmF2 [km]", "NmF2 [m^-3]" };
     if (ImGui::Combo("Metric", &impl->giroMode, giroModes, 4)) {
         impl->ionosondeLayer.setMode(impl->giroMode);
@@ -2281,9 +2286,15 @@ void App::render() {
     } else {
         float minV, maxV;
         impl->ionosondeLayer.getActiveRange(minV, maxV);
-        ImGui::Text("GIRO: %d pts  (%.0f%% data)", impl->ionosondeLayer.getStationCount(),
-                    impl->ionosondeLayer.getDataIndicator());
+        ImGui::Text("GIRO: %d/%d polled w/ data (%d pts shown)", giroStatus.withData,
+                    giroStatus.polled, impl->ionosondeLayer.getStationCount());
         ImGui::Text("Range: %.2f .. %.2f", minV, maxV);
+    }
+    if (giroStatus.degraded > 0) {
+        // M4 (7.2): estaciones en backoff (429/fallo) — reintento proximo.
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+            "GIRO: rate-limited, retry %.0f min", giroStatus.retryInMin);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Some stations failed (429/timeout): their refresh interval doubles up to 30 min until success. Their last good data is kept.");
     }
     {
         int nDias = impl->dias.getStationCount();
@@ -2324,7 +2335,12 @@ void App::render() {
                     giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
                 ImGui::Text("B0 %s km  B1 %s",
                     giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
-                // Sparkline foF2 de la serie (~2 h, 5 min). Busca en GIRO y DIAS.
+                // M4 (P4): fuera de la lista prioritaria -> catalogo visible
+                // sin polling (dropdown): avisarlo en el tooltip.
+                if (!impl->giro.isPolled(sp->code))
+                    ImGui::TextDisabled("not polled (catalog only)");
+                // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
+                // Busca en GIRO y DIAS.
                 {
                     std::vector<float> fh;
                     for (const auto& s : impl->giro.copySamples()) {
@@ -2686,7 +2702,7 @@ void App::render() {
         ImGui::TextColored(rpPinned ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
             "%s (%s) %s", rpStation->name.c_str(), rpStation->code.c_str(),
             rpPinned ? "[pinned]" : "[hover]");
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Station source: GIRO scaled.php (foF2/MUF measured, rest derived). Click the station again or empty space to unpin.");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Station source: GIRO getbest (foF2/MUF/hmF2/B0 measured, rest derived). Click the station again or empty space to unpin.");
         if (rpPinned && ImGui::SmallButton("Unpin")) impl->pinnedCode.clear();
         if (!stHasData) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "No data yet for this station");
         // Perfil directo del Ebre (solo EB040): SAO crudo via FTP, sin GIRO.
@@ -2966,10 +2982,12 @@ void App::render() {
     }
     {
         ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 190.0f, (float)winH - 96.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(380, 86), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(380, 104), ImGuiCond_FirstUseEver);   // M4/P5: +1 linea de estado GIRO
         ImGui::Begin("Timeline");
         int nfr = 0;
         { std::lock_guard<std::mutex> tlk(impl->tecHistMutex); nfr = (int)impl->tecHist.size(); }
+        // M4 (P5a): estado GIRO real para la linea de estado y el rango.
+        GiroAdapter::GiroNetStatus gs = impl->giro.getNetStatus();
         if (!impl->replayMode) {
             if (impl->histLoading.load()) {
                 ImGui::Text("LIVE  (loading history %d/%d...)",
@@ -2978,7 +2996,7 @@ void App::render() {
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 36) feed the replay.");
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 72) feed the replay. GIRO station history: %.1f h.", gs.histHours);
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
                     impl->replayMode = true;
@@ -3027,6 +3045,15 @@ void App::render() {
             ImGui::TextUnformatted(tbuf);
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frame time (UTC) of the stored TEC grid.");
         }
+        // M4 (P5a): linea de estado GIRO en ambos modos — rango real de replay
+        // de estaciones y aviso de cortesia (rate-limit con reintento).
+        if (gs.degraded > 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                "GIRO: rate-limited, retry %.0f min", gs.retryInMin);
+        } else {
+            ImGui::Text("GIRO: %d/%d st  hist %.1f h", gs.withData, gs.polled, gs.histHours);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Polled GIRO stations and their history depth (the worst station limits station replay). Backoff protects the GIRO service.");
         ImGui::End();
     }
 

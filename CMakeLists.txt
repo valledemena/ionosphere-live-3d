@@ -116,9 +116,21 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/data")
 endif()
 
 # Tests (logica pura: sin GL/GLFW/red — corren en cualquier CI).
-# Condicion 5 de la revision MUSE. M4 anadira test_getbest_parse (fixture
-# real) y M5 test_model_foF2; este target deja la infraestructura CTest lista.
+# Condicion 5 de la revision MUSE. M4: test_getbest_parse con fixture real
+# (multichar EB040 capturado en vivo); M5 anadira test_model_foF2.
 enable_testing()
+# M4 (7.1): parser multichar de getbest — llama a PRODUCCION
+# (GiroAdapter::parseGetbest real sobre fixture real), no replica.
+add_executable(test_getbest_parse tests/test_getbest_parse.cpp)
+target_include_directories(test_getbest_parse PRIVATE src)
+target_sources(test_getbest_parse PRIVATE src/Data/GiroAdapter.cpp)
+target_link_libraries(test_getbest_parse PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    # Linux: GiroAdapter.cpp usa std::thread -> pthread. En MSYS2 (winpthreads)
+    # lo enlaza el driver de g++ solo; en Windows Threads::Threads no existe.
+    target_link_libraries(test_getbest_parse PRIVATE Threads::Threads)
+endif()
+add_test(NAME getbest_parse COMMAND test_getbest_parse)
 add_executable(test_hop_geometry tests/test_hop_geometry.cpp)
 target_include_directories(test_hop_geometry PRIVATE src)
 add_test(NAME hop_geometry COMMAND test_hop_geometry)
