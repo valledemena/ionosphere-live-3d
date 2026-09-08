@@ -15,7 +15,7 @@
 //
 // Fuente primaria (sin intermediarios): ftp://ftpoeb.obsebre.es/ionospheric/
 //   ficheros EB040_YYYYDDDHHMM01.SAO cada 5 min (MM redondeado a 5).
-// GIRO DIDBase scaled.php queda como fallback (ver GiroAdapter).
+// GIRO: getbest GET desde M4 (ver GiroAdapter), sin fallback DIDBase/scaled.php.
 namespace ebro {
 inline float nan() { return std::numeric_limits<float>::quiet_NaN(); }
 }
