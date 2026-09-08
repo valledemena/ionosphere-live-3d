@@ -1384,7 +1384,8 @@ void App::loadSettings() {
     char tag[32] = {0};
     if (!fgets(tag, sizeof(tag), f)) { fclose(f); return; }
     // M1: ionolive2 = intensidad de bloom LINEAL. Un ionolive1 se acepta y se
-    // marca para la migracion sqrt-once (al final del parseo); una tag
+    // marca para la migracion I-cuadrado (al final del parseo: I' = I^2,
+    // la efectiva vieja era I^2 al aplicarse en H y V); una tag
     // desconocida se ignora como siempre (binario viejo + cfg v2 -> defaults).
     bool legacyBloom = false;
     if (std::string(tag).find("ionolive2") != std::string::npos) {
