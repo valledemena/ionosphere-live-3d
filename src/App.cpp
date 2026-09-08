@@ -250,10 +250,11 @@ struct App::Impl {
 
     glm::vec3 sunDirection = glm::vec3(1.0f, 0.3f, 0.5f);
 
-    void updateSunDirection() {
-        // OJO: aqui va tiempo Unix REAL (el bug anterior pasaba glfwGetTime(),
-        // segundos desde el arranque, y el terminador quedaba congelado en 1970).
-        double utc = (double)std::time(nullptr);
+    void updateSunDirection(double utc) {
+        // OJO: aqui va tiempo Unix REAL (el bug historico pasaba glfwGetTime(),
+        // segundos desde el arranque, y el terminador quedaba congelado en 1970);
+        // M2: el epoch lo decide el CALLER (wall-clock en LIVE, replayEpoch en
+        // replay) - el sol sigue al dato.
         sunDirection = SolarPosition::getDirection(utc);
     }
 };
@@ -971,7 +972,7 @@ bool App::init(int width, int height, const char* title) {
         self->impl->camera.distance -= (float)sy * 0.2f;
     });
 
-    impl->updateSunDirection();
+    impl->updateSunDirection((double)std::time(nullptr));
 
     // Persistencia GUI: aplicar settings.cfg si existe (visibilidades,
     // variables, sliders, camara) y refrescar las capas en consecuencia.
@@ -1116,8 +1117,6 @@ void App::processInput() {
 }
 
 void App::update(float dt) {
-    impl->updateSunDirection();
-    impl->terminator.update(impl->sunDirection);  // anillo dia/noche real (~1 KB/frame)
 
     // Catalogo GIRO listo (hilo background) -> aplicar puntos y arrancar datos.
     if (impl->catalogReady.load() && !impl->catalogApplied) {
@@ -1179,6 +1178,16 @@ void App::update(float dt) {
             impl->giroReplayCache = impl->giro.sampleHistoryAt(replayEpoch);
         }
     }
+
+    // M2: el sol sigue al dato - epoch efectivo = replay si hay par, wall-clock
+    // si no. Snap puro al conmutar live<->replay: el dato salta en ese mismo
+    // frame y un ease dejaria el terminador incoherente con el grid durante la
+    // transicion (enmienda MUSE al sello del scope: coherencia > suavidad).
+    // El wrap del loop de replay tambien hace snap (el dato salta ahi igual).
+    double effEpoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+    impl->updateSunDirection(effEpoch);
+    impl->terminator.update(impl->sunDirection);  // anillo dia/noche real (~1 KB/frame)
+
     const std::vector<StationSample>& gsLive = impl->giro.getSamples();
     const std::vector<StationSample>& gsAct =
         (impl->replayMode && !impl->giroReplayCache.empty()) ? impl->giroReplayCache : gsLive;
