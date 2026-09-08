@@ -117,7 +117,7 @@ endif()
 
 # Tests (logica pura: sin GL/GLFW/red — corren en cualquier CI).
 # Condicion 5 de la revision MUSE. M4: test_getbest_parse con fixture real
-# (multichar EB040 capturado en vivo); M5 anadira test_model_foF2.
+# (multichar EB040 capturado en vivo); M5: test_model_foF2 (clima+haversine).
 enable_testing()
 # M4 (7.1): parser multichar de getbest — llama a PRODUCCION
 # (GiroAdapter::parseGetbest real sobre fixture real), no replica.
@@ -131,6 +131,15 @@ if(NOT WIN32)
     target_link_libraries(test_getbest_parse PRIVATE Threads::Threads)
 endif()
 add_test(NAME getbest_parse COMMAND test_getbest_parse)
+# M5 (plan 8.2/8.3): modelo climatologico + haversine — llama a
+# PRODUCCION (inline de LayerProfile.h + densityDir de DensityVolume.h
+# + SolarPosition real para el check de convencion subsolar), no replica.
+add_executable(test_model_foF2 tests/test_model_foF2.cpp)
+# glad: transitivo via LayerProfile.h -> IonosondeLayer.h (solo cabeceras,
+# sin contexto GL - el link no cambia).
+target_include_directories(test_model_foF2 PRIVATE src libs/glad/include)
+target_sources(test_model_foF2 PRIVATE src/Utils/SolarPosition.cpp)
+add_test(NAME model_foF2 COMMAND test_model_foF2)
 add_executable(test_hop_geometry tests/test_hop_geometry.cpp)
 target_include_directories(test_hop_geometry PRIVATE src)
 add_test(NAME hop_geometry COMMAND test_hop_geometry)

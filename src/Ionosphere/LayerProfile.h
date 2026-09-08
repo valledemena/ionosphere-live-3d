@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <algorithm>
+#include <ctime>
 #include "Ionosphere/IonosondeLayer.h"   // StationPoint
 
 // Perfil vertical de capas por estacion, derivado de los parametros medidos.
@@ -109,3 +110,83 @@ inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float f
     if (winner) *winner = win;
     return best;
 }
+// ---------------------------------------------------------------------------
+// M5 (plan 8, sellado): fondo climatologico + distancia gran circulo.
+// Inline en LayerProfile.h (la opcion que el propio plan 8 ofrece para
+// tests): test_model_foF2 llama a PRODUCCION sin vincular App.cpp. Sin
+// glm — solo cmath/algorithm/ctime.
+// ---------------------------------------------------------------------------
+
+// smoothstep(a,b,x) = t=clamp((x-a)/(b-a),0,1); t*t*(3-2t) (plan 8.2).
+// Bordes invertidos (a>b) validos: el plan 8.3 usa smoothstep(55,25,near).
+inline double smoothstep(double a, double b, double x) {
+    double t = (x - a) / (b - a);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Distancia gran circulo haversine en GRADOS (plan 8.1; R no importa,
+// solo el angulo). Sustituye la distancia plana del IDW de perfiles
+// (la plana tiene error grande en latitudes altas).
+inline double havDeg(double la1, double lo1, double la2, double lo2) {
+    const double kPi = 3.14159265358979323846;
+    const double d2r = kPi / 180.0;
+    double dla = (la2 - la1) * d2r, dlo = (lo2 - lo1) * d2r;
+    double a = std::sin(dla / 2.0) * std::sin(dla / 2.0) +
+               std::cos(la1 * d2r) * std::cos(la2 * d2r) *
+               std::sin(dlo / 2.0) * std::sin(dlo / 2.0);
+    return 2.0 * std::asin(std::min(1.0, std::sqrt(a))) / d2r;
+}
+
+// Dia del ano UTC (1..366) para el termino estacional del modelo.
+// Mismo patron gmtime que App.cpp (hilo principal / single-thread).
+inline int dayOfYear(double epoch) {
+    std::time_t t = (std::time_t)epoch;
+    std::tm g;
+#ifdef _WIN32
+    gmtime_s(&g, &t);
+#else
+    gmtime_r(&t, &g);
+#endif
+    return g.tm_yday + 1;
+}
+
+// foF2 climatologico (MHz) — CCIR-like simplificado con F10.7 vivo
+// (plan 8.2, port directo de la demo). Firma sellada P1 (correccion de
+// MUSE): cosChi llega precalculado por el caller con la MISMA expresion
+// que applyDayNight (dot(densityDir(lat,lon), sunDir), marco del motor:
+// theta = pi - lon, -X = lon 0, ver DensityVolume.h) — el dia del modelo
+// y el terminador comparten vector solar (M2/effEpoch) y no pueden
+// divergir. lon no entra en la firma (solo via cosChi). latLonToUnit NO
+// sirve aqui: convencion opuesta (+X = lon 0) — mediodia del modelo
+// donde el renderer pone medianoche.
+inline double modelFoF2(double cosChi, double latDeg, int doy, double f107) {
+    const double kPi = 3.14159265358979323846;
+    double lat = std::fabs(latDeg);
+    // actividad: F10.7 70 -> ~x1.0, 200 -> ~x1.55
+    double solar = 0.62 + 0.0046 * std::min(220.0, std::max(60.0, f107));
+    // base diurna + reserva nocturna (recarga del vientre ecuatorial)
+    double dayBase   = 3.2 + 7.8 * std::pow(std::max(cosChi, 0.0), 0.7);
+    double nightBase = 1.6 + 1.8 * std::exp(-lat / 40.0);
+    double t = smoothstep(-0.12, 0.15, cosChi);   // transicion crepuscular
+    double fo = (1.0 - t) * nightBase + t * dayBase;
+    // anomalia ecuatorial: cresta a +-15-16, valle en el ecuador geomagnetico
+    double eq = std::exp(-std::pow((lat - 16.0) / 12.0, 2.0)) -
+                0.55 * std::exp(-std::pow(lat / 20.0, 2.0));
+    fo *= 1.0 + 0.32 * eq * t;
+    // depresion invernal (N en invierno, S en verano) por inclinacion F2
+    double seasonal = std::cos(((double)(doy - 172) / 365.0) * 2.0 * kPi) *
+                      (latDeg > 0 ? 1.0 : -1.0);
+    fo *= 1.0 + 0.06 * seasonal * (lat / 90.0);
+    return fo * solar;
+}
+
+// hmF2 climatologico (km): sube de noche (plan 8.2).
+inline double modelHmF2(double cosChi, double latDeg) {
+    double lat = std::fabs(latDeg);
+    double dayH = 250.0 - 0.35 * lat, nightH = 300.0 + 0.2 * lat;
+    double t = smoothstep(-0.12, 0.15, cosChi);
+    return (1.0 - t) * nightH + t * dayH;
+}
+

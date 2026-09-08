@@ -476,9 +476,15 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
     return g;
 }
 
-// Interpola perfiles de capa (IDW, mismo patron/radio/peso que giroInterpGrid
-// para consistencia visual con las capas 2D). Fondo = mediana por campo.
-static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSample>& samples, int w, int h) {
+// Interpola perfiles de capa (IDW, patron/radio/peso como giroInterpGrid;
+// M5: la distancia pasa a gran circulo — el grid 2D conserva la plana,
+// fuera del 'Archivos' del plan 8, ver P6 del sello M5). Fondo = mediana
+// por campo EXCEPTO foF2/hmF2, que mezclan el fondo climatologico
+// modelFoF2/modelHmF2 por cercania (plan 8.2/8.3).
+// sunDir: marco del motor, el MISMO vector que usan despues
+// applyDayNight y buildDensityVolume (coherencia terminador-modelo).
+static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSample>& samples, int w, int h,
+                                                     const glm::vec3& sunDir, double epoch, double f107) {
     std::vector<LayerProfile> out((size_t)w * h);
     std::vector<StationSample> pts;
     for (const auto& s : samples) if (s.valid) pts.push_back(s);
@@ -505,6 +511,7 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
     const float hmedF2 = medOf(&StationSample::hmF2);
     const float mB0 = sanitizeB0(medOf(&StationSample::B0));
     const float mB1 = sanitizeB1(medOf(&StationSample::B1));
+    const int doy = dayOfYear(epoch);   // termino estacional del modelo (8.2)
 
     for (int latIdx = 0; latIdx < h; latIdx++) {
         float latG = -90.0f + cellLat * latIdx;
@@ -516,28 +523,47 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
             double wHm = wBg, vHm = (double)wBg * hmedF2;
             double wB0 = wBg, vB0 = (double)wBg * mB0;
             double wB1 = wBg, vB1 = (double)wBg * mB1;
+            // M5/8.1: distancia gran circulo (haversine, en grados) en
+            // lugar de la plana (error grande en latitudes altas). Radio
+            // y peso del IDW intactos. nearDeg (8.3) se mide contra
+            // TODAS las estaciones validas, no solo las de radio.
+            double nearDeg = 180.0;
             for (const auto& p : pts) {
-                float dlat = p.latDeg - latG;
-                float dlon = p.lonDeg - lonG;
-                if (dlon > 180.0f) dlon -= 360.0f;
-                if (dlon < -180.0f) dlon += 360.0f;
-                float d = sqrtf(dlat * dlat + dlon * dlon);
+                double d = havDeg(latG, lonG, (double)p.latDeg, (double)p.lonDeg);
+                if (d < nearDeg) nearDeg = d;
                 if (d > maxDist) continue;
-                float w = 1.0f / (d * d + 0.5f);
-                if (p.foE > 0.0f)  { float v = 1.24e10f * p.foE * p.foE; wNmE += w; vNmE += (double)w * v; }
-                if (p.foF1 > 0.0f) { float v = 1.24e10f * p.foF1 * p.foF1; wNmF1 += w; vNmF1 += (double)w * v; }
-                if (p.foF2 > 0.0f) { float v = 1.24e10f * p.foF2 * p.foF2; wNmF2 += w; vNmF2 += (double)w * v; }
-                if (p.hmF2 > 0.0f) { wHm += w; vHm += (double)w * p.hmF2; }
-                if (p.B0 > 0.0f)   { wB0 += w; vB0 += (double)w * p.B0; }
-                if (p.B1 > 0.0f)   { wB1 += w; vB1 += (double)w * p.B1; }
+                double w = 1.0 / (d * d + 0.5);
+                if (p.foE > 0.0f)  { float v = 1.24e10f * p.foE * p.foE; wNmE += w; vNmE += w * v; }
+                if (p.foF1 > 0.0f) { float v = 1.24e10f * p.foF1 * p.foF1; wNmF1 += w; vNmF1 += w * v; }
+                if (p.foF2 > 0.0f) { float v = 1.24e10f * p.foF2 * p.foF2; wNmF2 += w; vNmF2 += w * v; }
+                if (p.hmF2 > 0.0f) { wHm += w; vHm += w * p.hmF2; }
+                if (p.B0 > 0.0f)   { wB0 += w; vB0 += w * p.B0; }
+                if (p.B1 > 0.0f)   { wB1 += w; vB1 += w * p.B1; }
             }
+            // M5/8.3: mezcla medicion<->modelo SOLO en foF2 y hmF2 (los
+            // que gobiernan volumen y MUF). cosChi con la MISMA
+            // expresion que applyDayNight / buildDensityVolume
+            // (densityDir, marco del motor — P1 corregido por MUSE).
+            double wG = smoothstep(55.0, 25.0, nearDeg);
+            glm::vec3 nrm = densityDir(latG, lonG);
+            double cosChi = (double)(nrm.x * sunDir.x + nrm.y * sunDir.y + nrm.z * sunDir.z);
             LayerProfile pr;
             pr.NmE = (float)(vNmE / wNmE);
             pr.hasE = pr.NmE > 0.0f;
             pr.NmF1 = (float)(vNmF1 / wNmF1);
             pr.hasF1 = pr.NmF1 > 0.0f;
-            pr.NmF2 = (float)(vNmF2 / wNmF2);
-            pr.hmF2 = (float)(vHm / wHm);
+            // P2 (sello): el IDW de F2 queda intacto (Nm, fondo mediana
+            // wBg); la mezcla con el modelo es en MHz: sqrt -> blend ->
+            // cuadrar. wG=1 deja la celda como hoy salvo ~1e-7 (V1).
+            double nmF2Idw = vNmF2 / wNmF2;
+            double hmF2Idw = vHm / wHm;
+            double foF2Idw = (nmF2Idw > 0.0) ? std::sqrt(nmF2Idw / 1.24e10) : 0.0;
+            double foF2Cell = wG * foF2Idw + (1.0 - wG) * modelFoF2(cosChi, (double)latG, doy, f107);
+            pr.NmF2 = (float)(1.24e10 * foF2Cell * foF2Cell);
+            double hmF2Cell = (hmF2Idw > 0.0)
+                ? (wG * hmF2Idw + (1.0 - wG) * modelHmF2(cosChi, (double)latG))
+                : modelHmF2(cosChi, (double)latG);
+            pr.hmF2 = (float)hmF2Cell;
             pr.hasF2 = pr.NmF2 > 0.0f && pr.hmF2 > 0.0f;
             pr.hmF1 = pr.hmF2 > 0.0f ? std::max(150.0f, 0.8f * pr.hmF2) : 180.0f;
             pr.B0 = sanitizeB0((float)(vB0 / wB0));
@@ -1234,15 +1260,23 @@ void App::update(float dt) {
     static double lastVolBuild = -1.0;
     if (now - lastVolBuild > 5.0) {
         lastVolBuild = now;
-        auto profs = interpLayerProfiles(gsAct, 72, 72);
         glm::vec3 sd = glm::normalize(impl->sunDirection);
+        // M5: mismo vector solar y mismo epoch del volumen para el fondo
+        // climatologico (el dia del modelo sigue al terminador, M2/effEpoch);
+        // f107 del snapshot que lee el HUD (P4: real o mock 105; 120 solo
+        // si aun no hay bundle).
+        double volEpoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        double f107 = 120.0;
+        auto idxB = impl->getIndices();
+        if (idxB) f107 = (double)idxB->snap.f107;
+        auto profs = interpLayerProfiles(gsAct, 72, 72, sd, volEpoch, f107);
         applyDayNight(profs, 72, 72, sd.x, sd.y, sd.z);
         float flare = 1.0f;
         if (impl->lastXray && impl->lastXray->latest.valid)
             flare = XrayAdapter::flareFactor(impl->lastXray->latest.flux);
         DensityVolume vol = buildDensityVolume(profs, 72, 72, 60, 60.0f, 700.0f,
                                                sd.x, sd.y, sd.z, flare);
-        vol.timestamp = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        vol.timestamp = volEpoch;
         impl->volumeLayer.updateVolume(vol);
         impl->lastVolume = vol;
         if (impl->sliceOn) rebuildSlice(true);
