@@ -22,6 +22,7 @@ layout(location=3) in vec3 aTangent;
 layout(location=4) in float aSide;
 uniform mat4 u_view, u_projection;
 uniform vec3 u_camPos;
+uniform float u_halfWidth;   // M9: ancho acoplado a explodeFactor (uniform desde render)
 out float vT;
 out float vViable;
 void main() {
@@ -29,7 +30,7 @@ void main() {
     vViable = aViable;
     vec3 toCam = normalize(u_camPos - aPos);
     vec3 n = normalize(cross(aTangent, toCam));
-    vec3 p = aPos + n * (0.004 * aSide);
+    vec3 p = aPos + n * (u_halfWidth * aSide);
     gl_Position = u_projection * u_view * vec4(p, 1.0);
 }
 )";
@@ -44,9 +45,13 @@ void main() {
     vec3 col = vec3(1.0, 0.35, 0.35);                    // cerrado (rojo)
     if (vViable > 0.75)      col = vec3(0.30, 1.00, 0.40);  // abierto (verde)
     else if (vViable > 0.25) col = vec3(1.00, 0.75, 0.30);  // marginal (ambar)
-    float ph = fract(vT * 3.0 - u_time * 0.15);
-    float pulse = 0.6 * exp(-40.0 * ph * ph);
-    fragColor = vec4(col + vec3(pulse), 0.55);
+    // M9 (paridad demo, literales shaders.ts:450/465-467): cursor 0.22
+    // ciclos/s (recorrido 4.5 s), 2.5 pulsos en arco, envolvente
+    // 0.9*exp(-36*(p-0.5)^2), ganancia 0.9, alpha 0.9. Direccion
+    // TX->RX intacta: la fase sigue siendo (arco*k - t*v).
+    float p = fract(u_time * 0.22 - vT * 2.5);
+    float pulse = 0.9 * exp(-36.0 * (p - 0.5) * (p - 0.5));
+    fragColor = vec4(col + vec3(pulse), 0.9);
 }
 )";
 
@@ -68,21 +73,23 @@ void HFTraceLayer::destroy() {
 }
 
 void HFTraceLayer::update(const Input& in) {
-    // P7 (plan 11.5): firma — si (tx/rx | freq | stamp de grids) no cambia,
+    // P7 (plan 11.5): firma — si (tx/rx | freq | stamp de grids | exag M9) no cambia,
     // no se recomputa nada (el pulso viaja por uniform u_time).
     if (sigValid_ || sigStamp_ >= 0) {
         const bool sameTx = (in.txLatDeg == sigTxLat_) && (in.txLonDeg == sigTxLon_);
         const bool sameRx = (in.rxLatDeg == sigRxLat_) && (in.rxLonDeg == sigRxLon_);
         if (sameTx && sameRx && in.freqMHz == sigFreq_ && in.gridStamp == sigStamp_ &&
-            in.txValid == sigValid_) {
+            in.txValid == sigValid_ && in.heightExag == sigExag_) {   // M9: exag -> rebuild
             return;
         }
     }
     sigTxLat_ = in.txLatDeg; sigTxLon_ = in.txLonDeg;
     sigRxLat_ = in.rxLatDeg; sigRxLon_ = in.rxLonDeg;
     sigFreq_ = in.freqMHz;
+    sigExag_ = in.heightExag;             // M9: entra a la firma
     sigStamp_ = in.gridStamp;
     sigValid_ = in.txValid;
+    heightExag_ = in.heightExag;          // M9: para el ancho del render
 
     HFCircuitResult r;
     r.txLatDeg = in.txLatDeg; r.txLonDeg = in.txLonDeg;
@@ -128,7 +135,10 @@ void HFTraceLayer::update(const Input& in) {
 // Polilinea continua del circuito (plan 11.3): por salto, 2 patas x 14
 // muestras compartiendo extremos (14 + 13 = 27 unicos por salto); pata =
 // slerp del punto de suelo al punto de reflexion con altitud h'·t (subida)
-// y h'·(1-t) (bajada); posicion mundo via densityDir (marco del motor). aT = longitud de
+// y h'·(1-t) (bajada) — todo · explodeFactor en M9 (hfc::legAltitudeKm:
+// el arco acompana la altura visual de las capas; la rampa es lineal en
+// t, LEGS=14 sigue sub-pixel a cualquier exageracion); posicion mundo
+// via densityDir (marco del motor). aT = longitud de
 // arco acumulada (0..1); tangentes por diferencias centrales; cada muestra
 // se emite dos veces (side -1/+1) para el TRIANGLE_STRIP del ribbon.
 void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
@@ -145,22 +155,23 @@ void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
         hfc::arcPoint(in.txLatDeg, in.txLonDeg, in.rxLatDeg, in.rxLonDeg, f1, gLat1, gLon1);
         const double mufK = r.hopMufMHz.empty() ? 0.0 : r.hopMufMHz[(size_t)k];
         const float via = (float)hfc::hopViable((double)in.freqMHz, mufK);
-        // Pata 1: suelo_k -> reflexion (t: 0..1, alt = h'·t).
+        // Pata 1: suelo_k -> reflexion (t: 0..1, alt = h'·t·exag).
         for (int j = 0; j < LEGS; j++) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(gLat0, gLon0, rLat, rLon, t, la, lo);
-            glm::vec3 p = densityDir((float)la, (float)lo) * (1.0f + (float)(r.hVirtualKm * t) / 6371.0f);
+            glm::vec3 p = densityDir((float)la, (float)lo) *
+                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, t, (double)heightExag_) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
-        // Pata 2: reflexion -> suelo_{k+1} (t: 0..1, alt = h'·(1-t)); la
+        // Pata 2: reflexion -> suelo_{k+1} (t: 0..1, alt = h'·(1-t)·exag); la
         // muestra t=0 es la reflexion (ultima de la pata 1): se comparte.
         for (int j = 1; j < LEGS; j++) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(rLat, rLon, gLat1, gLon1, t, la, lo);
             glm::vec3 p = densityDir((float)la, (float)lo) *
-                                                   (1.0f + (float)(r.hVirtualKm * (1.0 - t)) / 6371.0f);
+                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, 1.0 - t, (double)heightExag_) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
     }
@@ -245,6 +256,7 @@ void HFTraceLayer::render(const glm::mat4& view, const glm::mat4& projection,
     shader_.setMat4("u_projection", projection);
     shader_.setVec3("u_camPos", camPos);
     shader_.setFloat("u_time", timeSec);
+    shader_.setFloat("u_halfWidth", hfc::ribbonHalfWidth(heightExag_));   // M9
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, vertCount_);
     glBindVertexArray(0);

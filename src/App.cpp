@@ -1540,6 +1540,7 @@ void App::update(float dt) {
                 }
             }
             hfIn.freqMHz = impl->hfFreqMHz;
+            hfIn.heightExag = impl->explodeFactor;   // M9: el arco acompana la altura visual (Layers/Explode)
             hfIn.gridStamp = impl->hfGridStamp;
             if (impl->hfFoF2Grid.valid && !impl->hfFoF2Grid.values.empty())
                 hfIn.foF2Grid = impl->hfFoF2Grid.values.data();
@@ -2623,8 +2624,9 @@ void App::render() {
         applyAltitudes();
         impl->volumeLayer.setExplode(impl->explodeFactor);
         impl->refShells.setExplode(impl->explodeFactor);
+        impl->hfCircuitDirty = true;   // M9: rebuild del ribbon en el mismo frame (la altura lo sigue)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale. The HF ray ribbon follows: apex height and width scale with this.");
     if (ImGui::Checkbox("Path slice", &impl->sliceOn)) {
         impl->sliceLayer.setVisible(impl->sliceOn);
         if (!impl->sliceOn) { impl->sliceA.clear(); impl->sliceB.clear(); }
@@ -3316,6 +3318,8 @@ void App::render() {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "pick mode: click a station...");
             if (ImGui::SliderFloat("Freq (MHz)", &impl->hfFreqMHz, 1.0f, 30.0f, "%.1f"))
                 impl->hfCircuitDirty = true;
+            ImGui::TextDisabled("ray height follows 'Explode' (Layers): %.1fx",
+                                 (double)impl->explodeFactor);
 
             const HFCircuitResult& hfR = impl->hfTrace.result();
             if (!hfR.valid) {

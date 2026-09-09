@@ -8,6 +8,7 @@ layout(location=3) in vec3 aTangent;
 layout(location=4) in float aSide;
 uniform mat4 u_view, u_projection;
 uniform vec3 u_camPos;
+uniform float u_halfWidth;   // M9: ancho acoplado a explodeFactor (uniform desde render)
 out float vT;
 out float vViable;
 void main() {
@@ -15,6 +16,6 @@ void main() {
     vViable = aViable;
     vec3 toCam = normalize(u_camPos - aPos);
     vec3 n = normalize(cross(aTangent, toCam));
-    vec3 p = aPos + n * (0.004 * aSide);
+    vec3 p = aPos + n * (u_halfWidth * aSide);
     gl_Position = u_projection * u_view * vec4(p, 1.0);
 }

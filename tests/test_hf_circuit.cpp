@@ -173,6 +173,40 @@ int main() {
     check_int("L1 circuito de 3 saltos (D~7533)", lLay.nHops, 3);
     check_near("L2 LUF circuito = max de las reflexiones", lMax, 13.773972399689676, 1.0e-9);
     check_bool("L3 el max manda: > min de las reflexiones", lMax > 0.0);
+    printf("--- M) M9: exageracion visual del arco (acople explodeFactor) ---\n");
+    // GENERADO por scripts/m9_gen_test.py (implementacion python
+    // independiente). hfc::legAltitudeKm y ribbonHalfWidth son
+    // PRODUCCION (las usa buildPolyline/render de HFTraceLayer).
+    check_near("M1  leg(310,1,1) = 310 (back-compat M8: exag=1 fisica)",
+               hfc::legAltitudeKm(310.0, 1.0, 1.0), 310.0, 0.0);
+    check_near("M2  leg(310,1,2.2) = 682 (apice demo-paridad, h'=310)",
+               hfc::legAltitudeKm(310.0, 1.0, 2.2), 682.0, 1.0e-9);
+    check_near("M3  bajada leg(310,0.65,2.2) = 310*0.65*2.2",
+               hfc::legAltitudeKm(310.0, 0.65, 2.2), 443.3, 1.0e-9);
+    check_near("M4  leg(310,0.5,1) = 155 (formula M8 literal h'*t)",
+               hfc::legAltitudeKm(310.0, 0.5, 1.0), 155.0, 0.0);
+    // ribbonHalfWidth: 0.004@1 (look M8 exacto) -> 0.0075@2.2 (demo: tubo
+    // radio 0.0075) -> tope 0.012@5. Float C++ vs double python, tol 1e-6.
+    check_near("M5  hw(1.0) = 0.004 (look M8 en escala fisica)",
+               (double)hfc::ribbonHalfWidth(1.0f), 0.004, 1.0e-6);
+    check_near("M6  hw(2.2) = 0.0075 (paridad demo)",
+               (double)hfc::ribbonHalfWidth(2.2f), 0.007500000000000001, 1.0e-6);
+    check_near("M7  hw(5.0) = 0.012 (tope del cap)",
+               (double)hfc::ribbonHalfWidth(5.0f), 0.012, 1.0e-6);
+    {
+        bool mono = true;
+        float prevw = hfc::ribbonHalfWidth(1.0f);
+        for (int e10 = 10; e10 <= 50; e10 += 5) {
+            const float w = hfc::ribbonHalfWidth((float)e10 / 10.0f);
+            if (w < prevw) mono = false;
+            prevw = w;
+        }
+        check_bool("M8  hw monotono no-decreciente en [1,5] (paso 0.5)", mono);
+    }
+    check_near("M9  hw clamp bajo: hw(0.3) = hw(1) = 0.004",
+               (double)hfc::ribbonHalfWidth(0.3f), 0.004, 1.0e-6);
+    check_near("M10 hw clamp alto: hw(9.0) = hw(5) = 0.012",
+               (double)hfc::ribbonHalfWidth(9.0f), 0.012, 1.0e-6);
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

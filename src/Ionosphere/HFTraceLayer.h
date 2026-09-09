@@ -37,6 +37,12 @@
 // de latLonAltToPos, que esta 180 grados rotado sobre Y (bug del bucket en
 // vivo, corregido). La esfera es de radio 1 normalizado: el ancho del
 // ribbon 0.004 (plan 11.3, ~0.004 R_tierra) es directo en unidades de mundo.
+// M9 (port demo->C++, peticion de DAVID): el arco acompana la altura
+// visual de las capas — la altitud de las patas se multiplica por
+// explodeFactor (slider «Explode» 1..5 del panel Layers, default 1 =
+// escala fisica; h' SIGUE vivo del grid GIRO) y el ancho escala con el
+// (hfc::ribbonHalfWidth). Pulso a paridad de la demo (0.22/2.5/0.9/0.9).
+// Fisica del circuito, grids y matriz de bandas intactas.
 // =============================================================================
 
 namespace hfc {
@@ -160,6 +166,27 @@ inline double sampleGrid(const float* values, int w, int h, double lat, double l
     return (1.0 - ty) * ((1.0 - tx) * v00 + tx * v10) + ty * ((1.0 - tx) * v01 + tx * v11);
 }
 
+
+// --- M9: exageracion visual del arco, acoplada a explodeFactor ---
+// (App.cpp: volumeLayer/refShells/shell ya lo siguen; el arco era la
+// unica capa que no. La fisica NO cambia: solo como se DIBUJA.) ---
+
+// Altitud de una muestra de pata (subida t, bajada 1-t): h'·t·exag.
+// Lineal en t => la exageracion escala una recta y no anade curvatura:
+// LEGS=14 (27/salto) sigue sub-pixel a cualquier exag.
+inline double legAltitudeKm(double hVirtualKm, double legT, double heightExag) {
+    return hVirtualKm * legT * heightExag;
+}
+
+// Semiancho del ribbon: 0.004 en exag=1 (look M8 exacto), 0.0075 en
+// exag=2.2 (paridad demo: tubo de radio 0.0075), tope 0.012 en exag=5.
+// Lineal entre las anclas; clamp al rango del slider.
+inline float ribbonHalfWidth(float heightExag) {
+    if (heightExag < 1.0f) heightExag = 1.0f;
+    if (heightExag > 5.0f) heightExag = 5.0f;
+    const float hw = 0.004f + (heightExag - 1.0f) * (0.0035f / 1.2f);
+    return hw > 0.012f ? 0.012f : hw;
+}
 } // namespace hfc
 
 // =============================================================================
@@ -185,6 +212,7 @@ public:
         bool txValid = false, rxValid = false;
         double txLatDeg = 0.0, txLonDeg = 0.0, rxLatDeg = 0.0, rxLonDeg = 0.0;
         float freqMHz = 14.0f;
+        float heightExag = 1.0f;             // M9: multiplicador visual de altura (App: explodeFactor)
         long long gridStamp = 0;             // identidad de los grids (P7)
         const float* foF2Grid = nullptr;     // giroInterpGrid var 0 (72x72)
         const float* hmF2Grid = nullptr;     // giroInterpGrid var 2
@@ -195,7 +223,7 @@ public:
     void init();    // shader (archivo + fallback inline) + VAO/VBO
     void destroy();
     // P7: recomputa el circuito SOLO si la firma cambia (tx/rx | freq |
-    // stamp de grids); el pulso viaja por uniform, sin rebuild.
+    // stamp de grids | exag M9); el pulso viaja por uniform, sin rebuild.
     void update(const Input& in);
     void render(const glm::mat4& view, const glm::mat4& projection,
                 const glm::vec3& camPos, float timeSec);
@@ -213,10 +241,12 @@ private:
     GLuint vbo_ = 0;
     int vertCount_ = 0;
     bool visible_ = false;
+    float heightExag_ = 1.0f;                // M9: exag del ultimo rebuild (ancho en render)
     HFCircuitResult result_;
     // firma del ultimo update aplicado (P7) — arranque invalido
     double sigTxLat_ = 0.0, sigTxLon_ = 0.0, sigRxLat_ = 0.0, sigRxLon_ = 0.0;
     float sigFreq_ = -1.0f;
+    float sigExag_ = 0.0f;                   // M9 (sentinela: fuera de [1,5])
     long long sigStamp_ = -1;
     bool sigValid_ = false;
 };
