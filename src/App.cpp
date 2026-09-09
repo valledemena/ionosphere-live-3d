@@ -423,9 +423,10 @@ static void HelpMarker(const char* text) {
 
 // Interpola LUF/FOT/Spread-F/MUF (Fase 5, via RadioPropagationAdapter) a una
 // rejilla 72x72 con el mismo layout que GridLayer::updateFromGrid.
-// var: 0=LUF, 1=FOT, 2=Spread-F, 3=MUF. kpProxy modula Spread-F.
+// var: 0=LUF, 1=FOT, 2=Spread-F, 3=MUF. kpProxy modula Spread-F; xrayFlux
+// alimenta el termino SID del LUF (M7, plan 10 — Sauer-Wilkinson).
 static GridData radioInterpGrid(const std::vector<StationSample>& samples, int var, int w, int h,
-                                double utc, float kpProxy) {
+                                double utc, float kpProxy, float xrayFlux) {
     const int W = w, H = h;
     GridData g;
     g.width = W;
@@ -445,7 +446,7 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
     std::vector<float> mvals;
     mvals.reserve(pts.size());
     for (const auto& p : pts) {
-        float vv = RadioPropagationAdapter::stationValue(p, var, utc, kpProxy);
+        float vv = RadioPropagationAdapter::stationValue(p, var, utc, kpProxy, xrayFlux);
         if (vv > 0.0f) mvals.push_back(vv);
     }
     float med = 0.0f;
@@ -466,7 +467,7 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
                 if (dlon < -180.0f) dlon += 360.0f;
                 float d = sqrtf(dlat * dlat + dlon * dlon);
                 if (d > maxDist) continue;
-                float val = RadioPropagationAdapter::stationValue(p, var, utc, kpProxy);
+                float val = RadioPropagationAdapter::stationValue(p, var, utc, kpProxy, xrayFlux);
                 if (val <= 0.0f) continue;
                 float w = 1.0f / (d * d + 0.5f);
                 wSum += w;
@@ -1378,8 +1379,12 @@ void App::update(float dt) {
     } else if (impl->mapVariable >= 5 && impl->mapVariable <= 7) {
         float kpProxy = currentKp();
         double epoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        // M7 (plan 10): flujo X-ray del ultimo bundle para el termino SID
+        // del LUF en la rejilla (mismo guard que el flare del volumen).
+        float xrFlux = (impl->lastXray && impl->lastXray->latest.valid)
+            ? impl->lastXray->latest.flux : 0.0f;
         updateMainGrid(radioInterpGrid(gsAct,
-            impl->mapVariable - 5, 72, 72, epoch, kpProxy));
+            impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     }
 
     // Volumen Ne(h) + RefShells dinamicos: reconstruir cada ~5 s con las
@@ -1760,7 +1765,12 @@ void App::fetchWorker() {
         // 5) Propagacion HF (usa muestras GIRO thread-safe).
         {
             auto samples = impl->giro.copySamples();
-            rp.fetch(epoch, samples);
+            // M7 (plan 10): el LUF global reacciona al flare X-ray. rp.fetch
+            // corre ANTES que xr.fetch() del mismo pase, asi que recibe el
+            // flujo del bundle del pase anterior (xr persiste entre pases de
+            // 300 s; stale <= 5 min, irrelevante para fulguraciones — sello).
+            float xrFlux = (xr.getLatest().valid ? xr.getLatest().flux : 0.0f);
+            rp.fetch(epoch, samples, xrFlux);
             if (rp.getLatest().valid && (rp.usedGiroReal() || !impl->getRadio())) {
                 auto b = std::make_shared<Impl::RadioBundle>();
                 b->latest = rp.getLatest();
@@ -1946,7 +1956,10 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
         float kpProxy = currentKp();
         double epoch = (double)std::time(nullptr);  // derive*() espera Unix UTC
         int var = impl->mapVariable - 5;   // 0=LUF,1=FOT,2=Spread-F
-        GridData g = radioInterpGrid(impl->giro.getSamples(), var, 72, 72, epoch, kpProxy);
+        // M7 (plan 10): flujo X-ray del ultimo bundle para el termino SID.
+        float xrFlux = (impl->lastXray && impl->lastXray->latest.valid)
+            ? impl->lastXray->latest.flux : 0.0f;
+        GridData g = radioInterpGrid(impl->giro.getSamples(), var, 72, 72, epoch, kpProxy, xrFlux);
         if (!g.valid) return;
         if (var == 2) impl->tecLayer.setRange(0.0f, 100.0f);  // Spread-F % fijo
         else impl->tecLayer.clearRange();
@@ -2864,6 +2877,10 @@ void App::render() {
     // Per-station values (real epoch for the diurnal term).
     double rpEpoch = (double)std::time(nullptr);
     float rpKp = currentKp();
+    // M7 (plan 10): flujo X-ray del circuito (guard del patron del flare
+    // del volumen) para el termino SID del LUF y el aviso de fadeout.
+    float rpFlux = (impl->lastXray && impl->lastXray->latest.valid)
+        ? impl->lastXray->latest.flux : 0.0f;
     float stMuf = 0, stFot = 0, stLuf = 0, stS4 = 0, stFar = 0, stSpF = 0;
     bool stHasData = false;
     if (rpStation) {
@@ -2871,7 +2888,7 @@ void App::render() {
         if (stHasData) {
             stMuf = rpStation->muf;
             stFot = RadioPropagationAdapter::deriveFOT(stMuf);
-            stLuf = RadioPropagationAdapter::deriveLUF(stMuf, rpStation->foF2, rpStation->latDeg, rpStation->lonDeg, rpEpoch);
+            stLuf = RadioPropagationAdapter::deriveLUF(stMuf, rpStation->foF2, rpStation->latDeg, rpStation->lonDeg, rpEpoch, rpFlux, rpKp);
             stS4 = RadioPropagationAdapter::deriveS4(rpStation->latDeg, rpStation->lonDeg, rpEpoch);
             stSpF = RadioPropagationAdapter::deriveSpreadF(rpStation->latDeg, rpStation->lonDeg, rpEpoch, rpKp);
             float tecu = 15.0f;
@@ -2944,7 +2961,29 @@ void App::render() {
     ImGui::Text("FOT (0.85*MUF): %.1f MHz", showFot);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("FOT = 0.85*MUF (ITU). Optimum working frequency: reliable ~90% of the time. Transmit here.");
     ImGui::Text("LUF: %.1f MHz", showLuf);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("LUF: lowest usable frequency (MHz, ITU-style with daytime D-layer absorption). Below it the D layer absorbs the signal. Rises by day.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("LUF: lowest usable frequency (MHz, ITU-style with daytime D-layer absorption + flare SID term, M7). Rises by day; during X-ray flares the D layer absorbs more and the LUF jumps (see the amber fadeout notice below).");
+    // M7 (plan 10, P5 sellado): aviso ambar de fadeout cuando el termino de
+    // flare del circuito supera 1 MHz-equivalente (~M1+). cosChi via densityDir
+    // (theta = pi - lon, marco del motor — patron sellado M5) con el sol del
+    // HUD (replay-coherente, M2). Solo con estacion pinned/hovered: el plan
+    // habla del circuito actual.
+    if (rpStation) {
+        const float kPi = 3.14159265f;
+        float phi = (90.0f - rpStation->latDeg) * kPi / 180.0f;
+        float theta = kPi - rpStation->lonDeg * kPi / 180.0f;   // convencion del motor
+        glm::vec3 rd(sinf(phi) * cosf(theta), cosf(phi), sinf(phi) * sinf(theta));
+        float cosChi = glm::dot(rd, glm::normalize(impl->sunDirection));
+        // Trigger con la MISMA fuente de verdad del termino flare (P4):
+        // flareAbsorption. dayFactor del panel = max(0, cosChi); deriveLUF usa
+        // dayF lstH por dentro — caveat dayF-vs-cosChi del sello (ambos
+        // monotonos en F, trigger advisory, sin falsa precision).
+        if (RadioPropagationAdapter::flareAbsorption(rpFlux, fmaxf(0.0f, cosChi)) > 1.0f) {
+            float dB = RadioPropagationAdapter::dRegionAbsorptionDb(cosChi, rpFlux, rpKp);
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.25f, 1.0f),
+                "D-region fadeout: +%.1f dB", dB);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SID (sudden ionospheric disturbance): the ongoing X-ray flare enhances D-layer absorption and closes the lower HF bands. Model total absorption in dB (Sauer-Wilkinson simplified: flare + auroral Kp terms at this point). Fades out as the flare decays.");
+        }
+    }
     // S4 gauge 0..1
     ImVec4 s4Col(0.3f, 0.9f, 0.3f, 1.0f);
     if (showS4 > 0.3f) s4Col = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);

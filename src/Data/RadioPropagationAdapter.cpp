@@ -11,7 +11,7 @@
 // NOAA SWPC: no hay JSON publico directo para AE/S4/Faraday/TAI. Se intenta el
 // Kp planetario (existe) como proxy de actividad para AE/TAI/Spread-F, y el
 // resto cae a mock plausible con variacion diurna. MUF/LUF/FOT/Spread-F usan
-// las muestras GIRO reales (scaled.php via GiroAdapter).
+// las muestras GIRO reales (getbest via GiroAdapter, desde M4).
 #define RADIO_KP_URL "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
 
 void RadioPropagationAdapter::init() {
@@ -75,7 +75,25 @@ float RadioPropagationAdapter::deriveFOT(float muf) {
     return 0.85f * muf;  // definicion operacional ITU
 }
 
-float RadioPropagationAdapter::deriveLUF(float muf, float foF2, float latDeg, float lonDeg, double utc) {
+float RadioPropagationAdapter::flareAbsorption(float xrayFlux, float dayFactor) {
+    // M7 (plan 10): A ~ F^0.75 en banda 0.1-0.8 nm; F<=1e-7 (fondo A) -> 0.
+    // Fuente unica del termino (P4): deriveLUF y el trigger del panel.
+    return (xrayFlux > 1e-7f)
+        ? 2.5f * powf(xrayFlux / 1e-6f, 0.75f) * (0.3f + 0.7f * dayFactor)
+        : 0.0f;
+}
+
+float RadioPropagationAdapter::dRegionAbsorptionDb(float cosChi, float xrayFlux, float kp) {
+    // M7 (plan 10): absorcion D mostrable (dB) = SID diurno + auroral polar.
+    float dayFactor = fmaxf(0.0f, cosChi);
+    float sid = (xrayFlux >= 1e-7f)
+        ? 4.5f * powf(fmaxf(xrayFlux, 1e-7f) / 1e-6f, 0.75f) * dayFactor : 0.0f;
+    float auroral = 0.35f * powf(fmaxf(kp, 0.0f), 2.1f);   // capa D polar
+    return sid + auroral;
+}
+
+float RadioPropagationAdapter::deriveLUF(float muf, float foF2, float latDeg, float lonDeg, double utc,
+                                         float xrayFlux, float kp) {
     if (muf <= 0.0f) return 0.0f;
     // Absorcion de capa D: maxima de dia en el subsolar. Aproximacion simple:
     // hora local solar a partir de lon + UTC.
@@ -89,10 +107,20 @@ float RadioPropagationAdapter::deriveLUF(float muf, float foF2, float latDeg, fl
     float utcH = (float)tmv.tm_hour + (float)tmv.tm_min / 60.0f;
     float lstH = fmodf(utcH + lonDeg / 15.0f + 24.0f, 24.0f);
     float dayF = fmaxf(0.0f, cosf((lstH - 12.0f) * 3.14159265f / 12.0f));  // 1 al mediodia
-    float absorb = 1.2f + 2.8f * dayF * fmaxf(0.0f, cosf(latDeg * 3.14159265f / 180.0f));
-    float luf = 0.35f * muf + 0.5f * absorb;
-    if (foF2 > 0.0f) luf = fminf(luf, fmaxf(2.0f, 0.9f * foF2));
-    return fmaxf(2.0f, luf);
+    // M7 (plan 10, P2 sellado): base diurna con 0.7 fijo — el circuito
+    // medio-latitud de la demo absorbe el cos(lat) anterior. latDeg queda
+    // en la firma por compatibilidad de callers; kp por simetria con
+    // deriveSpreadF (el modelo LUF del plan 10 no lo usa: la auroral vive
+    // en dRegionAbsorptionDb para el aviso).
+    float absorb = 1.2f + 2.8f * dayF * 0.7f;               // base diurna
+    float flareAbsorb = flareAbsorption(xrayFlux, dayF);    // F<=1e-7 -> 0
+    float luf = 0.35f * muf + 0.5f * (absorb + flareAbsorb);
+    luf = fminf(fmaxf(luf, 1.5f), 20.0f);                   // clamp literal (plan 10)
+    // Cap 0.9*foF2 SOLO en calma (P3 sellado): con flare activo el cap
+    // mataria la senal del SID (aceptacion 2: LUF sube 4-5 MHz con F=1e-5).
+    if (foF2 > 0.0f && flareAbsorb <= 0.0f)
+        luf = fminf(luf, fmaxf(2.0f, 0.9f * foF2));
+    return fmaxf(2.0f, luf);                                // suelo historico
 }
 
 float RadioPropagationAdapter::deriveSpreadF(float latDeg, float lonDeg, double utc, float kpProxy) {
@@ -139,9 +167,10 @@ float RadioPropagationAdapter::deriveFaraday(float tecu, float latDeg) {
     return 2.2f * tec * (0.4f + 0.6f * fabsf(dip));
 }
 
-float RadioPropagationAdapter::stationValue(const StationSample& s, int var, double utc, float kpProxy) {
+float RadioPropagationAdapter::stationValue(const StationSample& s, int var, double utc, float kpProxy,
+                                            float xrayFlux) {
     switch (var) {
-        case RADIO_LUF:      return deriveLUF(s.muf, s.foF2, s.latDeg, s.lonDeg, utc);
+        case RADIO_LUF:      return deriveLUF(s.muf, s.foF2, s.latDeg, s.lonDeg, utc, xrayFlux, kpProxy);
         case RADIO_FOT:      return deriveFOT(s.muf);
         case RADIO_SPREAD_F: return deriveSpreadF(s.latDeg, s.lonDeg, utc, kpProxy);
         case RADIO_MUF:
@@ -171,8 +200,8 @@ void RadioPropagationAdapter::fillSimulated(double utc) {
     }
 }
 
-bool RadioPropagationAdapter::fetch(double utc, const std::vector<StationSample>& giroSamples) {
-    // 1) Mediana MUF/foF2 de estaciones GIRO validas (datos reales scaled.php).
+bool RadioPropagationAdapter::fetch(double utc, const std::vector<StationSample>& giroSamples, float xrayFlux) {
+    // 1) Mediana MUF/foF2 de estaciones GIRO validas (datos reales getbest).
     std::vector<float> mufs, fofs;
     for (const auto& s : giroSamples) {
         if (!s.valid) continue;
@@ -205,7 +234,11 @@ bool RadioPropagationAdapter::fetch(double utc, const std::vector<StationSample>
     latest_.timeUtc = utc;
     latest_.muf = mufMed;
     latest_.fot = deriveFOT(mufMed);
-    latest_.luf = deriveLUF(mufMed, fofs.empty() ? mufMed * 0.4f : fofs[fofs.size()/2], 0.0f, 0.0f, utc);
+    // M7: LUF global con el termino SID del flujo del pase anterior y el kp
+    // interno ya resuelto (kp mock 2.0 si NOAA fallo, linea ~203).
+    latest_.luf = deriveLUF(mufMed, fofs.empty() ? mufMed * 0.4f : fofs[fofs.size()/2], 0.0f, 0.0f, utc,
+                            xrayFlux, kp);
+
     // S4 global: mediana ecuatorial nocturna estimada
     latest_.s4 = 0.06f + 0.05f * kp + 0.04f * sinf((float)(utc * 0.00001));
     if (latest_.s4 < 0.03f) latest_.s4 = 0.03f;

@@ -117,7 +117,9 @@ endif()
 
 # Tests (logica pura: sin GL/GLFW/red — corren en cualquier CI).
 # Condicion 5 de la revision MUSE. M4: test_getbest_parse con fixture real
-# (multichar EB040 capturado en vivo); M5: test_model_foF2 (clima+haversine).
+# (multichar EB040 capturado en vivo); M5: test_model_foF2 (clima+haversine);
+# M7: test_d_region (absorcion D + LUF-SID).
+
 enable_testing()
 # M4 (7.1): parser multichar de getbest — llama a PRODUCCION
 # (GiroAdapter::parseGetbest real sobre fixture real), no replica.
@@ -140,6 +142,14 @@ add_executable(test_model_foF2 tests/test_model_foF2.cpp)
 target_include_directories(test_model_foF2 PRIVATE src libs/glad/include)
 target_sources(test_model_foF2 PRIVATE src/Utils/SolarPosition.cpp)
 add_test(NAME model_foF2 COMMAND test_model_foF2)
+# M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
+# PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
+# RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.
+add_executable(test_d_region tests/test_d_region.cpp)
+target_include_directories(test_d_region PRIVATE src)
+target_sources(test_d_region PRIVATE src/Data/RadioPropagationAdapter.cpp)
+target_link_libraries(test_d_region PRIVATE CURL::libcurl)
+add_test(NAME d_region COMMAND test_d_region)
 add_executable(test_hop_geometry tests/test_hop_geometry.cpp)
 target_include_directories(test_hop_geometry PRIVATE src)
 add_test(NAME hop_geometry COMMAND test_hop_geometry)

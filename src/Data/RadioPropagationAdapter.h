@@ -3,7 +3,7 @@
 #include <vector>
 
 // Muestra global de propagacion HF / efectos ionosfericos (Fase 5).
-// - MUF/LUF/FOT/Spread-F derivan de GIRO scaled.php (via GiroAdapter samples).
+// - MUF/LUF/FOT/Spread-F derivan de GIRO getbest (via GiroAdapter samples, M4).
 // - S4/AE/TAI/Faraday intentan NOAA SWPC y caen a mock plausible si no hay red.
 struct RadioPropSample {
     float muf = 0.0f;        // MHz, mediana global MUF(D) 3000km
@@ -40,7 +40,10 @@ public:
     void init();
     // Calcula el snapshot global a partir de las muestras GIRO + intento NOAA.
     // Devuelve true si uso datos GIRO reales, false si todo mock.
-    bool fetch(double utc, const std::vector<StationSample>& giroSamples);
+    // M7 (plan 10): xrayFlux (W/m^2, GOES 0.1-0.8 nm) activa el termino SID
+    // del LUF global; el worker lo pasa del bundle X-ray del pase anterior
+    // (rp corre antes que xr en el mismo pase; stale <= 5 min — sellado).
+    bool fetch(double utc, const std::vector<StationSample>& giroSamples, float xrayFlux);
 
     const RadioPropSample& getLatest() const { return latest_; }
     const std::vector<RadioPropHistoryPoint>& getAeHistory() const { return aeHistory_; }
@@ -51,16 +54,28 @@ public:
     const std::string& getErrorMessage() const { return error_; }
 
     // --- Derivadas por estacion (ITU / practica operacional) ---
-    // FOT = 0.85 * MUF(D). LUF ~= absorcion D + MUF: max(2 MHz, 0.35*MUF + dia).
+    // FOT = 0.85 * MUF(D). LUF: absorcion D diurna + termino SID por flare
+    // X-ray (M7, plan 10 — Sauer-Wilkinson simplificado); cap 0.9*foF2 solo
+    // en calma, suelo 2 MHz, techo 20 MHz.
     // Spread-F %: pico nocturno ecuatorial (|lat|<20, noche) modulado por Kp proxy.
     // S4: pico ecuatorial nocturno post-puesta de sol.
-    static float deriveLUF(float muf, float foF2, float latDeg, float lonDeg, double utc);
+    static float deriveLUF(float muf, float foF2, float latDeg, float lonDeg, double utc,
+                           float xrayFlux, float kp);
     static float deriveFOT(float muf);
     static float deriveSpreadF(float latDeg, float lonDeg, double utc, float kpProxy);
     static float deriveS4(float latDeg, float lonDeg, double utc);
     static float deriveFaraday(float tecu, float latDeg);
+    // M7 (plan 10, P4 sellado): termino de flare del LUF (MHz-equivalente,
+    // A ~ F^0.75). Unica fuente de verdad: la usa deriveLUF (dayF interno
+    // lstH) y el panel para el trigger del aviso (dayFactor = max(0, cosChi);
+    // caveat dayF-vs-cosChi del sello: ambos monotonos en F, advisory).
+    static float flareAbsorption(float xrayFlux, float dayFactor);
+    // M7 (plan 10): absorcion D mostrable en dB (SID diurno + auroral Kp)
+    // para el aviso del panel. cosChi del circuito via densityDir (patron M5).
+    static float dRegionAbsorptionDb(float cosChi, float xrayFlux, float kp);
     // Valor por estacion segun RadioGridVar (para IDW en App.cpp o buildGrid).
-    static float stationValue(const StationSample& s, int var, double utc, float kpProxy);
+    static float stationValue(const StationSample& s, int var, double utc, float kpProxy,
+                              float xrayFlux);
 
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
