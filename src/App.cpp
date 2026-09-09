@@ -39,6 +39,7 @@
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
 #include "Data/GiroAdapter.h"
+#include "Data/Kc2gAdapter.h"   // M4R-A: failover kc2g (FASE A sellada)
 #include "Data/SolarIndicesAdapter.h"
 #include "Data/SolarWindAdapter.h"
 #include "Data/RadioPropagationAdapter.h"
@@ -118,6 +119,17 @@ struct App::Impl {
     DataManager dataManager;
     GiroAdapter giro;
     DiasAdapter dias;   // complemento europeo (misma StationSample)
+    // M4R-A (FASE A): failover-only de GIRO via prop.kc2g.com. lgdc
+    // sigue primario escalonado; kc2g entra SOLO si lgdc falla.
+    Kc2gAdapter kc2g;
+    // Fusion catalogo-GIRO + kc2g del modo fallback (solo hilo de
+    // render; se reconstruye al llegar batch nuevo — kc2gMergedStamp).
+    std::vector<StationSample> kc2gMerged;
+    double kc2gMergedStamp = -1.0;
+    // Fuente ionosferica activa (badge UI GIRO-live/kc2g-fallback/model).
+    enum IonSource { SRC_MODEL = 0, SRC_GIRO_LIVE = 1, SRC_KC2G_FALLBACK = 2 };
+    std::atomic<int> ionSourceMode{SRC_MODEL};
+    std::atomic<bool> catalogDone{false};   // catalogo GIRO intentado (exito o no)
     SolarWindLayer solarWindLayer;
     FaradayLayer faradayLayer;
     RefShells refShells;
@@ -303,6 +315,27 @@ static std::vector<StationSample> mergeDias(const std::vector<StationSample>& gi
     return out;
 }
 
+// M4R-A (FASE A): fusion GIRO+kc2g (solo en modo fallback). El catalogo
+// GIRO conserva posiciones/nombres; kc2g rellena o actualiza datos por
+// codigo cuando su fila es mas fresca (o la entrada no tiene dato).
+// DIAS se fusiona encima despues (mergeDias: mismo patron de relleno).
+static std::vector<StationSample> mergeKc2g(const std::vector<StationSample>& giro,
+                                            const std::vector<StationSample>& kc2g) {
+    std::vector<StationSample> out = giro;
+    for (const auto& k : kc2g) {
+        if (!k.valid) continue;
+        bool replaced = false;
+        for (auto& e : out) {
+            if (e.code != k.code) continue;
+            if (!e.valid || k.timeUtc >= e.timeUtc) e = k;   // kc2g fresco gana
+            replaced = true;
+            break;
+        }
+        if (!replaced) out.push_back(k);   // estacion nueva para el catalogo
+    }
+    return out;
+}
+
 // Convierte muestras GIRO a puntos de render para la capa de ionosondas.
 static std::vector<StationPoint> giroPointsFrom(const std::vector<StationSample>& src) {
     std::vector<StationPoint> out;
@@ -328,6 +361,8 @@ static std::vector<StationPoint> giroPointsFrom(const std::vector<StationSample>
         p.code = s.code;
         p.name = s.name;
         p.valid = s.valid;
+        p.timeUtc = s.timeUtc;   // M4R-A: edad de la fila (marca en paneles)
+        p.stale = s.stale;       // M4R-A: kc2g 6-24 h o EG931 (panel si, grids no)
         out.push_back(p);
     }
     return out;
@@ -357,7 +392,8 @@ static GridData giroInterpGrid(const std::vector<StationSample>& samples, int va
     g.valid = false;
 
     std::vector<StationSample> pts;
-    for (const auto& s : samples) if (s.valid) pts.push_back(s);
+    // M4R-A: filas stale (kc2g 6-24 h / EG931-2024) fuera de los grids.
+    for (const auto& s : samples) if (s.valid && !s.stale) pts.push_back(s);
     if (pts.empty()) return g;
 
     const float maxDist = 50.0f;   // radio de influencia en grados
@@ -448,7 +484,8 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
     g.valid = false;
 
     std::vector<StationSample> pts;
-    for (const auto& s : samples) if (s.valid) pts.push_back(s);
+    // M4R-A: filas stale (kc2g 6-24 h / EG931-2024) fuera de los grids.
+    for (const auto& s : samples) if (s.valid && !s.stale) pts.push_back(s);
     if (pts.empty()) return g;
 
     const float maxDist = 50.0f;
@@ -505,7 +542,8 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
                                                      const glm::vec3& sunDir, double epoch, double f107) {
     std::vector<LayerProfile> out((size_t)w * h);
     std::vector<StationSample> pts;
-    for (const auto& s : samples) if (s.valid) pts.push_back(s);
+    // M4R-A: filas stale (kc2g 6-24 h / EG931-2024) fuera del volumen.
+    for (const auto& s : samples) if (s.valid && !s.stale) pts.push_back(s);
     if (pts.empty()) return out;
 
     const float maxDist = 50.0f;
@@ -1050,10 +1088,12 @@ bool App::init(int width, int height, const char* title) {
         impl->catalogPreloadThread = std::thread([self]() {
             if (!self->impl->shutdownRequested.load() && self->impl->giro.fetchCatalog())
                 self->impl->catalogReady.store(true);
+            self->impl->catalogDone.store(true);   // M4R-A: catalogo intentado (exito o fallo)
         });
     }
     impl->dias.init();
     impl->dias.fetchAsync((double)std::time(nullptr));  // complemento EU en background
+    impl->kc2g.init();   // M4R-A: failover (solo curl_global_init + printf)
 
     // Viento solar (Fase 4): capa de flechas 3D (datos via worker).
     impl->solarWindLayer.init();
@@ -1314,6 +1354,48 @@ void App::update(float dt) {
         lastIndexFetch = now;
     }
 
+    // ---- M4R-A (FASE A sellada): failover kc2g — lgdc primario escalonado,
+    // kc2g entra SOLO cuando lgdc falla (conmutacion automatica en ambos
+    // sentidos; always-on moveria el riesgo de baneo al redistribuidor
+    // voluntario — fuera por sello). Evidencia NEGATIVA de fallo de lgdc:
+    // ronda con >=3 intentos y 0 aciertos (429 duro en curso) o catalogo
+    // caido (sin estaciones: sin ronda posible). Evidencia POSITIVA de
+    // recuperacion: aciertos en la ronda Y datos. Histeresis anti-flap:
+    // una vez en fallback se sale SOLO con evidencia positiva — la
+    // ventana breve de ronda recien reseteada (attempted<3) no cuenta
+    // como recuperacion. La ronda escalonada sigue su curso en
+    // background — primaria sigue siendo primaria. Si kc2g tambien cae
+    // (>30 min sin batch bueno), la red final es el modelo (M5). ----
+    const bool kc2gMode = [&]() -> bool {
+        GiroAdapter::GiroNetStatus gsF = impl->giro.getNetStatus();
+        const bool catalogFailed = impl->catalogDone.load() && !impl->catalogReady.load();
+        const bool failing = (gsF.roundAttempts >= 3 && gsF.roundOk == 0) || catalogFailed;
+        const bool recovering = (gsF.roundOk > 0 && gsF.withData > 0);
+        const int prevMode = impl->ionSourceMode.load();
+        const bool wantFailover = failing ||
+            (prevMode == Impl::SRC_KC2G_FALLBACK && !recovering);
+        const double wallNow = (double)std::time(nullptr);
+        Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+        const bool kc2gActive = ks.panelUsable > 0 && ks.lastOkUtc > 0.0 &&
+                                (wallNow - ks.lastOkUtc) <= 1800.0;
+        int mode = Impl::SRC_MODEL;
+        if (wantFailover && kc2gActive) mode = Impl::SRC_KC2G_FALLBACK;
+        else if (gsF.withData > 0 && !failing) mode = Impl::SRC_GIRO_LIVE;
+        impl->ionSourceMode.store(mode);
+        // Fetch del failover: 1 GET por ciclo (600 s, el ritmo GIRO) SOLO
+        // mientras se quiera failover — nunca en GIRO-live estable.
+        if (wantFailover && !impl->kc2g.isFetching() &&
+            (ks.lastFetchUtc <= 0.0 || wallNow - ks.lastFetchUtc >= 600.0)) {
+            impl->kc2g.fetchAsync(wallNow);
+        }
+        // Fusion cacheada del modo fallback (antes de replay/gsLive).
+        if (mode == Impl::SRC_KC2G_FALLBACK && ks.lastOkUtc != impl->kc2gMergedStamp) {
+            impl->kc2gMerged = mergeKc2g(impl->giro.getSamples(), impl->kc2g.copySamples());
+            impl->kc2gMergedStamp = ks.lastOkUtc;
+        }
+        return mode == Impl::SRC_KC2G_FALLBACK;
+    }();
+
     // Replay temporal: TEC interpolado + red GIRO muestreada al mismo instante.
     // En replay, puntos, grids derivados (foF2/MUF/hmF2/NmF2/LUF/FOT/Spread-F)
     // y panel de estacion siguen al tiempo de replay, no al directo.
@@ -1346,7 +1428,12 @@ void App::update(float dt) {
                 updateMainGrid(blendGrids(fa, fb, f));
             }
             replayEpoch = fa.timestamp * (1.0 - f) + fb.timestamp * f;
-            impl->giroReplayCache = impl->giro.sampleHistoryAt(replayEpoch);
+            // M4R-A: en kc2g-fallback el replay se congela al ultimo batch
+            // (kc2g no trae historia; el clamp de sampleHistoryAt al ultimo
+            // valor es lo equivalente — replay congelado pero honesto,
+            // marcado stale: sello FASE A).
+            impl->giroReplayCache = kc2gMode ? impl->kc2gMerged
+                                              : impl->giro.sampleHistoryAt(replayEpoch);
         }
     }
 
@@ -1359,7 +1446,9 @@ void App::update(float dt) {
     impl->updateSunDirection(effEpoch);
     impl->terminator.update(impl->sunDirection);  // anillo dia/noche real (~1 KB/frame)
 
-    const std::vector<StationSample>& gsLive = impl->giro.getSamples();
+    // M4R-A: fuente viva por modo (kc2g-fallback -> fusion cacheada).
+    const std::vector<StationSample>& gsLive =
+        kc2gMode ? impl->kc2gMerged : impl->giro.getSamples();
     const std::vector<StationSample>& gsAct =
         (impl->replayMode && !impl->giroReplayCache.empty()) ? impl->giroReplayCache : gsLive;
 
@@ -1369,14 +1458,15 @@ void App::update(float dt) {
     // En live se fusiona DIAS (rellena huecos GIRO con coords del catalogo).
     impl->ionosondeLayer.setFetching(impl->giro.isFetching() && !impl->replayMode);
     impl->ionosondeLayer.setProgress(impl->giro.getProgress());
-    impl->ionosondeLayer.setDataIndicator(impl->giro.getDataIndicator());
+    impl->ionosondeLayer.setDataIndicator(
+        kc2gMode ? impl->kc2g.getDataIndicator() : impl->giro.getDataIndicator());
     static double lastSamplesApply = -1.0;
     if (lastSamplesApply < 0 || (now - lastSamplesApply) > 2.0) {
         if (impl->replayMode) {
             impl->ionosondeLayer.updateSamples(giroPointsFrom(gsAct));
         } else {
             impl->ionosondeLayer.updateSamples(
-                giroPointsFrom(mergeDias(impl->giro.getSamples(), impl->dias.copySamples())));
+                giroPointsFrom(mergeDias(gsLive, impl->dias.copySamples())));
         }
         lastSamplesApply = now;
     }
@@ -1838,7 +1928,11 @@ void App::fetchWorker() {
 
         // 5) Propagacion HF (usa muestras GIRO thread-safe).
         {
-            auto samples = impl->giro.copySamples();
+            // M4R-A: en kc2g-fallback la mediana MUF/foF2 del panel HF viene
+            // del batch kc2g (panel window <=24 h); si no, GIRO como siempre.
+            auto samples = (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK)
+                ? impl->kc2g.copySamples()
+                : impl->giro.copySamples();
             // M7 (plan 10): el LUF global reacciona al flare X-ray. rp.fetch
             // corre ANTES que xr.fetch() del mismo pase, asi que recibe el
             // flujo del bundle del pase anterior (xr persiste entre pases de
@@ -2008,6 +2102,20 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
     static const char* CM_NAMES[4] = { "viridis", "inferno", "plasma", "turbo" };
     static const int VAR_AUTO_CM[8] = { 0, 2, 1, 3, 3, 2, 1, 3 };  // TEC,foF2,MUF,hmF2,NmF2,LUF,FOT,SpF
 
+    // M4R-A: fuente viva por modo (kc2g-fallback -> fusion cacheada;
+    // misma cache/estampado que usa update() — lambda dentro del metodo
+    // porque App::Impl es private para funciones libres).
+    const std::vector<StationSample>& gsSrc = [&]() -> const std::vector<StationSample>& {
+        if (impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
+            return impl->giro.getSamples();
+        Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+        if (ks.lastOkUtc != impl->kc2gMergedStamp) {
+            impl->kc2gMerged = mergeKc2g(impl->giro.getSamples(), impl->kc2g.copySamples());
+            impl->kc2gMergedStamp = ks.lastOkUtc;
+        }
+        return impl->kc2gMerged;
+    }();
+
     if (impl->mapVariable == 0) {
         impl->tecLayer.setDisplaceCentered(false);
         impl->shellLayer.setDisplaceCentered(false);
@@ -2017,7 +2125,7 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
         }
     } else if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
         int var = impl->mapVariable - 1;   // 0=foF2,1=MUF,2=hmF2,3=NmF2
-        GridData g = giroInterpGrid(impl->giro.getSamples(), var, 72, 72);
+        GridData g = giroInterpGrid(gsSrc, var, 72, 72);   // M4R-A
         if (!g.valid) return;
         bool centered = (var == 2);   // hmF2: relieve de alturas reales
         impl->tecLayer.setDisplaceCentered(centered);
@@ -2033,7 +2141,7 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
         // M7 (plan 10): flujo X-ray del ultimo bundle para el termino SID.
         float xrFlux = (impl->lastXray && impl->lastXray->latest.valid)
             ? impl->lastXray->latest.flux : 0.0f;
-        GridData g = radioInterpGrid(impl->giro.getSamples(), var, 72, 72, epoch, kpProxy, xrFlux);
+        GridData g = radioInterpGrid(gsSrc, var, 72, 72, epoch, kpProxy, xrFlux);   // M4R-A
         if (!g.valid) return;
         if (var == 2) impl->tecLayer.setRange(0.0f, 100.0f);  // Spread-F % fijo
         else impl->tecLayer.clearRange();
@@ -2578,6 +2686,22 @@ void App::render() {
             "GIRO: rate-limited, retry %.0f min", giroStatus.retryInMin);
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Some stations failed (429/timeout): their refresh interval doubles up to 30 min until success. Their last good data is kept.");
     }
+    // M4R-A (FASE A): badge de fuente + estado y atribucion del failover.
+    if (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK) {
+        Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+        ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.3f, 1.0f),
+            "Source: kc2g-fallback (%d/%d st, freshest %.0f min)",
+            ks.panelUsable, ks.rows, ks.freshestAgeMin < 0.0 ? 0.0 : ks.freshestAgeMin);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+            "GIRO (lgdc.uml.edu) is failing or rate-limited: automatic failover to the prop.kc2g.com redistribution (101 stations; GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds). One request per cycle, only while GIRO fails. Rows older than 6 h stay out of the maps; up to 24 h they only feed panels, marked stale. EG931 is excluded from maps (NOAA feed frozen since 2024).");
+        ImGui::TextDisabled("Data: GIRO/WWROF via kc2g + eSWua/INGV");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+            "Attribution per KC2G's acknowledgment page and GIRO Rules of the Road: GIRO community data, CC BY-NC-SA 4.0 (non-commercial educational use). Please cite: Reinisch, B. W., and I. A. Galkin, Global ionospheric radio observatory (GIRO), Earth, Planets and Space, 63, 377-381, doi:10.5047/eps.2011.03.001, 2011.");
+    } else if (impl->ionSourceMode.load() == Impl::SRC_MODEL) {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Source: model (no live GIRO/kc2g)");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+            "Neither GIRO (lgdc) nor the kc2g failover has fresh station data: the maps and the HF guide fall back to the climatological model / global medians (M5 net).");
+    }
     {
         int nDias = impl->dias.getStationCount();
         if (impl->dias.isFetching()) {
@@ -2617,9 +2741,15 @@ void App::render() {
                     giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
                 ImGui::Text("B0 %s km  B1 %s",
                     giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
+                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
+                if (sp->stale && sp->valid)
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                        "stale row (>6 h; maps exclude it)");
                 // M4 (P4): fuera de la lista prioritaria -> catalogo visible
-                // sin polling (dropdown): avisarlo en el tooltip.
-                if (!impl->giro.isPolled(sp->code))
+                // sin polling (dropdown): avisarlo en el tooltip (en modo
+                // kc2g TODAS las filas mostradas traen dato del failover).
+                if (!impl->giro.isPolled(sp->code) &&
+                    impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
                     ImGui::TextDisabled("not polled (catalog only)");
                 // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
                 // Busca en GIRO y DIAS.
@@ -3001,8 +3131,18 @@ void App::render() {
         ImGui::TextColored(rpPinned ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
             "%s (%s) %s", rpStation->name.c_str(), rpStation->code.c_str(),
             rpPinned ? "[pinned]" : "[hover]");
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Station source: GIRO getbest (foF2/MUF/hmF2/B0 measured, rest derived). Click the station again or empty space to unpin.");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+            impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK
+                ? "Station source: kc2g failover (foF2/MUF/hmF2 measured, redistributed by prop.kc2g.com; B0/B1 fall back to IRI defaults). Click the station again or empty space to unpin."
+                : "Station source: GIRO getbest (foF2/MUF/hmF2/B0 measured, rest derived). Click the station again or empty space to unpin.");
         if (rpPinned && ImGui::SmallButton("Unpin")) impl->pinnedCode.clear();
+        // M4R-A: fila del panel en banda stale (6-24 h) — marcada, honesta.
+        if (rpStation->stale && rpStation->valid) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "stale (%.1f h old)",
+                (rpEpoch - rpStation->timeUtc) / 3600.0);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+                "kc2g failover time-filter: this row is older than 6 h, so it still feeds panels but stays out of the interpolated maps.");
+        }
         if (!stHasData) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "No data yet for this station");
         // Perfil directo del Ebre (solo EB040): SAO crudo via FTP, sin GIRO.
         if (rpStation->code == "EB040") {
@@ -3108,8 +3248,9 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("S4 24h (0-1). Rises at night near the equator.");
     if (rp.valid && rpSim)
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "(simulated: offline)");
-    else if (rp.valid && rpGiro)
-        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "(GIRO real)");
+    else if (rp.valid && rpGiro)   // M4R-A: la mediana puede venir del failover
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+            impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK ? "(kc2g real)" : "(GIRO real)");
     if (!rpErr.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", rpErr.c_str());
     ImGui::End();
@@ -3474,11 +3615,25 @@ void App::render() {
         }
         // M4 (P5a): linea de estado GIRO en ambos modos — rango real de replay
         // de estaciones y aviso de cortesia (rate-limit con reintento).
-        if (gs.degraded > 0) {
+        // M4R-A (FASE A): la linea ES el badge de fuente (GIRO-live /
+        // kc2g-fallback / model); en fallback resume el estado kc2g.
+        if (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK) {
+            Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+            ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.3f, 1.0f),
+                "kc2g-fallback: %d/%d st (retry GIRO in %.0f min)",
+                ks.panelUsable, ks.rows, gs.retryInMin);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+                "GIRO is rate-limited: station data comes from the prop.kc2g.com failover (GIRO/WWROF, 1 req/cycle). The staggered GIRO round keeps retrying in the background; when it answers again the source switches back to GIRO-live automatically.");
+        } else if (impl->ionSourceMode.load() == Impl::SRC_MODEL) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                "model: no live station data");
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+                "No fresh GIRO or kc2g station data: climatological model in charge (M5).");
+        } else if (gs.degraded > 0) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                "GIRO: rate-limited, retry %.0f min", gs.retryInMin);
+                "GIRO-live: degraded, retry %.0f min", gs.retryInMin);
         } else {
-            ImGui::Text("GIRO: %d/%d st  hist %.1f h", gs.withData, gs.polled, gs.histHours);
+            ImGui::Text("GIRO-live: %d/%d st  hist %.1f h", gs.withData, gs.polled, gs.histHours);
         }
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Polled GIRO stations and their history depth (the worst station limits station replay). Backoff protects the GIRO service.");
         ImGui::End();

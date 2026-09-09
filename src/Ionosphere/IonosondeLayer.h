@@ -27,6 +27,8 @@ struct StationPoint {
     std::string code;
     std::string name;
     bool valid = false;
+    double timeUtc = 0.0;   // M4R-A: epoch de la fila (edad en paneles)
+    bool stale = false;     // M4R-A: fila kc2g 6-24 h o EG931 (panel si, grids no)
 };
 
 // IonosondeLayer: renderiza estaciones de sondeo ionosferico (red GIRO) como

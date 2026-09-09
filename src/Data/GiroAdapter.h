@@ -47,6 +47,10 @@ struct StationSample {
     float fmin = 0.0f;     // MHz (minima frecuencia del ionograma)
     double timeUtc = 0.0;  // Unix time de la ultima fila (0 si no parseable)
     bool valid = false;    // true si se obtuvo una muestra real
+    // M4R-A (FASE A): fila del panel-window kc2g NO apta para grids
+    // (6-24 h de edad, o EG931-2024 por regla explicita). GIRO-live
+    // nunca la pone (queda false).
+    bool stale = false;
     int cs = 0;            // Autoscaling Confidence Score
     std::vector<GiroHistoryPoint> history;  // serie completa (<=72 filas, ascendente; M4: 6 h @ 5 min)
 };
@@ -108,6 +112,11 @@ public:
         int degraded = 0;           // en backoff (429/fallo reciente)
         double retryInMin = 0.0;    // reintento mas proximo (si degraded > 0)
         double histHours = 0.0;     // alcance atras del peor historial (h)
+        // M4R-A: telemetria EN VIVO de la ronda getbest (failover kc2g):
+        // intentos/aciertos de la ronda en curso o de la ultima.
+        // roundAttempts >= 3 con roundOk == 0 = lgdc fallando (429 duro).
+        int roundAttempts = 0;
+        int roundOk = 0;
     };
     GiroNetStatus getNetStatus() const;
     // M4 (P4): true si el codigo URSI esta en la lista prioritaria; el resto
@@ -135,5 +144,8 @@ private:
     std::map<std::string, FetchState> fetchState_;
     std::atomic<bool> fetching_{false};
     std::atomic<int> progress_{0};
+    // M4R-A: conteo vivo de la ronda (lo publica getNetStatus).
+    std::atomic<int> roundAttempts_{0};
+    std::atomic<int> roundOk_{0};
     double lastFetchUtc_ = 0.0;
 };

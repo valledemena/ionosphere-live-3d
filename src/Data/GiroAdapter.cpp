@@ -307,6 +307,12 @@ int GiroAdapter::pollRound(double nowUtc) {
     }
     if (todo.empty()) return 0;
 
+    // M4R-A: telemetria en vivo de la ronda (reset por ronda; el worker
+    // la actualiza intento a intento — getNetStatus la publica para el
+    // failover kc2g: >=3 intentos con 0 aciertos = lgdc fallando).
+    roundAttempts_.store(0);
+    roundOk_.store(0);
+
     const int total = (int)todo.size();
     std::atomic<int> next{0};
     std::atomic<int> ok{0};
@@ -336,6 +342,7 @@ int GiroAdapter::pollRound(double nowUtc) {
             // Fallo (HTTP/timeout/429 o STATUS: ERROR) -> backoff de ESA
             // estacion; su ultimo dato bueno se conserva (aceptacion 5).
             bool good = getbestGet(s.code, resp) && parseGetbest(resp, s);
+            roundAttempts_.fetch_add(1);   // M4R-A: intento completado (vivo)
             std::lock_guard<std::mutex> lk(mutex_);
             FetchState& st = fetchState_[s.code];
             st.lastAttemptUtc = attemptUtc;   // T2: instante real del intento
@@ -344,6 +351,7 @@ int GiroAdapter::pollRound(double nowUtc) {
                 st.degraded = false;
                 for (auto& e : samples_) if (e.code == s.code) e = s;
                 ok++;
+                roundOk_.fetch_add(1);   // M4R-A
             } else {
                 st.intervalSec = std::min(st.intervalSec * 2.0, 1800.0);   // x2, cap 30 min
                 st.degraded = true;
@@ -403,6 +411,8 @@ float GiroAdapter::getLastUpdateAge() const {
 GiroAdapter::GiroNetStatus GiroAdapter::getNetStatus() const {
     std::lock_guard<std::mutex> lock(mutex_);
     GiroNetStatus st;
+    st.roundAttempts = roundAttempts_.load();   // M4R-A: ronda en curso/ultima
+    st.roundOk = roundOk_.load();
     double now = (double)std::time(nullptr);
     for (const auto& s : samples_) {
         if (prioritySet().count(s.code) == 0) continue;   // catalogo: sin polling

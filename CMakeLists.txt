@@ -57,6 +57,7 @@ set(SOURCES
     src/Data/EsaAdapter.cpp
     src/Data/GloTecAdapter.cpp
     src/Data/GiroAdapter.cpp
+    src/Data/Kc2gAdapter.cpp
     src/Data/NoaaAdapter.cpp
     src/Data/SolarIndicesAdapter.cpp
     src/Data/SolarWindAdapter.cpp
@@ -120,7 +121,9 @@ endif()
 # Condicion 5 de la revision MUSE. M4: test_getbest_parse con fixture real
 # (multichar EB040 capturado en vivo); M5: test_model_foF2 (clima+haversine);
 # M7: test_d_region (absorcion D + LUF-SID); M8: test_hf_circuit
-# (circuito HF: geodesia/slerp/bandState/MUF-FOT inline en HFTraceLayer.h).
+# (circuito HF: geodesia/slerp/bandState/MUF-FOT inline en HFTraceLayer.h);
+# M4R-A: test_kc2g_parse (failover kc2g: parser puro + time-filter +
+# fixture real de prop.kc2g.com; segunda implementacion = generador Python).
 
 enable_testing()
 # M4 (7.1): parser multichar de getbest — llama a PRODUCCION
@@ -135,6 +138,19 @@ if(NOT WIN32)
     target_link_libraries(test_getbest_parse PRIVATE Threads::Threads)
 endif()
 add_test(NAME getbest_parse COMMAND test_getbest_parse)
+# M4R-A (FASE A): parser kc2g del failover — llama a PRODUCCION
+# (Kc2gAdapter::parseStations/gridUsable/panelUsable/toSample sobre
+# fixture real capturado en vivo), no replica. LayerProfile.h (check del
+# sello sanitizeB0/B1) via IonosondeLayer.h: glad/glm solo cabeceras
+# (patron model_foF2). std::thread -> pthread en Linux (patron getbest).
+add_executable(test_kc2g_parse tests/test_kc2g_parse.cpp)
+target_include_directories(test_kc2g_parse PRIVATE src libs/glad/include)
+target_sources(test_kc2g_parse PRIVATE src/Data/Kc2gAdapter.cpp)
+target_link_libraries(test_kc2g_parse PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_kc2g_parse PRIVATE Threads::Threads)
+endif()
+add_test(NAME kc2g_parse COMMAND test_kc2g_parse)
 # M5 (plan 8.2/8.3): modelo climatologico + haversine — llama a
 # PRODUCCION (inline de LayerProfile.h + densityDir de DensityVolume.h
 # + SolarPosition real para el check de convencion subsolar), no replica.
