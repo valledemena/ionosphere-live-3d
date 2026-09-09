@@ -207,6 +207,37 @@ int main() {
                (double)hfc::ribbonHalfWidth(0.3f), 0.004, 1.0e-6);
     check_near("M10 hw clamp alto: hw(9.0) = hw(5) = 0.012",
                (double)hfc::ribbonHalfWidth(9.0f), 0.012, 1.0e-6);
+    printf("--- N) M9fix: apice sigue al slider de capa (offset + floor) ---\n");
+    // GENERADO por scripts/m9fix_gen_test.py (implementacion python
+    // independiente). hfc::legAltitudeKm 4-arg es PRODUCCION (las 2
+    // patas de buildPolyline la usan); el offset = altKm - 300 de App.
+    check_near("N1  leg(288,1,2.2,+100) = (288+100)*2.2 (apice @Alt 400)",
+               hfc::legAltitudeKm(288.0, 1.0, 2.2, 100.0), 853.6, 1.0e-9);
+    check_near("N2  leg(310,1,2.2,0) = 682 (offset 0 explicito = M9)",
+               hfc::legAltitudeKm(310.0, 1.0, 2.2, 0.0), 682.0, 1.0e-9);
+    check_near("N3  leg(310,0.65,2.2,0) = 443.3 (4-arg = M3)",
+               hfc::legAltitudeKm(310.0, 0.65, 2.2, 0.0), 443.3, 1.0e-9);
+    check_near("N4  floor: leg(180,0.5,1,-200) = 0 (base -20 clamped)",
+               hfc::legAltitudeKm(180.0, 0.5, 1.0, -200.0), 0.0, 0.0);
+    check_near("N5  floor apice: leg(180,1,2.2,-200) = 0",
+               hfc::legAltitudeKm(180.0, 1.0, 2.2, -200.0), 0.0, 0.0);
+    check_near("N6  bajada leg(288,0.35,2.2,+100) = 388*0.35*2.2",
+               hfc::legAltitudeKm(288.0, 0.35, 2.2, 100.0), 298.76, 1.0e-9);
+    check_near("N7  offset lineal: leg(288,0.5,1,+100) - leg(288,0.5,1,0) = 50",
+               hfc::legAltitudeKm(288.0, 0.5, 1.0, 100.0)
+               - hfc::legAltitudeKm(288.0, 0.5, 1.0, 0.0), 50.0, 1.0e-9);
+    {
+        bool monoN = true;
+        double prevN = hfc::legAltitudeKm(288.0, 0.0, 2.2, 100.0);
+        for (int t8 = 1; t8 <= 8; t8++) {
+            const double v = hfc::legAltitudeKm(288.0, (double)t8 / 8.0, 2.2, 100.0);
+            if (v < prevN) monoN = false;
+            prevN = v;
+        }
+        check_bool("N8  leg monotona no-decreciente en t (h'=288, off +100, exag 2.2)", monoN);
+    }
+    check_bool("N9  default-param: leg(310,1,2.2) == leg(310,1,2.2,0.0)",
+               hfc::legAltitudeKm(310.0, 1.0, 2.2) == hfc::legAltitudeKm(310.0, 1.0, 2.2, 0.0));
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

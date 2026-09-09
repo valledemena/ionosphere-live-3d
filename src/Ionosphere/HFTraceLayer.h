@@ -43,6 +43,12 @@
 // escala fisica; h' SIGUE vivo del grid GIRO) y el ancho escala con el
 // (hfc::ribbonHalfWidth). Pulso a paridad de la demo (0.22/2.5/0.9/0.9).
 // Fisica del circuito, grids y matriz de bandas intactas.
+// M9fix (re-check de DAVID con la demo al lado): (1) el apice ADEMAS
+// sigue al slider «Altitude (km)» de Layers — apice = (h' + altKm -
+// 300)·exag, offset en la firma P7 (la shell de color ya vive a
+// altKm·explode: el arco y la shell se mueven juntos, hueco (300-h')·
+// exag constante); (2) cursor del pulso MULTIPLICATIVO col*(0.55+
+// pulse) verbatim demo: el aditivo clipeaba a blanco. Fisica intacta.
 // =============================================================================
 
 namespace hfc {
@@ -171,11 +177,18 @@ inline double sampleGrid(const float* values, int w, int h, double lat, double l
 // (App.cpp: volumeLayer/refShells/shell ya lo siguen; el arco era la
 // unica capa que no. La fisica NO cambia: solo como se DIBUJA.) ---
 
-// Altitud de una muestra de pata (subida t, bajada 1-t): h'·t·exag.
-// Lineal en t => la exageracion escala una recta y no anade curvatura:
-// LEGS=14 (27/salto) sigue sub-pixel a cualquier exag.
-inline double legAltitudeKm(double hVirtualKm, double legT, double heightExag) {
-    return hVirtualKm * legT * heightExag;
+// Altitud de una muestra de pata (subida t, bajada 1-t): (h'+off)·t·exag.
+// M9fix: off = apexOffsetKm (App: altKm - 300, slider «Altitude (km)» de
+// Layers) — el apice sigue a la shell de color (applyAltitudes mueve
+// TEC/outer al mismo altKm·explode; default 300 => off = 0 = M9 exacto).
+// Lineal en t => exageracion y offset escalan una recta, sin curvatura:
+// LEGS=14 (27/salto) sigue sub-pixel a cualquier exag. Floor: la base
+// h'+off no baja de 0 (altKm=100 con h' bajo => sin arco subterraneo).
+inline double legAltitudeKm(double hVirtualKm, double legT, double heightExag,
+                            double apexOffsetKm = 0.0) {
+    double base = hVirtualKm + apexOffsetKm;   // M9fix: h' + (altKm - 300)
+    if (base < 0.0) base = 0.0;                // M9fix: floor anti-subterraneo
+    return base * legT * heightExag;
 }
 
 // Semiancho del ribbon: 0.004 en exag=1 (look M8 exacto), 0.0075 en
@@ -213,6 +226,7 @@ public:
         double txLatDeg = 0.0, txLonDeg = 0.0, rxLatDeg = 0.0, rxLonDeg = 0.0;
         float freqMHz = 14.0f;
         float heightExag = 1.0f;             // M9: multiplicador visual de altura (App: explodeFactor)
+        float apexOffsetKm = 0.0f;           // M9fix: offset del apice sobre h' (App: altKm - 300, slider de capa)
         long long gridStamp = 0;             // identidad de los grids (P7)
         const float* foF2Grid = nullptr;     // giroInterpGrid var 0 (72x72)
         const float* hmF2Grid = nullptr;     // giroInterpGrid var 2
@@ -223,7 +237,7 @@ public:
     void init();    // shader (archivo + fallback inline) + VAO/VBO
     void destroy();
     // P7: recomputa el circuito SOLO si la firma cambia (tx/rx | freq |
-    // stamp de grids | exag M9); el pulso viaja por uniform, sin rebuild.
+    // stamp de grids | exag | offset M9fix); el pulso viaja por uniform, sin rebuild.
     void update(const Input& in);
     void render(const glm::mat4& view, const glm::mat4& projection,
                 const glm::vec3& camPos, float timeSec);
@@ -242,11 +256,13 @@ private:
     int vertCount_ = 0;
     bool visible_ = false;
     float heightExag_ = 1.0f;                // M9: exag del ultimo rebuild (ancho en render)
+    float apexOffset_ = 0.0f;                // M9fix: offset del ultimo rebuild (buildPolyline)
     HFCircuitResult result_;
     // firma del ultimo update aplicado (P7) — arranque invalido
     double sigTxLat_ = 0.0, sigTxLon_ = 0.0, sigRxLat_ = 0.0, sigRxLon_ = 0.0;
     float sigFreq_ = -1.0f;
     float sigExag_ = 0.0f;                   // M9 (sentinela: fuera de [1,5])
+    float sigOffset_ = -1.0e30f;             // M9fix (sentinela: fuera de [-200,500])
     long long sigStamp_ = -1;
     bool sigValid_ = false;
 };

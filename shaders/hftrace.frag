@@ -12,7 +12,10 @@ void main() {
     // ciclos/s (recorrido 4.5 s), 2.5 pulsos en arco, envolvente
     // 0.9*exp(-36*(p-0.5)^2), ganancia 0.9, alpha 0.9. Direccion
     // TX->RX intacta: la fase sigue siendo (arco*k - t*v).
+    // M9fix: mezcla MULTIPLICATIVA col*(0.55+pulse), verbatim demo
+    // (shaders.ts:465-467): el cursor hereda el color del tramo; la
+    // aditiva col+pulse clipeaba a blanco (1.0+0.9) siempre.
     float p = fract(u_time * 0.22 - vT * 2.5);
     float pulse = 0.9 * exp(-36.0 * (p - 0.5) * (p - 0.5));
-    fragColor = vec4(col + vec3(pulse), 0.9);
+    fragColor = vec4(col * (0.55 + pulse), 0.9);
 }

@@ -1541,6 +1541,7 @@ void App::update(float dt) {
             }
             hfIn.freqMHz = impl->hfFreqMHz;
             hfIn.heightExag = impl->explodeFactor;   // M9: el arco acompana la altura visual (Layers/Explode)
+            hfIn.apexOffsetKm = impl->altKm - 300.0f;   // M9fix: apice = (h' + altKm-300)·exag — sigue al slider de capa (default 300 = M9 byte-exacto)
             hfIn.gridStamp = impl->hfGridStamp;
             if (impl->hfFoF2Grid.valid && !impl->hfFoF2Grid.values.empty())
                 hfIn.foF2Grid = impl->hfFoF2Grid.values.data();
@@ -2554,8 +2555,9 @@ void App::render() {
     if (ImGui::SliderFloat("Altitude (km)", &impl->altKm, 100.0f, 800.0f)) {
         impl->altKm = glm::clamp(impl->altKm, 100.0f, 800.0f);
         applyAltitudes();
+        impl->hfCircuitDirty = true;   // M9fix: rebuild del apice en el mismo frame (sigue al slider de capa)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Height of the color shell above the surface (100-800 km). The outer shell follows +0.025. Visual only.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Height of the color shell above the surface (100-800 km). The outer shell follows +0.025. Visual only. The HF ray apex follows this (offset over h').");
     if (ImGui::SliderFloat("Layer opacity", &impl->tecOpacity, 0.0f, 2.0f)) {
         impl->tecLayer.setOpacity(impl->tecOpacity);
     }
@@ -3318,8 +3320,9 @@ void App::render() {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "pick mode: click a station...");
             if (ImGui::SliderFloat("Freq (MHz)", &impl->hfFreqMHz, 1.0f, 30.0f, "%.1f"))
                 impl->hfCircuitDirty = true;
-            ImGui::TextDisabled("ray height follows 'Explode' (Layers): %.1fx",
-                                 (double)impl->explodeFactor);
+            ImGui::TextDisabled("ray height: 'Explode' x%.1f + 'Altitude' %+g km over h'",
+                                 (double)impl->explodeFactor,
+                                 (double)(impl->altKm - 300.0f));
 
             const HFCircuitResult& hfR = impl->hfTrace.result();
             if (!hfR.valid) {

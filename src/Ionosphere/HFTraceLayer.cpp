@@ -49,9 +49,12 @@ void main() {
     // ciclos/s (recorrido 4.5 s), 2.5 pulsos en arco, envolvente
     // 0.9*exp(-36*(p-0.5)^2), ganancia 0.9, alpha 0.9. Direccion
     // TX->RX intacta: la fase sigue siendo (arco*k - t*v).
+    // M9fix: mezcla MULTIPLICATIVA col*(0.55+pulse), verbatim demo
+    // (shaders.ts:465-467): el cursor hereda el color del tramo; la
+    // aditiva col+pulse clipeaba a blanco (1.0+0.9) siempre.
     float p = fract(u_time * 0.22 - vT * 2.5);
     float pulse = 0.9 * exp(-36.0 * (p - 0.5) * (p - 0.5));
-    fragColor = vec4(col + vec3(pulse), 0.9);
+    fragColor = vec4(col * (0.55 + pulse), 0.9);
 }
 )";
 
@@ -73,13 +76,14 @@ void HFTraceLayer::destroy() {
 }
 
 void HFTraceLayer::update(const Input& in) {
-    // P7 (plan 11.5): firma — si (tx/rx | freq | stamp de grids | exag M9) no cambia,
+    // P7 (plan 11.5): firma — si (tx/rx | freq | stamp | exag M9 | offset M9fix) no cambia,
     // no se recomputa nada (el pulso viaja por uniform u_time).
     if (sigValid_ || sigStamp_ >= 0) {
         const bool sameTx = (in.txLatDeg == sigTxLat_) && (in.txLonDeg == sigTxLon_);
         const bool sameRx = (in.rxLatDeg == sigRxLat_) && (in.rxLonDeg == sigRxLon_);
         if (sameTx && sameRx && in.freqMHz == sigFreq_ && in.gridStamp == sigStamp_ &&
-            in.txValid == sigValid_ && in.heightExag == sigExag_) {   // M9: exag -> rebuild
+            in.txValid == sigValid_ && in.heightExag == sigExag_ &&
+            in.apexOffsetKm == sigOffset_) {   // M9: exag | M9fix: offset de capa -> rebuild
             return;
         }
     }
@@ -87,9 +91,11 @@ void HFTraceLayer::update(const Input& in) {
     sigRxLat_ = in.rxLatDeg; sigRxLon_ = in.rxLonDeg;
     sigFreq_ = in.freqMHz;
     sigExag_ = in.heightExag;             // M9: entra a la firma
+    sigOffset_ = in.apexOffsetKm;         // M9fix: entra a la firma
     sigStamp_ = in.gridStamp;
     sigValid_ = in.txValid;
     heightExag_ = in.heightExag;          // M9: para el ancho del render
+    apexOffset_ = in.apexOffsetKm;        // M9fix: para buildPolyline
 
     HFCircuitResult r;
     r.txLatDeg = in.txLatDeg; r.txLonDeg = in.txLonDeg;
@@ -135,9 +141,10 @@ void HFTraceLayer::update(const Input& in) {
 // Polilinea continua del circuito (plan 11.3): por salto, 2 patas x 14
 // muestras compartiendo extremos (14 + 13 = 27 unicos por salto); pata =
 // slerp del punto de suelo al punto de reflexion con altitud h'·t (subida)
-// y h'·(1-t) (bajada) — todo · explodeFactor en M9 (hfc::legAltitudeKm:
-// el arco acompana la altura visual de las capas; la rampa es lineal en
-// t, LEGS=14 sigue sub-pixel a cualquier exageracion); posicion mundo
+// y h'·(1-t) (bajada) — todo · explodeFactor y +(altKm-300) en M9/M9fix
+// (hfc::legAltitudeKm: el arco acompana la altura visual de las capas y
+// al slider «Altitude (km)»; la rampa es lineal en t, LEGS=14 sigue
+// sub-pixel a cualquier exageracion); posicion mundo
 // via densityDir (marco del motor). aT = longitud de
 // arco acumulada (0..1); tangentes por diferencias centrales; cada muestra
 // se emite dos veces (side -1/+1) para el TRIANGLE_STRIP del ribbon.
@@ -155,23 +162,23 @@ void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
         hfc::arcPoint(in.txLatDeg, in.txLonDeg, in.rxLatDeg, in.rxLonDeg, f1, gLat1, gLon1);
         const double mufK = r.hopMufMHz.empty() ? 0.0 : r.hopMufMHz[(size_t)k];
         const float via = (float)hfc::hopViable((double)in.freqMHz, mufK);
-        // Pata 1: suelo_k -> reflexion (t: 0..1, alt = h'·t·exag).
+        // Pata 1: suelo_k -> reflexion (t: 0..1, alt = (h'+off)·t·exag).
         for (int j = 0; j < LEGS; j++) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(gLat0, gLon0, rLat, rLon, t, la, lo);
             glm::vec3 p = densityDir((float)la, (float)lo) *
-                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, t, (double)heightExag_) / 6371.0f);
+                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, t, (double)heightExag_, (double)apexOffset_) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
-        // Pata 2: reflexion -> suelo_{k+1} (t: 0..1, alt = h'·(1-t)·exag); la
+        // Pata 2: reflexion -> suelo_{k+1} (t: 0..1, alt = (h'+off)·(1-t)·exag); la
         // muestra t=0 es la reflexion (ultima de la pata 1): se comparte.
         for (int j = 1; j < LEGS; j++) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(rLat, rLon, gLat1, gLon1, t, la, lo);
             glm::vec3 p = densityDir((float)la, (float)lo) *
-                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, 1.0 - t, (double)heightExag_) / 6371.0f);
+                (1.0f + (float)hfc::legAltitudeKm(r.hVirtualKm, 1.0 - t, (double)heightExag_, (double)apexOffset_) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
     }
