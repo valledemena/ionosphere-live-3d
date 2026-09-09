@@ -157,6 +157,10 @@ struct App::Impl {
     bool terminatorVisible = true;
     float nightLevel = 0.45f;   // night-side brightness (earth.frag u_night)
     float cloudAmt = 0.55f;     // 0 = clear, 1 = overcast (earth.frag u_cloudAmt)
+    // M6 (plan 9.4): 0 = High (raymarch 14x5), 1 = LUT (12 muestras + tabla
+    // de transmittance horneada en Atmosphere::init); default High (v2, R2).
+    int atmoQuality = 0;
+    float atmoIntensity = 1.0f;   // slider 0.25-2 (atmosphere.frag u_intensity)
     float tecOpacity = 1.0f;
     // Variable del mapa de colores esferico (Seccion A del plan + Fase 5):
     // 0=TEC(GloTEC), 1=foF2, 2=MUF, 3=hmF2, 4=NmF2 (1-4 GIRO),
@@ -732,31 +736,154 @@ bool App::init(int width, int height, const char* title) {
     }
 
     if (!impl->atmosphereShader.load("shaders/atmosphere.vert", "shaders/atmosphere.frag")) {
+        // M6 (P7, patron M1): ESPEJO de shaders/atmosphere.{vert,frag}.
+        // m6_edits.py genera estas cadenas DESDE los ficheros despues de
+        // escribirlos — sync por construccion, no copia a mano.
         impl->atmosphereShader.loadFromSource(
             "#version 400 core\n"
             "layout(location=0) in vec3 aPos;\n"
+            "\n"
             "uniform mat4 u_model, u_view, u_projection;\n"
-            "out vec3 vPos;\n"
-            "void main(){\n"
-            "  vPos = aPos;\n"
-            "  gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0);\n"
+            "\n"
+            "// M6 (P1, plan 9.2): posicion en MUNDO post-escala. El frag necesita el\n"
+            "// rd exacto: vPos = aPos (pre-escala) dejaba el viewDir torcido ~1% contra\n"
+            "// u_cameraPos. Mismo patron que el vert del VolumeRenderer.\n"
+            "out vec3 vWorldPos;\n"
+            "\n"
+            "void main() {\n"
+            "    vWorldPos = vec3(u_model * vec4(aPos, 1.0));\n"
+            "    gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0);\n"
             "}\n",
             "#version 400 core\n"
-            "in vec3 vPos;\n"
+            "// M6 (plan 9.1): single scattering Rayleigh/Mie con sombra dura del\n"
+            "// planeta. REEMPLAZO TOTAL de la cascara Fresnel pow(3) (dos colores\n"
+            "// constantes por sunAlign, sin profundidad optica) — aceptacion 6: es\n"
+            "// reemplazo, no adicion. El fallback loadFromSource de App.cpp es ESPEJO\n"
+            "// de este fichero (patron M1): m6_edits.py genera ambas cadenas desde el\n"
+            "// mismo contenido (sync por construccion, no copia a mano).\n"
+            "// Unidades normalizadas a radio terrestre = 1.0 (constantes del plan 9.1,\n"
+            "// sin convertir).\n"
+            "in vec3 vWorldPos;   // P1: mundo POST-escala — rd exacto\n"
+            "\n"
             "uniform vec3 u_sunDir;\n"
             "uniform vec3 u_cameraPos;\n"
+            "uniform float u_intensity;   // slider 0.25-2 (plan 9.4, default 1.0)\n"
+            "uniform int u_lutMode;       // 0 = High (raymarch 14x5), 1 = LUT (12 + tabla)\n"
+            "uniform sampler2D u_lutTex;  // 256x64 GL_RG32F: (odR, odM) punto->sol (Atmosphere::init)\n"
+            "\n"
             "out vec4 fragColor;\n"
-            "void main(){\n"
-            "  vec3 n = normalize(vPos);\n"
-            "  vec3 viewDir = normalize(u_cameraPos - vPos);\n"
-            "  float fresnel = 1.0 - max(dot(viewDir, n), 0.0);\n"
-            "  fresnel = pow(fresnel, 3.0);\n"
-            "  float sunAlign = max(dot(n, normalize(u_sunDir)), 0.0);\n"
-            "  vec3 dayColor = vec3(0.3, 0.6, 1.0);\n"
-            "  vec3 sunsetColor = vec3(1.0, 0.4, 0.1);\n"
-            "  vec3 col = mix(dayColor, sunsetColor, pow(1.0 - sunAlign, 5.0));\n"
-            "  col *= 0.5 + 0.5 * sunAlign;\n"
-            "  fragColor = vec4(col, fresnel * 0.6);\n"
+            "\n"
+            "// Constantes (UNIDADES R_tierra — no convertir). CRUZADAS con\n"
+            "// Atmosphere.cpp (bake de la LUT) y earth.frag (aerial perspective):\n"
+            "// mantener las tres copias sincronizadas.\n"
+            "const float PLANET_R = 1.0;\n"
+            "const float ATM_R    = 1.0255;               // tope ~162 km; = escala 1.0255f de App.cpp\n"
+            "const float H_R      = 8.5e-3;               // escala Rayleigh (8.5 km)\n"
+            "const float H_M      = 1.2e-2;               // escala Mie (12 km)\n"
+            "const vec3  BETA_R   = vec3(5.8, 13.5, 33.1) * 0.0105;   // m^-1 -> R_tierra\n"
+            "const float BETA_M   = 21.0 * 0.0105;\n"
+            "const float G_MIE    = 0.76;\n"
+            "\n"
+            "const float PI = 3.14159265358979;\n"
+            "\n"
+            "// P1: AMBOS radicales del rayo-esfera (el plan 9.1 daba el near — t de\n"
+            "// entrada; el far — t de salida de la atmosfera — es el que la marcha\n"
+            "// necesita).\n"
+            "float raySphereNear(vec3 ro, vec3 rd, float r) {\n"
+            "    float b = dot(ro, rd);\n"
+            "    float c = dot(ro, ro) - r * r;\n"
+            "    float h = b * b - c;\n"
+            "    if (h < 0.0) return -1.0;\n"
+            "    return -b - sqrt(h);\n"
+            "}\n"
+            "float raySphereFar(vec3 ro, vec3 rd, float r) {\n"
+            "    float b = dot(ro, rd);\n"
+            "    float c = dot(ro, ro) - r * r;\n"
+            "    float h = b * b - c;\n"
+            "    if (h < 0.0) return -1.0;\n"
+            "    return -b + sqrt(h);\n"
+            "}\n"
+            "\n"
+            "// Extincion (plan 9.1): el 1.1 del Mie es calibracion de la demo. Misma\n"
+            "// formula en ambos tramos (sol->muestra y muestra->camara) y tambien tras\n"
+            "// el lookup de la LUT (que guarda od puros).\n"
+            "vec3 extinct(float odR, float odM) {\n"
+            "    return exp(-(BETA_R * odR + vec3(BETA_M * 1.1 * odM)));\n"
+            "}\n"
+            "\n"
+            "// Fase Rayleigh (3/16pi)(1 + cos^2) y Mie Henyey-Greenstein (plan 9.1).\n"
+            "float phaseR(float c) { return (3.0 / (16.0 * PI)) * (1.0 + c * c); }\n"
+            "float phaseM(float c) {\n"
+            "    float g2 = G_MIE * G_MIE;\n"
+            "    return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * G_MIE * c, 1.5));\n"
+            "}\n"
+            "\n"
+            "void main() {\n"
+            "    vec3 sun = normalize(u_sunDir);\n"
+            "    vec3 ro = u_cameraPos;\n"
+            "    vec3 rd = normalize(vWorldPos - u_cameraPos);   // exacto (P1)\n"
+            "\n"
+            "    // La camara orbita SIEMPRE fuera de ATM_R (clamp [1.5, 20] R_tierra):\n"
+            "    // tEnter > 0 para todo rayo que toca la cascara (hemisferio trasero,\n"
+            "    // ver Atmosphere::render).\n"
+            "    float tEnter = max(raySphereNear(ro, rd, ATM_R), 0.0);\n"
+            "    float tExit  = raySphereFar(ro, rd, ATM_R);\n"
+            "    if (tExit <= tEnter) { fragColor = vec4(0.0); return; }\n"
+            "    // El disco del planeta lo mata el depth test (Tierra dibujada antes con\n"
+            "    // depth write ON); el clip analitico es defensivo (plan 9.2).\n"
+            "    float tPlanet = raySphereNear(ro, rd, PLANET_R);\n"
+            "    if (tPlanet >= 0.0) tExit = min(tExit, tPlanet);\n"
+            "    if (tExit <= tEnter) { fragColor = vec4(0.0); return; }\n"
+            "\n"
+            "    int steps = (u_lutMode == 1) ? 12 : 14;   // plan 9.4: LUT = 12, High = 14\n"
+            "    float dt = (tExit - tEnter) / float(steps);\n"
+            "\n"
+            "    vec3 sumR = vec3(0.0);\n"
+            "    vec3 sumM = vec3(0.0);\n"
+            "    float odR = 0.0, odM = 0.0;   // profundidad optica camara->muestra\n"
+            "\n"
+            "    for (int i = 0; i < steps; i++) {\n"
+            "        vec3 p = ro + rd * (tEnter + (float(i) + 0.5) * dt);\n"
+            "        float h = max(length(p) - PLANET_R, 0.0);\n"
+            "        float dR = exp(-h / H_R);\n"
+            "        float dM = exp(-h / H_M);\n"
+            "        odR += dR * dt;\n"
+            "        odM += dM * dt;\n"
+            "\n"
+            "        // Sombra dura del planeta (el detalle que vende el atardecer): sin\n"
+            "        // luz directa si el rayo muestra->sol toca el planeta.\n"
+            "        if (raySphereNear(p, sun, PLANET_R) < 0.0) {\n"
+            "            float sunOdR = 0.0, sunOdM = 0.0;\n"
+            "            if (u_lutMode == 1) {\n"
+            "                // LUT: mismos ejes que el bake de Atmosphere::init\n"
+            "                // (u = cos del cenit solar, v = altura normalizada).\n"
+            "                vec2 uv = vec2(dot(normalize(p), sun) * 0.5 + 0.5,\n"
+            "                               h / (ATM_R - PLANET_R));\n"
+            "                vec2 od = texture(u_lutTex, uv).rg;\n"
+            "                sunOdR = od.r;\n"
+            "                sunOdM = od.g;\n"
+            "            } else {\n"
+            "                // Marcha al sol: 5 muestras (plan 9.1) hasta salir de ATM_R.\n"
+            "                float tSun = max(raySphereFar(p, sun, ATM_R), 0.0);\n"
+            "                float ds = tSun / 5.0;\n"
+            "                for (int j = 0; j < 5; j++) {\n"
+            "                    vec3 q = p + sun * ((float(j) + 0.5) * ds);\n"
+            "                    float hq = max(length(q) - PLANET_R, 0.0);\n"
+            "                    sunOdR += exp(-hq / H_R) * ds;\n"
+            "                    sunOdM += exp(-hq / H_M) * ds;\n"
+            "                }\n"
+            "            }\n"
+            "            vec3 T = extinct(sunOdR, sunOdM) * extinct(odR, odM);\n"
+            "            sumR += T * (dR * dt);\n"
+            "            sumM += T * (dM * dt);\n"
+            "        }\n"
+            "    }\n"
+            "\n"
+            "    float mu = dot(rd, sun);   // coseno del angulo de dispersion\n"
+            "    vec3 col = (sumR * BETA_R * phaseR(mu) + sumM * BETA_M * phaseM(mu))\n"
+            "               * u_intensity * 20.0;   // factor 20 calibrado en la demo (plan 9.1)\n"
+            "    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));\n"
+            "    fragColor = vec4(col, lum);   // alpha = luminancia (plan 9.1)\n"
             "}\n"
         );
     }
@@ -1374,6 +1501,8 @@ void App::saveSettings() {
     fprintf(f, "showEarth %d\n", impl->showEarth ? 1 : 0);
     fprintf(f, "showTerminator %d\n", impl->terminatorVisible ? 1 : 0);
     fprintf(f, "showAtmosphere %d\n", impl->showAtmosphere ? 1 : 0);
+    fprintf(f, "atmoQuality %d\n", impl->atmoQuality);      // M6 (plan 9.4)
+    fprintf(f, "atmoIntensity %g\n", (double)impl->atmoIntensity);
     fprintf(f, "showStars %d\n", impl->showStars ? 1 : 0);
     fprintf(f, "nightLevel %g\n", (double)impl->nightLevel);
     fprintf(f, "cloudAmt %g\n", (double)impl->cloudAmt);
@@ -1461,6 +1590,8 @@ void App::loadSettings() {
         else if (k == "showEarth") impl->showEarth = clB(v);
         else if (k == "showTerminator") impl->terminatorVisible = clB(v);
         else if (k == "showAtmosphere") impl->showAtmosphere = clB(v);
+        else if (k == "atmoQuality") impl->atmoQuality = glm::clamp((int)v, 0, 1);   // M6
+        else if (k == "atmoIntensity") impl->atmoIntensity = glm::clamp((float)v, 0.25f, 2.0f);
         else if (k == "showStars") impl->showStars = clB(v);
         else if (k == "nightLevel") impl->nightLevel = glm::clamp((float)v, 0.05f, 1.0f);
         else if (k == "cloudAmt") impl->cloudAmt = glm::clamp((float)v, 0.0f, 1.0f);
@@ -1885,6 +2016,9 @@ void App::render() {
         impl->earthShader.setFloat("u_cloudAmt", impl->cloudAmt);
         impl->earthShader.setInt("u_texture", 0);
         impl->earthShader.setInt("u_nightTex", 1);
+        // M6 (plan 9.3): 1 = aerial perspective + sombra de nubes en earth.frag.
+        // 0 = camino pre-M6 exacto (aceptacion 6: Atmosphere OFF = 16b6fa5).
+        impl->earthShader.setInt("u_atmoOn", impl->showAtmosphere ? 1 : 0);
         impl->earth.render();
     }
 
@@ -1969,14 +2103,27 @@ void App::render() {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         // Atmosfera primero (halo base bajo las capas de datos).
         if (impl->showAtmosphere) {
-            glm::mat4 atmoModel = glm::scale(glm::mat4(1.0f), glm::vec3(1.02f));
+            // M6 (P3, plan 9.1): escala = ATM_R del shader. El literal 1.0255f va
+            // CRUZADO con la constante ATM_R de shaders/atmosphere.frag y con el
+            // bake de la LUT en Atmosphere.cpp — mantener los tres sincronizados.
+            glm::mat4 atmoModel = glm::scale(glm::mat4(1.0f), glm::vec3(1.0255f));
             impl->atmosphereShader.use();
             impl->atmosphereShader.setMat4("u_model", atmoModel);
             impl->atmosphereShader.setMat4("u_view", view);
             impl->atmosphereShader.setMat4("u_projection", proj);
             impl->atmosphereShader.setVec3("u_sunDir", impl->sunDirection);
             impl->atmosphereShader.setVec3("u_cameraPos", camPos);
-            impl->atmosphere.render();
+            // M6 (plan 9.4): calidad 0 = High / 1 = LUT + intensidad (slider P5).
+            impl->atmosphereShader.setInt("u_lutMode", impl->atmoQuality);
+            impl->atmosphereShader.setFloat("u_intensity", impl->atmoIntensity);
+            impl->atmosphereShader.setInt("u_lutTex", 0);
+            // M6: aditivo PURO para la atmosfera. El frag escribe alpha = luminancia
+            // (plan 9.1); con (SRC_ALPHA, ONE) la contribucion seria col*alpha
+            // (cuadratica) y el limbo azul (col ~ 0.02-0.12) quedaria en negro.
+            // Se restaura el blend del bloque justo despues del draw.
+            glBlendFunc(GL_ONE, GL_ONE);
+            impl->atmosphere.render();   // M6 (P2): cull + LUT bind dentro
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         }
         if (showTec) impl->tecLayer.render(view, proj);
         if (showShell) impl->shellLayer.render(view, proj);
@@ -2152,7 +2299,18 @@ void App::render() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Procedural animated cloud cover (seamless noise, drifts with time). 0 = clear sky.");
     ImGui::Checkbox("Atmosphere", &impl->showAtmosphere);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Atmospheric rim glow (fresnel). Purely visual, no data.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Rayleigh/Mie atmosphere (single scattering): blue daytime limb, red ring at the terminator, aerial perspective + cloud shadows on Earth.");
+    // M6 (plan 9.4): toggle de calidad + slider de intensidad junto al
+    // checkbox (P5). atmoQuality/atmoIntensity persisten (saveSettings).
+    const char* atmoQ[] = { "High (raymarch)", "LUT (fast)" };
+    if (ImGui::Combo("Atmo quality", &impl->atmoQuality, atmoQ, 2)) {
+        impl->atmoQuality = glm::clamp(impl->atmoQuality, 0, 1);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("High: 14x5 raymarch per pixel. LUT: 12 view samples + baked transmittance table (iGPU friendly).");
+    if (ImGui::SliderFloat("Atmo intensity", &impl->atmoIntensity, 0.25f, 2.0f, "%.2f")) {
+        impl->atmoIntensity = glm::clamp(impl->atmoIntensity, 0.25f, 2.0f);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Atmosphere brightness multiplier (default 1.0).");
     ImGui::Checkbox("Stars", &impl->showStars);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Starfield background. Decorative only.");
     ImGui::Checkbox("Terminator", &impl->terminatorVisible);
