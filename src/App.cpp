@@ -1497,6 +1497,12 @@ void App::update(float dt) {
     // reactivo - el trazado y la matriz siguen al scrub, aceptacion 4) o
     // dirty del panel (freq/TX/RX). Apagado por defecto: coste cero salvo
     // capa visible o panel abierto.
+    // M8fix-2 (re-captura del bucket): el checkbox/persist gobiernan
+    // hfTraceVisible, pero visible_ nace false y nadie llamaba setVisible
+    // — render() early-returnaba siempre (HFTraceLayer.cpp) => ribbon
+    // indibujable. Sync por frame antes del gate: arranque (settings.cfg),
+    // toggle y cierre de panel cubiertos sin invarianza de escritores.
+    impl->hfTrace.setVisible(impl->hfTraceVisible);
     if (impl->hfTraceVisible || impl->hfPanelOpen) {
         static double lastHfGrid = -1.0;
         static double lastHfEpoch = -1.0;
