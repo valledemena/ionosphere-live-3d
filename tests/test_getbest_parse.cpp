@@ -462,6 +462,33 @@ int main() {
     const char* kWarnOnly = "# STATUS: WARNING (Unknown characteristic name: h'F2)\r\n";
     expectTrue("solo WARNING (sin filas) -> false", !GiroAdapter::parseGetbest(kWarnOnly, z));
 
+    std::printf("[test_getbest_parse] M4-tuning T1: launchGapSec (pura)\n");
+    // Esperanzas GENERADAS por scripts/m4t_gen_test.py (segunda
+    // implementacion Python — nada transcrito a mano). Llama a
+    // PRODUCCION: GiroAdapter::launchGapSec. Frontera vencida (>=
+    // exacto) = formula historica de pollRound.
+    const double tNow = 1788960000.0;   // instante fijo: determinista, sin reloj
+    expectNear("t1 fria: last=0 -> 12 s", GiroAdapter::launchGapSec(0.0, tNow), 12.0, 1.0e-9);
+    expectNear("t1 fria: last<0 (invalido) -> 12 s", GiroAdapter::launchGapSec(-3.0, tNow), 12.0, 1.0e-9);
+    expectNear("t1 fria: last=0 ignora intervalo -> 12", GiroAdapter::launchGapSec(0.0, tNow, 1200.0), 12.0, 1.0e-9);
+    expectNear("t1 cache: 100/600 -> -1 (skip/wait)", GiroAdapter::launchGapSec(tNow - 100.0, tNow), -1.0, 1.0e-9);
+    expectNear("t1 backoff: 100/1200 -> -1 (skip/wait)", GiroAdapter::launchGapSec(tNow - 100.0, tNow, 1200.0), -1.0, 1.0e-9);
+    expectNear("t1 borde <: 599.999/600 -> -1", GiroAdapter::launchGapSec(tNow - 599.999, tNow), -1.0, 1.0e-9);
+    expectNear("t1 borde >=: 600/600 -> 0.25 s", GiroAdapter::launchGapSec(tNow - 600.0, tNow), 0.25, 1.0e-9);
+    expectNear("t1 vencida: 601/600 -> 0.25 s", GiroAdapter::launchGapSec(tNow - 601.0, tNow), 0.25, 1.0e-9);
+    expectNear("t1 backoff vencida: 1200/1200 -> 0.25", GiroAdapter::launchGapSec(tNow - 1200.0, tNow, 1200.0), 0.25, 1.0e-9);
+    expectNear("t1 cap backoff: 1800/1800 -> 0.25 s", GiroAdapter::launchGapSec(tNow - 1800.0, tNow, 1800.0), 0.25, 1.0e-9);
+    // Regresion: el conjunto due (retorno >= 0) coincide con la formula
+    // historica de vencimiento de pollRound en una rejilla generada.
+    bool t1Equiv = true;
+    for (double dt = -50.0; dt <= 1300.0; dt += 61.7) {
+        for (double iv : {60.0, 600.0, 1200.0, 1800.0}) {
+            const bool due = GiroAdapter::launchGapSec(tNow - dt, tNow, iv) >= 0.0;
+            if (due != (dt >= iv)) t1Equiv = false;
+        }
+    }
+    expectTrue("t1 regresion: due(>=0) == (now - last >= iv)", t1Equiv);
+
     if (g_failures == 0) {
         std::printf("[test_getbest_parse] TODOS los checks OK\n");
         return 0;

@@ -268,12 +268,29 @@ bool GiroAdapter::parseGetbest(const std::string& text, StationSample& out) {
     return true;
 }
 
+// M4-tuning (T1, sellado): decision pura de cortesia de lanzamiento (ver
+// .h). -1 = aun no vencida (skip/wait); 12 = nunca intentada (arranque
+// escalonado: la rafaga fria sale a ~5 GETs/min); 0.25 = vencida (cortesia
+// 7.2). El borde de vencimiento preserva la formula historica de pollRound:
+// vencida <=> nowUtc - lastAttemptUtc >= intervalSec.
+double GiroAdapter::launchGapSec(double lastAttemptUtc, double nowUtc,
+                                 double intervalSec) {
+    if (lastAttemptUtc <= 0.0) return 12.0;   // nunca intentada: fria
+    if (nowUtc - lastAttemptUtc < intervalSec) return -1.0;   // esperar
+    return 0.25;   // vencida: cortesia 7.2 (250 ms)
+}
+
 // M4 (7.2): una ronda de polling getbest. Cola: SOLO prioritarias en orden
 // fijo (EB040 primera, aceptacion 4), filtradas por cache 10 min / backoff
-// por estacion. Cortesia: concurrencia max 6 y >= 250 ms entre lanzamientos
-// de GET (globales). Devuelve el numero de estaciones actualizadas.
+// por estacion (via launchGapSec). Cortesia: concurrencia max 6 y gap
+// global entre lanzamientos de GET: 12 s para estaciones nunca intentadas
+// (M4-tuning T1, arranque escalonado) y 250 ms en regimen; T2: el reloj
+// de cache/backoff de cada estacion arranca en el instante real de su
+// intento, no en el de la ronda. Devuelve el numero de estaciones
+// actualizadas.
 int GiroAdapter::pollRound(double nowUtc) {
     std::vector<StationSample> todo;
+    std::vector<double> gapSec;   // M4-tuning T1: 12 s fria / 0.25 vencida
     {
         std::lock_guard<std::mutex> lk(mutex_);
         for (const char* code : PRIORITY_STATIONS) {
@@ -282,7 +299,8 @@ int GiroAdapter::pollRound(double nowUtc) {
                 auto it = fetchState_.find(code);
                 double interval = (it != fetchState_.end()) ? it->second.intervalSec : 600.0;
                 double lastTry  = (it != fetchState_.end()) ? it->second.lastAttemptUtc : 0.0;
-                if (nowUtc - lastTry >= interval) todo.push_back(s);
+                double gap = launchGapSec(lastTry, nowUtc, interval);
+                if (gap >= 0.0) { todo.push_back(s); gapSec.push_back(gap); }
                 break;   // solo la primera coincidencia del catalogo
             }
         }
@@ -292,7 +310,7 @@ int GiroAdapter::pollRound(double nowUtc) {
     const int total = (int)todo.size();
     std::atomic<int> next{0};
     std::atomic<int> ok{0};
-    std::atomic<long long> lastLaunchMs{0};   // >= 250 ms entre GET (global)
+    std::atomic<long long> lastLaunchMs{0};   // >= gapMs entre GET (global, T1)
     auto msNow = []() -> long long {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::system_clock::now().time_since_epoch()).count();
@@ -301,20 +319,26 @@ int GiroAdapter::pollRound(double nowUtc) {
         for (;;) {
             int i = next.fetch_add(1);
             if (i >= total) break;
-            for (;;) {   // esperar ventana de lanzamiento (cortesia 250 ms)
+            // M4-tuning T1: ventana por estacion — 12 s si nunca se intento
+            // (la rafaga fria sale espaciada a ~5 GETs/min), 250 ms en
+            // regimen. Autolimitante: tras la ronda fria todas tienen
+            // timestamp y el gap vuelve a 250 ms solo.
+            const long long gapMs = (long long)(gapSec[(size_t)i] * 1000.0);
+            for (;;) {   // esperar ventana de lanzamiento (cortesia, T1)
                 long long now = msNow();
                 long long last = lastLaunchMs.load();
-                if (now - last >= 250 && lastLaunchMs.compare_exchange_weak(last, now)) break;
+                if (now - last >= gapMs && lastLaunchMs.compare_exchange_weak(last, now)) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             StationSample s = todo[(size_t)i];
+            const double attemptUtc = (double)std::time(nullptr);   // T2
             std::string resp;
             // Fallo (HTTP/timeout/429 o STATUS: ERROR) -> backoff de ESA
             // estacion; su ultimo dato bueno se conserva (aceptacion 5).
             bool good = getbestGet(s.code, resp) && parseGetbest(resp, s);
             std::lock_guard<std::mutex> lk(mutex_);
             FetchState& st = fetchState_[s.code];
-            st.lastAttemptUtc = nowUtc;
+            st.lastAttemptUtc = attemptUtc;   // T2: instante real del intento
             if (good) {
                 st.intervalSec = 600.0;   // reset al exito (cache 10 min)
                 st.degraded = false;

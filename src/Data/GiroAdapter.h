@@ -57,8 +57,10 @@ struct StationSample {
 // - Datos (M4): GET https://lgdc.uml.edu/fastchar/getbest por estacion de la
 //   lista prioritaria (Apendice B del plan, EB040 primera), 1 llamada con los
 //   10 caracteres en CSV fijo -> respuesta con serie 24 h (historia cap 72)
-//   + ultima muestra. Cortesia 7.2: concurrencia 6, 250 ms entre lanzamientos,
-//   cache 10 min por estacion, backoff x2 hasta 30 min ante 429/fallo.
+//   + ultima muestra. Cortesia 7.2: concurrencia 6, gap entre lanzamientos
+//   de 12 s en frio (M4-tuning T1: arranque escalonado, ~5 GETs/min) y
+//   250 ms en regimen; cache 10 min por estacion con reloj por intento
+//   (M4-tuning T2), backoff x2 hasta 30 min ante 429/fallo.
 //   El pool POST a scaled.php se elimino (7.4: sin #ifdef, sin fallback).
 //
 // Los datos GIRO se publican bajo licencia CC BY-NC-SA 4.0 (uso no comercial).
@@ -88,6 +90,14 @@ public:
     // ultima muestra + historia cap 72. Publica y estatica para tests
     // (no usa estado del adapter; "STATUS: ERROR" -> false).
     static bool parseGetbest(const std::string& text, StationSample& out);
+    // M4-tuning (T1, sellado): decision pura de cortesia de lanzamiento por
+    // estacion. Devuelve el gap minimo (s) entre su lanzamiento y el anterior,
+    // o -1 si aun no esta vencida (skip/wait): nunca intentada -> 12 s
+    // (arranque escalonado: rafaga fria a ~5 GETs/min); vencida -> 0.25 s
+    // (cortesia 7.2). intervalSec = cache/backoff vigente de la estacion.
+    // Publica y estatica para tests, como parseGetbest.
+    static double launchGapSec(double lastAttemptUtc, double nowUtc,
+                               double intervalSec = 600.0);
     // Muestreo de la red en un instante (para replay): interpola cada estacion
     // con historia a 'epoch' (clamp a extremos). Sin historia usa el ultimo valor.
     std::vector<StationSample> sampleHistoryAt(double epoch) const;
