@@ -2,6 +2,11 @@
 #include <glm/glm.hpp>
 
 namespace CoordSys {
+    // DEPRECATED (bug 180 del bucket en vivo, post-M8): este namespace usa
+    // +X=lon0; el marco del motor es densityDir (DensityVolume.h, theta =
+    // pi - lon) — 180 grados de diferencia sobre Y. Cero llamadas desde el
+    // fix del ribbon/marcadores HF; posiciones mundo = densityDir *
+    // (1 + alt/6371). No usar en codigo nuevo.
     // Convert lat/lon (degrees) to unit vector on sphere
     glm::vec3 latLonToUnit(float lat, float lon);
 

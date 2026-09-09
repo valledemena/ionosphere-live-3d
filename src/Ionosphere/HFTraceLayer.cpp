@@ -1,5 +1,5 @@
 #include "HFTraceLayer.h"
-#include "Utils/CoordinateSystem.h"
+#include "Ionosphere/DensityVolume.h"  // densityDir: marco del motor (bug 180 del bucket)
 #include <glm/gtc/type_ptr.hpp>
 #include <cstdio>
 #include <cstring>
@@ -128,7 +128,7 @@ void HFTraceLayer::update(const Input& in) {
 // Polilinea continua del circuito (plan 11.3): por salto, 2 patas x 14
 // muestras compartiendo extremos (14 + 13 = 27 unicos por salto); pata =
 // slerp del punto de suelo al punto de reflexion con altitud h'·t (subida)
-// y h'·(1-t) (bajada); posicion mundo via latLonAltToPos. aT = longitud de
+// y h'·(1-t) (bajada); posicion mundo via densityDir (marco del motor). aT = longitud de
 // arco acumulada (0..1); tangentes por diferencias centrales; cada muestra
 // se emite dos veces (side -1/+1) para el TRIANGLE_STRIP del ribbon.
 void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
@@ -150,7 +150,7 @@ void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(gLat0, gLon0, rLat, rLon, t, la, lo);
-            glm::vec3 p = CoordSys::latLonAltToPos((float)la, (float)lo, (float)(r.hVirtualKm * t));
+            glm::vec3 p = densityDir((float)la, (float)lo) * (1.0f + (float)(r.hVirtualKm * t) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
         // Pata 2: reflexion -> suelo_{k+1} (t: 0..1, alt = h'·(1-t)); la
@@ -159,8 +159,8 @@ void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
             const double t = (double)j / (double)(LEGS - 1);
             double la = 0.0, lo = 0.0;
             hfc::arcPoint(rLat, rLon, gLat1, gLon1, t, la, lo);
-            glm::vec3 p = CoordSys::latLonAltToPos((float)la, (float)lo,
-                                                   (float)(r.hVirtualKm * (1.0 - t)));
+            glm::vec3 p = densityDir((float)la, (float)lo) *
+                                                   (1.0f + (float)(r.hVirtualKm * (1.0 - t)) / 6371.0f);
             s.push_back({ p.x, p.y, p.z, via });
         }
     }

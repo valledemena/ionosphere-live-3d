@@ -3347,7 +3347,7 @@ void App::render() {
         const HFCircuitResult& hfR2 = impl->hfTrace.result();
         if (impl->hfTraceVisible && hfR2.valid) {
             auto hfMarker = [&](const char* label, double lat, double lon, const ImVec4& col) {
-                const glm::vec3 wp = CoordSys::latLonAltToPos((float)lat, (float)lon, 0.0f);
+                const glm::vec3 wp = densityDir((float)lat, (float)lon);
                 const glm::vec4 cp = proj * view * glm::vec4(wp, 1.0f);
                 if (cp.w <= 0.0f) return;   // detras de la camara
                 const float sx = (float)winW * (0.5f + 0.5f * cp.x / cp.w);

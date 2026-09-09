@@ -30,10 +30,13 @@
 // tests/test_hop_geometry.cpp (ya verdes) y el visual multi-salto se
 // verifica en vivo con un par largo elegido al vuelo.
 //
-// Convencion esferica: la MISMA que CoordinateSystem (x = cos(lat)cos(lon),
-// y = sin(lat), z = -cos(lat)sin(lon)) para que el arco componga exacto con
-// latLonAltToPos. La esfera es de radio 1 normalizado: el ancho del ribbon
-// 0.004 (plan 11.3, ~0.004 R_tierra) es directo en unidades de mundo.
+// Convencion esferica: hfc:: opera en lat/lon puros (el slerp de arcPoint
+// usa internamente la convencion de CoordinateSystem, transparente al
+// round-trip); las posiciones MUNDO del ribbon y de los marcadores TX/RX
+// (App.cpp) salen de densityDir (marco del motor, theta = pi - lon) — NO
+// de latLonAltToPos, que esta 180 grados rotado sobre Y (bug del bucket en
+// vivo, corregido). La esfera es de radio 1 normalizado: el ancho del
+// ribbon 0.004 (plan 11.3, ~0.004 R_tierra) es directo en unidades de mundo.
 // =============================================================================
 
 namespace hfc {
