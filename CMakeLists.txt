@@ -52,6 +52,7 @@ set(SOURCES
     src/Ionosphere/FaradayLayer.cpp
     src/Ionosphere/RefShells.cpp
     src/Ionosphere/SliceLayer.cpp
+    src/Ionosphere/HFTraceLayer.cpp
     src/Data/DataManager.cpp
     src/Data/EsaAdapter.cpp
     src/Data/GloTecAdapter.cpp
@@ -118,7 +119,8 @@ endif()
 # Tests (logica pura: sin GL/GLFW/red — corren en cualquier CI).
 # Condicion 5 de la revision MUSE. M4: test_getbest_parse con fixture real
 # (multichar EB040 capturado en vivo); M5: test_model_foF2 (clima+haversine);
-# M7: test_d_region (absorcion D + LUF-SID).
+# M7: test_d_region (absorcion D + LUF-SID); M8: test_hf_circuit
+# (circuito HF: geodesia/slerp/bandState/MUF-FOT inline en HFTraceLayer.h).
 
 enable_testing()
 # M4 (7.1): parser multichar de getbest — llama a PRODUCCION
@@ -150,6 +152,12 @@ target_include_directories(test_d_region PRIVATE src)
 target_sources(test_d_region PRIVATE src/Data/RadioPropagationAdapter.cpp)
 target_link_libraries(test_d_region PRIVATE CURL::libcurl)
 add_test(NAME d_region COMMAND test_d_region)
+# M8 (plan 11): circuito HF — llama a PRODUCCION (namespace hfc inline en
+# HFTraceLayer.h sobre HfMath.h), no replica. glm/glad: solo cabeceras
+# via HFTraceLayer.h (patron model_foF2), sin link y sin std::thread.
+add_executable(test_hf_circuit tests/test_hf_circuit.cpp)
+target_include_directories(test_hf_circuit PRIVATE src libs/glad/include libs/glm)
+add_test(NAME hf_circuit COMMAND test_hf_circuit)
 add_executable(test_hop_geometry tests/test_hop_geometry.cpp)
 target_include_directories(test_hop_geometry PRIVATE src)
 add_test(NAME hop_geometry COMMAND test_hop_geometry)

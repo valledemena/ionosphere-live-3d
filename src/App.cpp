@@ -50,6 +50,7 @@
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
 #include "Ionosphere/SliceLayer.h"
+#include "Ionosphere/HFTraceLayer.h"    // M8 (plan 11): capa HF multi-salto
 #include "Ionosphere/LayerProfile.h"
 #include "Ionosphere/DensityVolume.h"
 #include "Utils/SolarPosition.h"
@@ -189,6 +190,18 @@ struct App::Impl {
     bool faradayVisible = false;
     int faradayMode = 0;       // 0=longitud por valor, 1=longitud fija + color
     float faradayScale = 1.0f;
+
+    // M8 (plan 11): capa HF multi-salto + panel «Circuit».
+    HFTraceLayer hfTrace;
+    bool hfTraceVisible = false;   // toggle capa, off por defecto (plan 11.4, persist)
+    float hfFreqMHz = 14.0f;       // slider 1-30 MHz (persist; TX/RX no - sello P6)
+    std::string hfTxCode;          // "" = sigue al pin; si tampoco, DB049 (default demo)
+    std::string hfRxCode;          // "" = EG931 (default demo)
+    bool hfPickRx = false;         // «Pick RX...» activo (consume el click, no toca el pin)
+    bool hfCircuitDirty = true;    // freq/TX/RX cambiados -> rebuild al proximo update
+    bool hfPanelOpen = false;      // panel «Circuit» desplegado (alimenta el update)
+    long long hfGridStamp = 0;     // identidad de los grids cacheados del circuito
+    GridData hfFoF2Grid, hfHmF2Grid, hfLufGrid;   // caches (giroInterpGrid x2 + LUF M7)
 
     // Estacion GIRO bajo el cursor (hover) y fijada con click (pin, por codigo
     // URSI para que sobreviva al refresco incremental de muestras).
@@ -1025,6 +1038,7 @@ bool App::init(int width, int height, const char* title) {
     // congelar el arranque (30 s de timeout en el peor caso).
     impl->giro.init();   // solo curl_global_init + printf (sin red)
     impl->ionosondeLayer.init();
+    impl->hfTrace.init();   // M8: shader hftrace (archivo + fallback) + VAO/VBO
     impl->ionosondeLayer.setVisible(true);
     impl->ionosondeLayer.setHeightOffset(320.0f / 6371.0f);
     impl->ionosondeLayer.setPointSize(11.0f);
@@ -1387,6 +1401,62 @@ void App::update(float dt) {
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     }
 
+    // M8 (plan 11.5): grids del circuito HF cacheados en impl + rebuild del
+    // circuito SOLO cuando cambia el input (P7): cadencia 1 s en live (los
+    // datos GIRO mudan cada ~300 s), salto de epoch > 30 s (scrub de replay
+    // reactivo - el trazado y la matriz siguen al scrub, aceptacion 4) o
+    // dirty del panel (freq/TX/RX). Apagado por defecto: coste cero salvo
+    // capa visible o panel abierto.
+    if (impl->hfTraceVisible || impl->hfPanelOpen) {
+        static double lastHfGrid = -1.0;
+        static double lastHfEpoch = -1.0;
+        const double hfEpoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        const bool hfEpochJump = (lastHfEpoch < 0.0) || std::fabs(hfEpoch - lastHfEpoch) > 30.0;
+        if (lastHfGrid < 0.0 || (now - lastHfGrid) > 1.0 || hfEpochJump || impl->hfCircuitDirty) {
+            lastHfGrid = now;
+            lastHfEpoch = hfEpoch;
+            impl->hfCircuitDirty = false;
+            float hfKp = currentKp();
+            float hfFlux = (impl->lastXray && impl->lastXray->latest.valid)
+                ? impl->lastXray->latest.flux : 0.0f;
+            impl->hfFoF2Grid = giroInterpGrid(gsAct, 0, 72, 72);   // var de mapa 1 = foF2
+            impl->hfHmF2Grid = giroInterpGrid(gsAct, 2, 72, 72);   // var de mapa 3 = hmF2
+            impl->hfLufGrid  = radioInterpGrid(gsAct, 0, 72, 72, hfEpoch, hfKp, hfFlux);  // LUF M7
+            impl->hfGridStamp++;
+            // Resolver TX/RX por codigo sobre gsAct (coords del catalogo):
+            // TX = override del dropdown o estacion pineada o DB049 (default
+            // demo); RX = override (dropdown/pick) o EG931 (plan 11.4, P0).
+            HFTraceLayer::Input hfIn;
+            std::string hfWantTx = impl->hfTxCode;
+            if (hfWantTx.empty()) hfWantTx = impl->pinnedCode;
+            if (hfWantTx.empty()) hfWantTx = "DB049";
+            const std::string hfWantRx = impl->hfRxCode.empty() ? std::string("EG931") : impl->hfRxCode;
+            for (const auto& hs : gsAct) {
+                if (!hfIn.txValid && hs.code == hfWantTx && (hs.latDeg != 0.0f || hs.lonDeg != 0.0f)) {
+                    hfIn.txValid = true;
+                    hfIn.txLatDeg = (double)hs.latDeg;
+                    hfIn.txLonDeg = (double)hs.lonDeg;
+                }
+                if (!hfIn.rxValid && hs.code == hfWantRx && (hs.latDeg != 0.0f || hs.lonDeg != 0.0f)) {
+                    hfIn.rxValid = true;
+                    hfIn.rxLatDeg = (double)hs.latDeg;
+                    hfIn.rxLonDeg = (double)hs.lonDeg;
+                }
+            }
+            hfIn.freqMHz = impl->hfFreqMHz;
+            hfIn.gridStamp = impl->hfGridStamp;
+            if (impl->hfFoF2Grid.valid && !impl->hfFoF2Grid.values.empty())
+                hfIn.foF2Grid = impl->hfFoF2Grid.values.data();
+            if (impl->hfHmF2Grid.valid && !impl->hfHmF2Grid.values.empty())
+                hfIn.hmF2Grid = impl->hfHmF2Grid.values.data();
+            if (impl->hfLufGrid.valid && !impl->hfLufGrid.values.empty())
+                hfIn.lufGrid = impl->hfLufGrid.values.data();
+            hfIn.gridW = 72;
+            hfIn.gridH = 72;
+            impl->hfTrace.update(hfIn);
+        }
+    }
+
     // Volumen Ne(h) + RefShells dinamicos: reconstruir cada ~5 s con las
     // muestras activas (sigue live, replay, sol y flares).
     static double lastVolBuild = -1.0;
@@ -1555,6 +1625,8 @@ void App::saveSettings() {
     fprintf(f, "camRY %g\n", (double)impl->camera.rotateY);
     fprintf(f, "camDist %g\n", (double)impl->camera.distance);
     fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
+    fprintf(f, "hfTraceVisible %d\n", impl->hfTraceVisible ? 1 : 0);   // M8 (plan 11.4)
+    fprintf(f, "hfFreqMHz %g\n", (double)impl->hfFreqMHz);
     fclose(f);
 }
 
@@ -1646,6 +1718,8 @@ void App::loadSettings() {
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
         else if (k == "camRY") impl->camera.rotateY = (float)v;
         else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 20.0f);
+        else if (k == "hfTraceVisible") impl->hfTraceVisible = clB(v);   // M8 (plan 11.4)
+        else if (k == "hfFreqMHz") impl->hfFreqMHz = glm::clamp((float)v, 1.0f, 30.0f);
     }
     if (legacyBloom) {
         // D1 (v2.1, correccion tras la auditoria M1 de MUSE): la intensidad
@@ -2158,6 +2232,9 @@ void App::render() {
         if (showSW) impl->solarWindLayer.render(view, proj);
         if (showFar) impl->faradayLayer.render(view, proj);
         if (showAur) impl->auroraLayer.render(view, proj);
+        // M8 (plan 11.3): trazado HF — ribbon aditivo en el bloque de overlays
+        // (depth write OFF lo fija el bloque); el pulso viaja con impl->time.
+        if (impl->hfTraceVisible) impl->hfTrace.render(view, proj, camPos, impl->time);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
@@ -2586,8 +2663,21 @@ void App::render() {
             if (dx * dx + dy * dy < 36.0 && impl->ionosondeLayer.isVisible()) {
                 if (hitIdx >= 0) {
                     const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
-                    if (sp && sp->code == impl->pinnedCode) impl->pinnedCode.clear();  // toggle off
-                    else if (sp) impl->pinnedCode = sp->code;
+                    if (impl->hfPickRx) {
+                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
+                        // circuito (consume el click, no toca el pin).
+                        if (sp) {
+                            impl->hfRxCode = sp->code;
+                            impl->hfCircuitDirty = true;
+                        }
+                        impl->hfPickRx = false;
+                    } else if (sp && sp->code == impl->pinnedCode) {
+                        impl->pinnedCode.clear();  // toggle off
+                    } else if (sp) {
+                        impl->pinnedCode = sp->code;
+                    }
+                } else if (impl->hfPickRx) {
+                    impl->hfPickRx = false;   // click al vacio: cancela el pick (pin intacto)
                 } else {
                     impl->pinnedCode.clear();
                 }
@@ -3024,6 +3114,112 @@ void App::render() {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", rpErr.c_str());
     ImGui::End();
 
+    // ---- M8 (plan 11.4): panel «Circuit» (TX/RX + matriz de bandas) ----
+    {
+        ImGui::SetNextWindowPos(ImVec2(10, 650), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(260, 400), ImGuiCond_FirstUseEver);
+        const bool hfOpen = ImGui::Begin("Circuit");
+        impl->hfPanelOpen = hfOpen;
+        if (hfOpen) {
+            ImGui::TextWrapped("HF multi-hop circuit (MUF/FOT/LUF + band matrix)");
+            HelpMarker("Great-circle path with N hops at virtual height h'. Hop MUF = foF2 at the reflection point times M(D) (Dudeney/ITU-R P.1240). Circuit LUF comes from the M7 D-region absorption grid (max over hops). Bands: open between LUF and FOT, marginal up to MUF, closed beyond. Drag the frequency slider or replay the timeline and the circuit follows.");
+            if (ImGui::Checkbox("HF trace layer", &impl->hfTraceVisible))
+                impl->hfCircuitDirty = true;   // encender pide grids frescos
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Draw the ray path as a camera-facing ribbon: green = hop open at the panel frequency, amber = marginal, red = closed. A brightness pulse travels along the arc.");
+
+            // TX/RX: combos sobre las estaciones visibles (catalogo incluido).
+            std::vector<const StationPoint*> hfSts;
+            hfSts.reserve(impl->ionosondeLayer.samples_.size());
+            for (const auto& hfs : impl->ionosondeLayer.samples_) hfSts.push_back(&hfs);
+            std::sort(hfSts.begin(), hfSts.end(),
+                      [](const StationPoint* a, const StationPoint* b) { return a->code < b->code; });
+            std::vector<std::string> hfTxNames, hfRxNames;
+            hfTxNames.push_back("(pinned / DB049)");
+            hfRxNames.push_back("(default EG931)");
+            int hfTxSel = 0, hfRxSel = 0;
+            for (const StationPoint* hfs : hfSts) {
+                hfTxNames.push_back(hfs->code + " " + hfs->name);
+                hfRxNames.push_back(hfs->code + " " + hfs->name);
+                if (hfs->code == impl->hfTxCode) hfTxSel = (int)hfTxNames.size() - 1;
+                if (hfs->code == impl->hfRxCode) hfRxSel = (int)hfRxNames.size() - 1;
+            }
+            std::vector<const char*> hfTxItems, hfRxItems;
+            for (const auto& hn : hfTxNames) hfTxItems.push_back(hn.c_str());
+            for (const auto& hn : hfRxNames) hfRxItems.push_back(hn.c_str());
+            if (ImGui::Combo("TX", &hfTxSel, hfTxItems.data(), (int)hfTxItems.size())) {
+                impl->hfTxCode = (hfTxSel == 0) ? std::string() : hfSts[(size_t)(hfTxSel - 1)]->code;
+                impl->hfCircuitDirty = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Transmit end. Default: the pinned station (click a station on the globe), else DB049 (Dourbes) as in the demo.");
+            if (ImGui::Combo("RX", &hfRxSel, hfRxItems.data(), (int)hfRxItems.size())) {
+                impl->hfRxCode = (hfRxSel == 0) ? std::string() : hfSts[(size_t)(hfRxSel - 1)]->code;
+                impl->hfCircuitDirty = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Receive end. Default: EG931 (Fairford) as in the demo.");
+            ImGui::SameLine();
+            if (impl->hfPickRx) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.6f, 0.2f, 1.0f));
+                if (ImGui::Button("Pick RX...")) impl->hfPickRx = false;
+                ImGui::PopStyleColor();
+            } else {
+                if (ImGui::Button("Pick RX...")) impl->hfPickRx = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Next click on a station marker on the globe fixes RX (the pin is left untouched).");
+            if (impl->hfPickRx)
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "pick mode: click a station...");
+            if (ImGui::SliderFloat("Freq (MHz)", &impl->hfFreqMHz, 1.0f, 30.0f, "%.1f"))
+                impl->hfCircuitDirty = true;
+
+            const HFCircuitResult& hfR = impl->hfTrace.result();
+            if (!hfR.valid) {
+                ImGui::TextDisabled("Waiting for TX/RX coordinates + grids...");
+            } else {
+                ImGui::Text("D %.0f km   %d hop(s)", hfR.distKm, hfR.nHops);
+                ImGui::Text("h' %.0f km   elev %.1f deg", hfR.hVirtualKm, hfR.elevDeg);
+                ImGui::Text("MUF %.1f   FOT %.1f   LUF %.1f MHz", hfR.mufMHz, hfR.fotMHz, hfR.lufMHz);
+                // Matriz de bandas (plan 11.4, literales: 160..10 m).
+                static const char* hfBands[10] = { "160 m", "80 m", "60 m", "40 m", "30 m",
+                                                   "20 m", "17 m", "15 m", "12 m", "10 m" };
+                static const float hfFreqs[10] = { 1.8f, 3.5f, 5.3f, 7.0f, 10.1f,
+                                                   14.0f, 18.1f, 21.0f, 24.9f, 28.0f };
+                for (int i = 0; i < 10; i++) {
+                    ImGui::Text("%-6s", hfBands[i]);
+                    ImGui::SameLine();
+                    ImGui::Text("%5.1f MHz", hfFreqs[i]);
+                    ImGui::SameLine();
+                    const hfc::BandState hfb = hfc::bandState((double)hfFreqs[i],
+                                                              hfR.lufMHz, hfR.fotMHz, hfR.mufMHz);
+                    if (hfb == hfc::BAND_OPEN)
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "open");
+                    else if (hfb == hfc::BAND_MARGINAL)
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "marginal");
+                    else
+                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "closed");
+                }
+                if (impl->replayMode)
+                    ImGui::TextDisabled("replay: circuit follows the epoch");
+            }
+        }
+        ImGui::End();
+        // Marcadores + etiquetas proyectadas TX/RX (plan 11.3: discos en
+        // espacio de pantalla — proyeccion mundo->NDC->pixel del frame).
+        const HFCircuitResult& hfR2 = impl->hfTrace.result();
+        if (impl->hfTraceVisible && hfR2.valid) {
+            auto hfMarker = [&](const char* label, double lat, double lon, const ImVec4& col) {
+                const glm::vec3 wp = CoordSys::latLonAltToPos((float)lat, (float)lon, 0.0f);
+                const glm::vec4 cp = proj * view * glm::vec4(wp, 1.0f);
+                if (cp.w <= 0.0f) return;   // detras de la camara
+                const float sx = (float)winW * (0.5f + 0.5f * cp.x / cp.w);
+                const float sy = (float)winH * (0.5f - 0.5f * cp.y / cp.w);
+                ImDrawList* dl = ImGui::GetBackgroundDrawList();
+                dl->AddCircleFilled(ImVec2(sx, sy), 5.0f, ImGui::GetColorU32(col));
+                dl->AddText(ImVec2(sx + 8.0f, sy - 7.0f), ImGui::GetColorU32(col), label);
+            };
+            hfMarker("TX", hfR2.txLatDeg, hfR2.txLonDeg, ImVec4(0.4f, 1.0f, 0.5f, 1.0f));
+            hfMarker("RX", hfR2.rxLatDeg, hfR2.rxLonDeg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+        }
+    }
+
     // ---- Legend: active color scale of the spherical layer (units + range) ----
     {
         static const char* LEG_NAMES[8] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F" };
@@ -3369,6 +3565,7 @@ void App::shutdown() {
     impl->faradayLayer.destroy();
     impl->refShells.destroy();
     impl->auroraLayer.destroy();
+    impl->hfTrace.destroy();
 
     if (impl->quadVAO) glDeleteVertexArrays(1, &impl->quadVAO);
     if (impl->quadVBO) glDeleteBuffers(1, &impl->quadVBO);
