@@ -185,14 +185,15 @@ int main() {
                hfc::legAltitudeKm(310.0, 0.65, 2.2), 443.3, 1.0e-9);
     check_near("M4  leg(310,0.5,1) = 155 (formula M8 literal h'*t)",
                hfc::legAltitudeKm(310.0, 0.5, 1.0), 155.0, 0.0);
-    // ribbonHalfWidth: 0.004@1 (look M8 exacto) -> 0.0075@2.2 (demo: tubo
-    // radio 0.0075) -> tope 0.012@5. Float C++ vs double python, tol 1e-6.
-    check_near("M5  hw(1.0) = 0.004 (look M8 en escala fisica)",
-               (double)hfc::ribbonHalfWidth(1.0f), 0.004, 1.0e-6);
-    check_near("M6  hw(2.2) = 0.0075 (paridad demo)",
-               (double)hfc::ribbonHalfWidth(2.2f), 0.007500000000000001, 1.0e-6);
-    check_near("M7  hw(5.0) = 0.012 (tope del cap)",
-               (double)hfc::ribbonHalfWidth(5.0f), 0.012, 1.0e-6);
+    // ribbonHalfWidth (re-sellado M9b, comparativa lado a lado con la demo):
+    // 0.0075 CONSTANTE a cualquier Explode — la demo usa tubo de radio
+    // 0.0075 fijo y el ancho NO escala con la exageracion. tol 1e-6.
+    check_near("M5  hw(1.0) = 0.0075 (demo verbatim: constante)",
+               (double)hfc::ribbonHalfWidth(1.0f), 0.0075, 1.0e-6);
+    check_near("M6  hw(2.2) = 0.0075 (punto de calibracion demo)",
+               (double)hfc::ribbonHalfWidth(2.2f), 0.0075, 1.0e-6);
+    check_near("M7  hw(5.0) = 0.0075 (sin tope: constante)",
+               (double)hfc::ribbonHalfWidth(5.0f), 0.0075, 1.0e-6);
     {
         bool mono = true;
         float prevw = hfc::ribbonHalfWidth(1.0f);
@@ -201,12 +202,12 @@ int main() {
             if (w < prevw) mono = false;
             prevw = w;
         }
-        check_bool("M8  hw monotono no-decreciente en [1,5] (paso 0.5)", mono);
+        check_bool("M8  hw monotono no-decreciente en [1,5] (constante: trivial)", mono);
     }
-    check_near("M9  hw clamp bajo: hw(0.3) = hw(1) = 0.004",
-               (double)hfc::ribbonHalfWidth(0.3f), 0.004, 1.0e-6);
-    check_near("M10 hw clamp alto: hw(9.0) = hw(5) = 0.012",
-               (double)hfc::ribbonHalfWidth(9.0f), 0.012, 1.0e-6);
+    check_near("M9  hw clamp bajo: hw(0.3) = 0.0075 (constante)",
+               (double)hfc::ribbonHalfWidth(0.3f), 0.0075, 1.0e-6);
+    check_near("M10 hw clamp alto: hw(9.0) = 0.0075 (constante)",
+               (double)hfc::ribbonHalfWidth(9.0f), 0.0075, 1.0e-6);
     printf("--- N) M9fix: apice sigue al slider de capa (offset + floor) ---\n");
     // GENERADO por scripts/m9fix_gen_test.py (implementacion python
     // independiente). hfc::legAltitudeKm 4-arg es PRODUCCION (las 2

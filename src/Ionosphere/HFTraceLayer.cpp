@@ -22,7 +22,7 @@ layout(location=3) in vec3 aTangent;
 layout(location=4) in float aSide;
 uniform mat4 u_view, u_projection;
 uniform vec3 u_camPos;
-uniform float u_halfWidth;   // M9: ancho acoplado a explodeFactor (uniform desde render)
+uniform float u_halfWidth;   // M9b: ancho demo-verbatim 0.0075 (uniform desde render, constante)
 out float vT;
 out float vViable;
 void main() {
@@ -263,7 +263,7 @@ void HFTraceLayer::render(const glm::mat4& view, const glm::mat4& projection,
     shader_.setMat4("u_projection", projection);
     shader_.setVec3("u_camPos", camPos);
     shader_.setFloat("u_time", timeSec);
-    shader_.setFloat("u_halfWidth", hfc::ribbonHalfWidth(heightExag_));   // M9
+    shader_.setFloat("u_halfWidth", hfc::ribbonHalfWidth(heightExag_));   // M9b: ancho demo-verbatim (constante)
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, vertCount_);
     glBindVertexArray(0);

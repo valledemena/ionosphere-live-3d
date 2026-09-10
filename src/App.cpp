@@ -2628,7 +2628,7 @@ void App::render() {
         impl->refShells.setExplode(impl->explodeFactor);
         impl->hfCircuitDirty = true;   // M9: rebuild del ribbon en el mismo frame (la altura lo sigue)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale. The HF ray ribbon follows: apex height and width scale with this.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale. The HF ray ribbon follows: apex height scales with this; width stays demo-constant (0.0075).");
     if (ImGui::Checkbox("Path slice", &impl->sliceOn)) {
         impl->sliceLayer.setVisible(impl->sliceOn);
         if (!impl->sliceOn) { impl->sliceA.clear(); impl->sliceB.clear(); }

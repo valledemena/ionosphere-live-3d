@@ -22,13 +22,14 @@
 //      de App.cpp), shader shaders/hftrace.{vert,frag} + fallback inline
 //      (patron M6).
 //
-// P0 del sello (correccion factual del plan 11.2): D del circuito = geodesica
-// REAL de las coordenadas del catalogo. DB049->EG931 = 481 km => 1 salto a
-// ~50.4 grados; el "D~2511 / 3 saltos / 7.9 grados" del plan es una premisa
-// inconsistente con su propia formula 11.1 (2511 km = 1 salto; 3 saltos a
-// 7.865 grados = D~7533). Los anclajes largos viven sinteticos en
-// tests/test_hop_geometry.cpp (ya verdes) y el visual multi-salto se
-// verifica en vivo con un par largo elegido al vuelo.
+// P0 del sello (FE DE ERRATAS M9b — retract de MUSE, verificado contra el
+// catalogo kc2g): D del circuito = geodesica REAL de las coordenadas del
+// catalogo. EG931 = Eglin AFB, FL (30.5N, 273.5E) — FF051 es Fairford: la
+// "correccion factual" de la era M4R (481 km / 1 salto / ~50.4 grados)
+// usaba las coords de Fairford y era falsa. DB049->EG931 = ~7533 km =>
+// 3 saltos de ~2511 km a ~7.9 grados: el plan 11.2 (7533/3/7.9) se
+// acepta TAL CUAL. Los anclajes 2511/7.9/M=2.7143 siguen sinteticos en
+// tests/test_hop_geometry.cpp (la formula, intacta).
 //
 // Convencion esferica: hfc:: opera en lat/lon puros (el slerp de arcPoint
 // usa internamente la convencion de CoordinateSystem, transparente al
@@ -36,12 +37,14 @@
 // (App.cpp) salen de densityDir (marco del motor, theta = pi - lon) — NO
 // de latLonAltToPos, que esta 180 grados rotado sobre Y (bug del bucket en
 // vivo, corregido). La esfera es de radio 1 normalizado: el ancho del
-// ribbon 0.004 (plan 11.3, ~0.004 R_tierra) es directo en unidades de mundo.
+// ribbon 0.0075 (M9b: semiancho demo-verbatim, constante) es directo en unidades de mundo.
 // M9 (port demo->C++, peticion de DAVID): el arco acompana la altura
 // visual de las capas — la altitud de las patas se multiplica por
 // explodeFactor (slider «Explode» 1..5 del panel Layers, default 1 =
-// escala fisica; h' SIGUE vivo del grid GIRO) y el ancho escala con el
-// (hfc::ribbonHalfWidth). Pulso a paridad de la demo (0.22/2.5/0.9/0.9).
+// escala fisica; h' SIGUE vivo del grid GIRO). El ancho es el de la demo:
+// 0.0075 CONSTANTE — re-sellado M9b con la comparativa lado a lado (la
+// demo no escala el tubo con la exageracion; hfc::ribbonHalfWidth).
+// Pulso a paridad de la demo (0.22/2.5/0.9/0.9).
 // Fisica del circuito, grids y matriz de bandas intactas.
 // M9fix (re-check de DAVID con la demo al lado): (1) el apice ADEMAS
 // sigue al slider «Altitude (km)» de Layers — apice = (h' + altKm -
@@ -191,14 +194,13 @@ inline double legAltitudeKm(double hVirtualKm, double legT, double heightExag,
     return base * legT * heightExag;
 }
 
-// Semiancho del ribbon: 0.004 en exag=1 (look M8 exacto), 0.0075 en
-// exag=2.2 (paridad demo: tubo de radio 0.0075), tope 0.012 en exag=5.
-// Lineal entre las anclas; clamp al rango del slider.
-inline float ribbonHalfWidth(float heightExag) {
-    if (heightExag < 1.0f) heightExag = 1.0f;
-    if (heightExag > 5.0f) heightExag = 5.0f;
-    const float hw = 0.004f + (heightExag - 1.0f) * (0.0035f / 1.2f);
-    return hw > 0.012f ? 0.012f : hw;
+// Semiancho del ribbon: 0.0075 CONSTANTE a cualquier Explode (re-sellado
+// M9b con la comparativa lado a lado demo/C++: la demo usa tubo de radio
+// 0.0075 fijo — el ancho NO escala con la exageracion). El escalado M9
+// (0.004@1 -> 0.012@5) se retira: preservaba un "look M8 @1.0" que
+// David nunca vio (el ribbon fue invisible hasta M8fix-2).
+inline float ribbonHalfWidth(float /*heightExag*/) {
+    return 0.0075f;   // M9b: demo verbatim (tubo de radio 0.0075)
 }
 } // namespace hfc
 

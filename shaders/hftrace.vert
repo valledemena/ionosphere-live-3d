@@ -8,7 +8,7 @@ layout(location=3) in vec3 aTangent;
 layout(location=4) in float aSide;
 uniform mat4 u_view, u_projection;
 uniform vec3 u_camPos;
-uniform float u_halfWidth;   // M9: ancho acoplado a explodeFactor (uniform desde render)
+uniform float u_halfWidth;   // M9b: ancho demo-verbatim 0.0075 (uniform desde render, constante)
 out float vT;
 out float vViable;
 void main() {
