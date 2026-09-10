@@ -56,8 +56,8 @@
 // transversal del trazo = tubo+halo — render() pasa el semiancho
 // GEOmetrico (hfc::ribbonHalfWidth x hfc::ribbonSpan: MISMO vertex
 // count y 1 draw) y el frag recorta nucleo/hombro/aura
-// (hfc::traceProfile) + cabeza del pulso azul-blanca acotada
-// (hfc::pulseHeadBoost/Gate/Amplitude). Ancho nucleo M9b 0.0075 y
+// (hfc::traceProfile) + cabeza del pulso acotada TENIDA por col desde
+// M9e (hfc::pulseHeadBoost/Gate/Amplitude). Ancho nucleo M9b 0.0075 y
 // mezcla multiplicativa M9fix intactos; muestras y colores por tramo
 // intactos (P3/P4 sin cambio).
 // M9d (neon ambiental del cursor — fair shot M9c de DAVID: "en la demo
@@ -65,7 +65,7 @@
 // nucleo"; diseno MUSE sellado por GLM): el halo RESPIRA con la
 // envolvente del pulso (halo*(0.6+0.8*env) — hfc::haloPulseFloor/
 // haloPulseGain) y la cabeza DERRAMA luz tenida por todo el span
-// (hfc::glowSpill = 0.30*boost*(1-s)). ADAPTACION obligatoria al
+// (hfc::glowSpill = 0.45*env*(1-s) desde M9e). ADAPTACION obligatoria al
 // sello: el ribbon mezcla (SRC_ALPHA, ONE) — dst recibe rgb*alpha, asi
 // que el derrame vive en rgb Y en alpha (un spill solo-rgb quedaria
 // atenuado a ~0.03 en la falda). Cero uniforms/vertex/draw nuevos; la
@@ -74,6 +74,23 @@
 // solo el aura respira, solo la cabeza derrama (contraste dst del aura
 // cabeza/reposo ~21x en s=0.7, 2.6x en M9c). Twins: traceProfileBreath/
 // glowSpill (tests seccion P); el perfil M9c = breath(s, 0.5) exacto.
+// M9e (veredicto DAVID de la re-captura M9d: nucleo bien, "derrame
+// exterior flojo... el cursor es blanco y en la demo es verde; el carril
+// siempre verde, el gloom avanza y SORESALE CON FUERZA del carril — nada
+// blanco"; + matizacion MUSE: cabeza tenida por col capada, spill 0.45,
+// velocidad/longitud como la demo): (1) colores de banda DEMO-VERBATIM
+// shaders.ts:460-462 (hfc::traceColor*): el R del verde 0.30->0.10 mata
+// el lavado a blanco a cualquier ganancia; (2) cabeza TENIDA (add =
+// col*amp: el verde sale del propio col, suma blanquecina eliminada);
+// (3) derrame 0.30->0.45 (plan-B sellado) y cabalgando la ENVOLVENTE
+// env (medida en vivo: el glow de la demo avanza ancho +-0.25 de fase,
+// halo 2-3x el carril — no el collar +-0.12). VELOCIDAD/LONGITUD: los
+// literales 0.22/2.5 son demo-verbatim DESDE M9 (shaders.ts:450, u_time
+// en segundos reales en ambos, aT = longitud de arco): verificado en
+// vivo TX->RX ~13 s de captura = 11.36 s teoricos — la percepcion de
+// "tramo corto/dardo" era el collar estrecho + cabeza blanca, no la
+// velocidad. Twins: traceColor*/pulseCycleHz/pulseRepeatsPerArc
+// (tests seccion Q).
 // =============================================================================
 
 namespace hfc {
@@ -266,14 +283,13 @@ inline float traceProfile(float s) {
     return core + halo;
 }
 
-// Cabeza del pulso (P2): la cabeza de la demo es blanco-azulada (VLM) —
-// el aditivo es legitimo SOLO como nucleo estrecho acotado (leccion
-// M9fix: nunca mezcla aditiva global). boost = envolvente longitudinal
-// en la cima (|p-0.5| < 0.12 de fase); gate = acota al nucleo
-// transversal (s < 0.45 — hombro y aura no llevan cabeza); amplitud
-// 0.55*boost*gate sobre RGB (0.85, 0.92, 1.0) en el shader. Con banda
-// verde en la cima: G/B clipean (cian-blanquecino como la demo), R
-// queda vivo (~0.96 a boost 0.8) — nunca blanco plano global.
+// Cabeza del pulso (P2): boost = envolvente longitudinal en la cima
+// (|p-0.5| < 0.12 de fase); gate = acota al nucleo transversal (s <
+// 0.45 — hombro y aura no llevan cabeza); amplitud 0.55*boost*gate.
+// M9e: el shader aplica la amplitud TENIDA por col (add = col*amp) —
+// la cabeza hereda el color del tramo como la demo. Con el verde demo
+// (R 0.10) el pico satura G/B (verde intenso) y R queda diminuto
+// (~0.32 incluso a la cima x3.16) — nunca blanco (veredicto DAVID).
 inline float pulseHeadBoost(float absPhaseFromPeak) {
     return 1.0f - smoothstepf(0.0f, 0.12f, absPhaseFromPeak);
 }
@@ -290,13 +306,15 @@ inline float pulseHeadAmplitude(float boost, float gate) {
 // obligatoria: el ribbon mezcla (SRC_ALPHA, ONE) — dst recibe rgb*alpha,
 // asi que el derrame vive en rgb Y en alpha (solo-rgb se atenuaria a
 // ~0.03 en la falda). El halo respira en la escala ANCHA (env, la misma
-// envolvente del cursor) y el derrame es el collar ESTRECHO (boost) —
-// dos escalas de neon como la demo. El nucleo y la mezcla M9fix quedan
-// intactos: en reposo el cuerpo del tubo apenas cambia (pedestal de aura
-// al 60%) y fuera de la cabeza spill = 0 (arco puro multiplicativo).
+// envolvente del cursor) y desde M9e el derrame TAMBIEN cabalga env
+// (medicion en vivo: el glow de la demo avanza ancho, no en collar) —
+// una sola escala de neon, ancha y con fuerza. El nucleo y la mezcla
+// M9fix quedan intactos: en reposo el cuerpo del tubo apenas cambia
+// (pedestal de aura al 60%) y en reposo spill = 0 (arco puro
+// multiplicativo).
 inline float haloPulseFloor() { return 0.6f; }   // reposo: aura al 60%
 inline float haloPulseGain()  { return 0.8f; }   // cima: aura x1.4
-inline float glowSpillGain()  { return 0.30f; }  // derrame tenido de la cabeza
+inline float glowSpillGain()  { return 0.45f; }  // M9e: 0.30->0.45 (plan-B sellado)
 
 // Perfil con respiracion: core(s) + halo(s)*(floor + gain*env), env en
 // [0,1]. INVARIANTE: breath(s, 0.5) == traceProfile(s) exacto (halo x1.0
@@ -310,11 +328,34 @@ inline float traceProfileBreath(float s, float env) {
     return core + halo * (haloPulseFloor() + haloPulseGain() * env);
 }
 
-// Derrame transversal de la cabeza: gain*boost*(1-s) — luz tenida (col)
-// con caida lineal hasta el borde geometrico. En rgb Y en alpha (shader).
-inline float glowSpill(float s, float boost) {
-    return glowSpillGain() * boost * (1.0f - s);
+// Derrame transversal del cursor: gain*env*(1-s) — luz tenida (col)
+// con caida lineal hasta el borde geometrico, en rgb Y en alpha
+// (shader). M9e: cabalga la ENVOLVENTE (arg = env, la misma del pulso;
+// antes boost): el glow avanza ANCHO (+-0.25 de fase ~ 20% del
+// circuito) como el de la demo — en reposo env=0 => spill=0.
+inline float glowSpill(float s, float env) {
+    return glowSpillGain() * env * (1.0f - s);
 }
+
+// --- M9e: paleta demo-verbatim + literales del pulso (shaders.ts) ---
+// Colores de banda EXACTOS de la demo (shaders.ts:460-462). El punto
+// critico es el R del verde = 0.10: a cualquier ganancia multiplicativa
+// el canal R queda diminuto => el cursor lee VERDE saturado, nunca
+// lavado a blanco (veredicto DAVID de M9d; los (0.30,1.00,0.40) M8
+// dejaban R=0.30 y, con el aditivo blanquecino, el pico se iba a
+// blanco-cian). Los marg/closed tambien demo-verbatim.
+inline glm::vec3 traceColorOpen()     { return glm::vec3(0.10f, 0.95f, 0.55f); }
+inline glm::vec3 traceColorMarginal() { return glm::vec3(0.98f, 0.72f, 0.10f); }
+inline glm::vec3 traceColorClosed()   { return glm::vec3(0.95f, 0.16f, 0.16f); }
+
+// Literales del pulso (shaders.ts:450, demo-verbatim desde M9):
+// p = fract(u_time*0.22 - aT*2.5) — ciclo de emision 4.545 s, cada
+// paquete recorre el circuito en 1/(0.22/2.5) = 11.36 s, 2.5 paquetes
+// en vuelo. Verificado en vivo contra la demo (TX->RX ~13 s de
+// captura). La percepcion de "tramo corto" era el collar + cabeza
+// blanca (M9c), no la velocidad.
+inline float pulseCycleHz()       { return 0.22f; }
+inline float pulseRepeatsPerArc() { return 2.5f; }
 } // namespace hfc
 
 // =============================================================================

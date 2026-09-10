@@ -287,15 +287,16 @@ int main() {
     check_near("O17 amplitud pico = 0.55*1*1",
                (double)hfc::pulseHeadAmplitude(1.0f, 1.0f), 0.55, 1.0e-6);
     {
-        // cabeza compuesta, banda verde (0.30,1.00,0.40), pulse 0.9, f(0):
+        // cabeza compuesta M9e, banda verde DEMO (0.10,0.95,0.55), pulse
+        // 0.9, f(0), add TENIDO por col (el verde sale del propio col):
         const float ampPk = hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.0f), hfc::pulseHeadGate(0.0f));
-        const float gTot = 1.00f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.92f * ampPk;
-        const float bTot = 0.40f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 1.00f * ampPk;
-        const float rHalf = 0.30f * (0.55f + 0.9f) * hfc::traceProfile(0.0f)
-                          + 0.85f * hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.06f), 1.0f);
-        check_bool("O18 cabeza pico: G y B clipean (>=1, cian-blanquecino demo)",
+        const float gTot = 0.95f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.95f * ampPk;
+        const float bTot = 0.55f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.55f * ampPk;
+        const float rHalf = 0.10f * (0.55f + 0.9f) * hfc::traceProfile(0.0f)
+                          + 0.10f * hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.06f), 1.0f);
+        check_bool("O18 cabeza pico: G y B saturan (>=1, verde intenso demo)",
                    gTot >= 1.0 && bTot >= 1.0);
-        check_bool("O19 cabeza no-blanca global: R vivo a media cabeza (boost 0.5, <1)",
+        check_bool("O19 cabeza no-blanca global: R diminuto a media cabeza (boost 0.5, <1)",
                    rHalf < 1.0);
     }
     check_bool("O20 fuera de la cabeza add = 0 (amplitude(boost(0.2),1)==0): arco puro multiplicativo",
@@ -348,22 +349,22 @@ int main() {
         }
         check_bool("P9  breath no-decreciente en env a s=0.7 (el aura solo se enciende, nunca se apaga al paso)", monoPe);
     }
-    check_near("P10 spill(0.0, 1.0) = 0.30 (derrame pleno en el centro)",
-               (double)hfc::glowSpill(0.0f, 1.0f), 0.30, 1.0e-6);
+    check_near("P10 spill(0.0, env 1) = 0.45 (M9e: plan-B sellado 0.30->0.45)",
+               (double)hfc::glowSpill(0.0f, 1.0f), 0.45, 1.0e-6);
     check_near("P11 spill(1.0, 1.0) = 0.0 (nada en el borde geometrico)",
                (double)hfc::glowSpill(1.0f, 1.0f), 0.0, 1.0e-9);
-    check_near("P12 spill(0.7, 1.0) = 0.09 (falda del derrame a la cima)",
-               (double)hfc::glowSpill(0.7f, 1.0f), 0.09, 1.0e-6);
+    check_near("P12 spill(0.7, env 1) = 0.135 (falda del derrame a la cima)",
+               (double)hfc::glowSpill(0.7f, 1.0f), 0.135, 1.0e-6);
     {
         bool noSpill = true;
         for (int i12 = 0; i12 <= 100; i12++) {
             if (hfc::glowSpill((float)i12 * 0.01f, 0.0f) != 0.0f) noSpill = false;
         }
-        check_bool("P13 fuera de la cabeza spill = 0 (boost 0): arco puro en reposo", noSpill);
+        check_bool("P13 en reposo spill = 0 (env 0): arco puro multiplicativo (M9e: el 2o arg es env)", noSpill);
     }
-    check_near("P14 alpha compuesta falda-cima (s=0.85): 0.9*breath + spill = 0.1593",
+    check_near("P14 alpha compuesta falda-cima (s=0.85): 0.9*breath + spill = 0.1818",
                (double)(0.9f * hfc::traceProfileBreath(0.85f, 1.0f) + hfc::glowSpill(0.85f, 1.0f)),
-               0.15933333333333333, 1.0e-6);
+               0.18183333333333332, 1.0e-6);
     {
         // contraste dst (SRC_ALPHA, ONE): rgb*alpha con rgb = mezcla*breath + spill
         const float bhP = hfc::traceProfileBreath(0.7f, 1.0f);
@@ -384,12 +385,93 @@ int main() {
                    rgbSkirt < 1.0f);
     }
     {
-        // nucleo a la cima sigue quemando como la demo (O18 con breath + spill)
+        // nucleo a la cima sigue quemando (O18 con breath + spill + cabeza
+        // TENIDA M9e: add = col*amp — el G del pico sale del propio col)
         const float ampPk = hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.0f), hfc::pulseHeadGate(0.0f));
-        const float gTot = 1.00f * ((0.55f + 0.9f) * hfc::traceProfileBreath(0.0f, 1.0f)
-                          + hfc::glowSpill(0.0f, 1.0f)) + 0.92f * ampPk;
-        check_bool("P17 nucleo a la cima: G >= 1 (cian-blanquecino de la demo conservado)",
+        const float gTot = 0.95f * ((0.55f + 0.9f) * hfc::traceProfileBreath(0.0f, 1.0f)
+                          + hfc::glowSpill(0.0f, 1.0f)) + 0.95f * ampPk;
+        check_bool("P17 nucleo a la cima: G >= 1 (verde intenso de la demo, R diminuto)",
                    gTot >= 1.0f);
+    }
+    printf("--- Q) M9e: cursor verde demo-verbatim + glow ancho de la envolvente ---\n");
+    // GENERADO por scripts/m9e_gen_test.py (implementacion python
+    // independiente; evidencia: fuente shaders.ts + demo en vivo).
+    // traceColor*/pulseCycleHz/pulseRepeatsPerArc son twins C++ EXACTOS
+    // de los literales GLSL/TS (paridad por proofs RT: el GLSL no llama
+    // hfc::). Blend (SRC_ALPHA, ONE): dst = rgb*alpha.
+    check_near("Q1  color abierto R = 0.10 (demo shaders.ts:460)",
+               (double)hfc::traceColorOpen().r, 0.10, 1.0e-7);
+    check_near("Q2  color abierto G = 0.95 (demo)",
+               (double)hfc::traceColorOpen().g, 0.95, 1.0e-7);
+    check_near("Q3  color abierto B = 0.55 (demo)",
+               (double)hfc::traceColorOpen().b, 0.55, 1.0e-7);
+    check_near("Q4  color marginal R = 0.98 (demo shaders.ts:461)",
+               (double)hfc::traceColorMarginal().r, 0.98, 1.0e-7);
+    check_near("Q5  color marginal G = 0.72 (demo)",
+               (double)hfc::traceColorMarginal().g, 0.72, 1.0e-7);
+    check_near("Q6  color marginal B = 0.10 (demo)",
+               (double)hfc::traceColorMarginal().b, 0.10, 1.0e-7);
+    check_near("Q7  color cerrado R = 0.95 (demo shaders.ts:462)",
+               (double)hfc::traceColorClosed().r, 0.95, 1.0e-7);
+    check_near("Q8  color cerrado G = 0.16 (demo)",
+               (double)hfc::traceColorClosed().g, 0.16, 1.0e-7);
+    check_near("Q9  color cerrado B = 0.16 (demo)",
+               (double)hfc::traceColorClosed().b, 0.16, 1.0e-7);
+    {
+        // pico del cursor a la cima (s=0, env=1, boost=1, gate=1):
+        // total = (0.55+0.9)*breath(0,1) + spill(0,1) + amp — TODO col.
+        const float totQ = (0.55f + 0.9f) * hfc::traceProfileBreath(0.0f, 1.0f)
+                         + hfc::glowSpill(0.0f, 1.0f)
+                         + hfc::pulseHeadAmplitude(1.0f, 1.0f);
+        const float rPk = hfc::traceColorOpen().r * totQ;
+        const float gPk = hfc::traceColorOpen().g * totQ;
+        const float bPk = hfc::traceColorOpen().b * totQ;
+        check_bool("Q10 pico NEVER-WHITE: R < 0.5 con R=0.10 a cualquier ganancia (veredicto DAVID)",
+                   rPk < 0.5f);
+        check_bool("Q11 pico VERDE intenso: G >= 1 (satura como la demo)",
+                   gPk >= 1.0f);
+        check_bool("Q12 pico verde-cian: B >= 1 (G/B saturan, R diminuto — la firma del verde demo)",
+                   bPk >= 1.0f);
+        check_near("Q13 pico R exacto = 0.10*3.1605 = 0.31605",
+                   (double)rPk, 0.31605000000000005, 1.0e-6);
+    }
+    check_near("Q14 spill(0.5, env 0.24) = 0.054 (glow vivo a |p-0.5|=0.2: tramo ANCHO)",
+               (double)hfc::glowSpill(0.5f, 0.24f), 0.054, 1.0e-6);
+    {
+        // tramo visible en la falda (s=0.7) a |p-0.5|=0.25 (env 0.105):
+        // M9e supera 0.02 de dst (el glow llega lejos); M9d (boost=0 ahi,
+        // sin spill) se quedaba por debajo — la longitude percibida.
+        const float envQ = expf(-36.0f * 0.25f * 0.25f);
+        const float rgbQ = (0.55f + 0.9f * envQ) * hfc::traceProfileBreath(0.7f, envQ)
+                         + hfc::glowSpill(0.7f, envQ);
+        const float aQ = 0.9f * hfc::traceProfileBreath(0.7f, envQ) + hfc::glowSpill(0.7f, envQ);
+        check_bool("Q15 tramo ancho: dst falda a |p-0.5|=0.25 > 0.02 (M9d sin spill se quedaba en 0.018)",
+                   rgbQ * aQ > 0.02f);
+    }
+    check_near("Q16 velocidad: ciclo de emision = 1/0.22 = 4.5455 s (demo shaders.ts:450)",
+               1.0 / (double)hfc::pulseCycleHz(), 4.545454545454546, 1.0e-6);
+    check_near("Q17 velocidad: recorrido del paquete = 1/(0.22/2.5) = 11.3636 s",
+               1.0 / (hfc::pulseCycleHz() / hfc::pulseRepeatsPerArc()), 11.363636363636363, 1.0e-6);
+    check_near("Q18 paquetes en vuelo = 2.5 (repeats demo-verbatim)",
+               (double)hfc::pulseRepeatsPerArc(), 2.5, 0.0);
+    {
+        // reposo puro (invariante M9d conservada): env=0 => spill=0 y
+        // boost(0.5)=0 => add=0 — arco multiplicativo col*(0.55)*breath.
+        bool noSpillQ = true;
+        for (int i13 = 0; i13 <= 100; i13++) {
+            if (hfc::glowSpill((float)i13 * 0.01f, 0.0f) != 0.0f) noSpillQ = false;
+        }
+        check_bool("Q19 reposo puro: spill(s, env 0) = 0 y add = 0 (boost(0.5) = 0)",
+                   noSpillQ && hfc::pulseHeadBoost(0.5f) == 0.0f);
+    }
+    {
+        // cabeza TENIDA: add = col*amp => el ratio G/R del add es el del col
+        // (9.5x): la cabeza no puede ser mas blanca que el tramo.
+        const float ampQ = hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.0f), hfc::pulseHeadGate(0.0f));
+        const float addR = hfc::traceColorOpen().r * ampQ;
+        const float addG = hfc::traceColorOpen().g * ampQ;
+        check_bool("Q20 cabeza tenida: add.G/add.R = col.G/col.R (el verde sale del propio col)",
+                   addR < addG * 0.11f && ampQ > 0.0f);
     }
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
