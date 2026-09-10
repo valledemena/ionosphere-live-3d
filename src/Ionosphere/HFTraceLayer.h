@@ -52,6 +52,14 @@
 // altKm·explode: el arco y la shell se mueven juntos, hueco (300-h')·
 // exag constante); (2) cursor del pulso MULTIPLICATIVO col*(0.55+
 // pulse) verbatim demo: el aditivo clipeaba a blanco. Fisica intacta.
+// M9c (comparativa lado a lado con la demo, peticion de DAVID): perfil
+// transversal del trazo = tubo+halo — render() pasa el semiancho
+// GEOmetrico (hfc::ribbonHalfWidth x hfc::ribbonSpan: MISMO vertex
+// count y 1 draw) y el frag recorta nucleo/hombro/aura
+// (hfc::traceProfile) + cabeza del pulso azul-blanca acotada
+// (hfc::pulseHeadBoost/Gate/Amplitude). Ancho nucleo M9b 0.0075 y
+// mezcla multiplicativa M9fix intactos; muestras y colores por tramo
+// intactos (P3/P4 sin cambio).
 // =============================================================================
 
 namespace hfc {
@@ -201,6 +209,65 @@ inline double legAltitudeKm(double hVirtualKm, double legT, double heightExag,
 // David nunca vio (el ribbon fue invisible hasta M8fix-2).
 inline float ribbonHalfWidth(float /*heightExag*/) {
     return 0.0075f;   // M9b: demo verbatim (tubo de radio 0.0075)
+}
+
+// --- M9c: perfil transversal del trazo (tubo+halo, paridad demo) ---
+// Comparativa lado a lado (DAVID via MUSE + VLM GLM): la demo es un
+// tubo grueso de nucleo con caida suave y halo envolvente; el M9b era
+// cinta plana de corte duro lavada contra la textura diurna. M9c NO
+// anade geometria: render() pasa el semiancho geometrico (halfWidth x
+// span; mismo strip, mismo vertex count 54-324, mismo 1 draw) y el FRAG
+// recorta el perfil compuesto. s = |vSide| = fraccion del borde
+// geometrico.
+
+// smoothstep con semantica GLSL EXACTA (clamp 0..1, t*t*(3-2t)),
+// exige e0 < e1. Twin C++ de los literales del shader M9c — NO reusa
+// ::smoothstep de LayerProfile.h (aquel soporta bordes invertidos:
+// contrato distinto, plan 8.3).
+inline float smoothstepf(float e0, float e1, float x) {
+    float t = (x - e0) / (e1 - e0);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Ensanche geometrico: borde del ribbon = halfWidth*SPAN = ±0.015. El
+// nucleo perceptual M9b (±halfWidth = ±0.0075) vive en s < 0.5. Un
+// plan-B de ancho re-sella SPAN y las anclas JUNTAS (el nucleo queda
+// anclado a halfWidth en s = 1/SPAN) — no es una constante suelta.
+inline float ribbonSpan() { return 2.0f; }
+
+// Perfil f(s) = nucleo + hombro + aura (continuo, monotono
+// no-creciente): nucleo pleno con pedestal 1.35 hasta s=0.45 (±0.0068),
+// hombro AA 0.45->0.55 que reemplaza el corte duro M9b (el borde M9b
+// ±0.0075 cae en s=0.5 con f=0.85), pedestal 0.35 en s=0.55 y aura
+// 0.35->0 hasta el borde geometrico. Anclas: f(0)=1.35, f(0.45)=1.35,
+// f(0.5)=0.85, f(0.55)=0.35, f(0.7)~0.26, f(1)=0. (El sello M9c decia
+// f(0)=1.0 — correccion aritmetica al implementar: el pedestal del
+// halo vive tambien DENTRO del nucleo; sin el, la aura saltaria 0->0.35
+// en s=0.55. Las tres anclas 0.85/0.26/0 del sello cuadran exacto.)
+inline float traceProfile(float s) {
+    const float core = 1.0f - smoothstepf(0.45f, 0.55f, s);
+    const float halo = 0.35f * (1.0f - smoothstepf(0.55f, 1.0f, s));
+    return core + halo;
+}
+
+// Cabeza del pulso (P2): la cabeza de la demo es blanco-azulada (VLM) —
+// el aditivo es legitimo SOLO como nucleo estrecho acotado (leccion
+// M9fix: nunca mezcla aditiva global). boost = envolvente longitudinal
+// en la cima (|p-0.5| < 0.12 de fase); gate = acota al nucleo
+// transversal (s < 0.45 — hombro y aura no llevan cabeza); amplitud
+// 0.55*boost*gate sobre RGB (0.85, 0.92, 1.0) en el shader. Con banda
+// verde en la cima: G/B clipean (cian-blanquecino como la demo), R
+// queda vivo (~0.96 a boost 0.8) — nunca blanco plano global.
+inline float pulseHeadBoost(float absPhaseFromPeak) {
+    return 1.0f - smoothstepf(0.0f, 0.12f, absPhaseFromPeak);
+}
+inline float pulseHeadGate(float s) {
+    return 1.0f - smoothstepf(0.15f, 0.45f, s);
+}
+inline float pulseHeadAmplitude(float boost, float gate) {
+    return 0.55f * boost * gate;
 }
 } // namespace hfc
 

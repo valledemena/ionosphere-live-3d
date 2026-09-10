@@ -15,6 +15,10 @@
 static const char* kTraceVertSrc = R"(#version 400 core
 // M8 (plan 11.3): ribbon camera-facing — la geometria CPU es una polilinea
 // (aPos/aT/aViable/aTangent/aSide); el shader la engorda.
+// M9c (P1): el uniform entra como semiancho GEOmetrico = halfWidth demo
+// (hfc::ribbonHalfWidth) x span (hfc::ribbonSpan) desde render() — el
+// ribbon cubre nucleo+aura con el MISMO strip y vertex count; aSide pasa
+// como vSide (fraccion del borde geometrico) y el FRAG recorta el perfil.
 layout(location=0) in vec3 aPos;
 layout(location=1) in float aT;
 layout(location=2) in float aViable;
@@ -22,12 +26,14 @@ layout(location=3) in vec3 aTangent;
 layout(location=4) in float aSide;
 uniform mat4 u_view, u_projection;
 uniform vec3 u_camPos;
-uniform float u_halfWidth;   // M9b: ancho demo-verbatim 0.0075 (uniform desde render, constante)
+uniform float u_halfWidth;   // M9c: semiancho GEOmetrico = demo 0.0075 (hfc::ribbonHalfWidth) x span (hfc::ribbonSpan)
 out float vT;
 out float vViable;
+out float vSide;             // M9c: -1..+1 respecto al borde geometrico (u_halfWidth)
 void main() {
     vT = aT;
     vViable = aViable;
+    vSide = aSide;
     vec3 toCam = normalize(u_camPos - aPos);
     vec3 n = normalize(cross(aTangent, toCam));
     vec3 p = aPos + n * (u_halfWidth * aSide);
@@ -39,6 +45,7 @@ static const char* kTraceFragSrc = R"(#version 400 core
 // M8 (plan 11.3): color por viabilidad del salto + pulso viajero.
 in float vT;
 in float vViable;
+in float vSide;              // M9c: -1..+1 del borde geometrico (perfil del tubo)
 uniform float u_time;
 out vec4 fragColor;
 void main() {
@@ -54,7 +61,26 @@ void main() {
     // aditiva col+pulse clipeaba a blanco (1.0+0.9) siempre.
     float p = fract(u_time * 0.22 - vT * 2.5);
     float pulse = 0.9 * exp(-36.0 * (p - 0.5) * (p - 0.5));
-    fragColor = vec4(col * (0.55 + pulse), 0.9);
+    // M9c (P1, paridad demo): perfil transversal tubo+halo — s = |vSide|
+    // (fraccion del borde geometrico). Nucleo pleno con pedestal 1.35
+    // hasta s=0.45 (±0.0068), hombro AA 0.45->0.55 que reemplaza el corte
+    // duro M9b (el borde ±0.0075 cae en s=0.5 con 0.85), pedestal 0.35 y
+    // aura hasta s=1 (0 = borde geometrico ±0.015 invisible). Twin C++:
+    // hfc::traceProfile (tests seccion O). Anclas 0.85/0.26/0 del sello
+    // exactas; f(0)=1.35 (correccion aritmetica: el pedestal del halo
+    // vive DENTRO del nucleo — sin el, la aura saltaria 0->0.35 en 0.55).
+    float s = abs(vSide);
+    float core = 1.0 - smoothstep(0.45, 0.55, s);
+    float halo = 0.35 * (1.0 - smoothstep(0.55, 1.0, s));
+    float prof = core + halo;
+    // M9c (P2): cabeza del pulso — aditivo azul-blanco ACOTADO a la cima
+    // (|p-0.5| < 0.12, hfc::pulseHeadBoost) x nucleo transversal (s < 0.45,
+    // hfc::pulseHeadGate): el pico lee cian-blanquecino como la demo;
+    // fuera de la cabeza add = 0 y el arco queda puro teniendo (M9fix).
+    float boost = 1.0 - smoothstep(0.0, 0.12, abs(p - 0.5));
+    float gate  = 1.0 - smoothstep(0.15, 0.45, s);
+    vec3 add = vec3(0.85, 0.92, 1.0) * (0.55 * boost * gate);
+    fragColor = vec4(col * (0.55 + pulse) * prof + add, 0.9 * prof);
 }
 )";
 
@@ -263,7 +289,9 @@ void HFTraceLayer::render(const glm::mat4& view, const glm::mat4& projection,
     shader_.setMat4("u_projection", projection);
     shader_.setVec3("u_camPos", camPos);
     shader_.setFloat("u_time", timeSec);
-    shader_.setFloat("u_halfWidth", hfc::ribbonHalfWidth(heightExag_));   // M9b: ancho demo-verbatim (constante)
+    // M9c: semiancho GEOmetrico — nucleo demo 0.0075 (M9b intacto) x span
+    // (halo incluido, ±0.015). Plan-B de ancho = hfc::ribbonSpan + anclas.
+    shader_.setFloat("u_halfWidth", hfc::ribbonHalfWidth(heightExag_) * hfc::ribbonSpan());
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, vertCount_);
     glBindVertexArray(0);

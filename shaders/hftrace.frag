@@ -2,6 +2,7 @@
 // M8 (plan 11.3): color por viabilidad del salto + pulso viajero.
 in float vT;
 in float vViable;
+in float vSide;              // M9c: -1..+1 del borde geometrico (perfil del tubo)
 uniform float u_time;
 out vec4 fragColor;
 void main() {
@@ -17,5 +18,24 @@ void main() {
     // aditiva col+pulse clipeaba a blanco (1.0+0.9) siempre.
     float p = fract(u_time * 0.22 - vT * 2.5);
     float pulse = 0.9 * exp(-36.0 * (p - 0.5) * (p - 0.5));
-    fragColor = vec4(col * (0.55 + pulse), 0.9);
+    // M9c (P1, paridad demo): perfil transversal tubo+halo — s = |vSide|
+    // (fraccion del borde geometrico). Nucleo pleno con pedestal 1.35
+    // hasta s=0.45 (±0.0068), hombro AA 0.45->0.55 que reemplaza el corte
+    // duro M9b (el borde ±0.0075 cae en s=0.5 con 0.85), pedestal 0.35 y
+    // aura hasta s=1 (0 = borde geometrico ±0.015 invisible). Twin C++:
+    // hfc::traceProfile (tests seccion O). Anclas 0.85/0.26/0 del sello
+    // exactas; f(0)=1.35 (correccion aritmetica: el pedestal del halo
+    // vive DENTRO del nucleo — sin el, la aura saltaria 0->0.35 en 0.55).
+    float s = abs(vSide);
+    float core = 1.0 - smoothstep(0.45, 0.55, s);
+    float halo = 0.35 * (1.0 - smoothstep(0.55, 1.0, s));
+    float prof = core + halo;
+    // M9c (P2): cabeza del pulso — aditivo azul-blanco ACOTADO a la cima
+    // (|p-0.5| < 0.12, hfc::pulseHeadBoost) x nucleo transversal (s < 0.45,
+    // hfc::pulseHeadGate): el pico lee cian-blanquecino como la demo;
+    // fuera de la cabeza add = 0 y el arco queda puro teniendo (M9fix).
+    float boost = 1.0 - smoothstep(0.0, 0.12, abs(p - 0.5));
+    float gate  = 1.0 - smoothstep(0.15, 0.45, s);
+    vec3 add = vec3(0.85, 0.92, 1.0) * (0.55 * boost * gate);
+    fragColor = vec4(col * (0.55 + pulse) * prof + add, 0.9 * prof);
 }

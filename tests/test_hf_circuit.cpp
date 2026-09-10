@@ -239,6 +239,67 @@ int main() {
     }
     check_bool("N9  default-param: leg(310,1,2.2) == leg(310,1,2.2,0.0)",
                hfc::legAltitudeKm(310.0, 1.0, 2.2) == hfc::legAltitudeKm(310.0, 1.0, 2.2, 0.0));
+    printf("--- O) M9c: perfil tubo+halo + cabeza del pulso ---\n");
+    // GENERADO por scripts/m9c_gen_test.py (implementacion python
+    // independiente). hfc::ribbonSpan es PRODUCCION (render() la multiplica
+    // en u_halfWidth); traceProfile/pulseHead* son twins C++ EXACTOS de los
+    // literales GLSL del frag (paridad por proofs RT: el GLSL no llama hfc::).
+    check_near("O1  f(0.0) = 1.35 (nucleo pleno: core 1 + pedestal halo 0.35)",
+               (double)hfc::traceProfile(0.0f), 1.35, 1.0e-6);
+    check_near("O2  f(0.45) = 1.35 (borde del nucleo)",
+               (double)hfc::traceProfile(0.45f), 1.35, 1.0e-6);
+    check_near("O3  f(0.5) = 0.85 (hombro: borde M9b +/-0.0075)",
+               (double)hfc::traceProfile(0.5f), 0.8500000000000004, 1.0e-6);
+    check_near("O4  f(0.55) = 0.35 (pedestal del aura)",
+               (double)hfc::traceProfile(0.55f), 0.35, 1.0e-6);
+    check_near("O5  f(0.7) = 0.2593 (cola del aura: 0.35*(1-ss))",
+               (double)hfc::traceProfile(0.7f), 0.2592592592592593, 1.0e-6);
+    check_near("O6  f(1.0) = 0.0 (borde geometrico invisible)",
+               (double)hfc::traceProfile(1.0f), 0.0, 1.0e-9);
+    {
+        bool monoO = true;
+        float prevO = hfc::traceProfile(0.0f);
+        for (int i8 = 1; i8 <= 100; i8++) {
+            const float v = hfc::traceProfile((float)i8 * 0.01f);
+            if (v > prevO + 1.0e-6f) monoO = false;
+            prevO = v;
+        }
+        check_bool("O7  f monotona no-creciente en [0,1] paso 0.01", monoO);
+    }
+    check_near("O8  span = 2.0 (borde = 2x nucleo)", (double)hfc::ribbonSpan(), 2.0, 0.0);
+    check_near("O9  borde geometrico mundo = hw*span = 0.015",
+               (double)hfc::ribbonHalfWidth(2.2f) * hfc::ribbonSpan(), 0.015, 1.0e-6);
+    check_near("O10 nucleo M9b intacto: hw*span*0.5 == hw (s=0.5)",
+               (double)hfc::ribbonHalfWidth(2.2f) * hfc::ribbonSpan() * 0.5,
+               (double)hfc::ribbonHalfWidth(2.2f), 1.0e-6);
+    check_near("O11 boost(0.0) = 1.0 (cima del pulso)",
+               (double)hfc::pulseHeadBoost(0.0f), 1.0, 1.0e-9);
+    check_near("O12 boost(0.12) = 0.0 (fin de la cabeza)",
+               (double)hfc::pulseHeadBoost(0.12f), 0.0, 1.0e-9);
+    check_near("O13 boost(0.06) = 0.5 (media cabeza)",
+               (double)hfc::pulseHeadBoost(0.06f), 0.5, 1.0e-9);
+    check_near("O14 gate(0.15) = 1.0 (nucleo transversal pleno)",
+               (double)hfc::pulseHeadGate(0.15f), 1.0, 1.0e-9);
+    check_near("O15 gate(0.45) = 0.0 (hombro/aura sin cabeza)",
+               (double)hfc::pulseHeadGate(0.45f), 0.0, 1.0e-9);
+    check_near("O16 gate(0.3) = 0.5 (media puerta)",
+               (double)hfc::pulseHeadGate(0.3f), 0.5000000000000002, 1.0e-6);
+    check_near("O17 amplitud pico = 0.55*1*1",
+               (double)hfc::pulseHeadAmplitude(1.0f, 1.0f), 0.55, 1.0e-6);
+    {
+        // cabeza compuesta, banda verde (0.30,1.00,0.40), pulse 0.9, f(0):
+        const float ampPk = hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.0f), hfc::pulseHeadGate(0.0f));
+        const float gTot = 1.00f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.92f * ampPk;
+        const float bTot = 0.40f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 1.00f * ampPk;
+        const float rHalf = 0.30f * (0.55f + 0.9f) * hfc::traceProfile(0.0f)
+                          + 0.85f * hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.06f), 1.0f);
+        check_bool("O18 cabeza pico: G y B clipean (>=1, cian-blanquecino demo)",
+                   gTot >= 1.0 && bTot >= 1.0);
+        check_bool("O19 cabeza no-blanca global: R vivo a media cabeza (boost 0.5, <1)",
+                   rHalf < 1.0);
+    }
+    check_bool("O20 fuera de la cabeza add = 0 (amplitude(boost(0.2),1)==0): arco puro multiplicativo",
+               hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.2f), 1.0f) == 0.0f);
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
