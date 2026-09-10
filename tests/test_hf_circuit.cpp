@@ -300,6 +300,97 @@ int main() {
     }
     check_bool("O20 fuera de la cabeza add = 0 (amplitude(boost(0.2),1)==0): arco puro multiplicativo",
                hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.2f), 1.0f) == 0.0f);
+    printf("--- P) M9d: respiracion del halo + derrame neon de la cabeza ---\n");
+    // GENERADO por scripts/m9d_gen_test.py (implementacion python
+    // independiente). traceProfileBreath/glowSpill/haloPulse* son twins
+    // C++ EXACTOS de los literales GLSL del frag M9d (paridad por proofs
+    // RT: el GLSL no llama hfc::). Blend (SRC_ALPHA, ONE): dst = rgb*alpha.
+    check_near("P1  breath(0.0, 0.0) = 1.21 (reposo: nucleo + aura 0.21)",
+               (double)hfc::traceProfileBreath(0.0f, 0.0f), 1.21, 1.0e-6);
+    check_near("P2  breath(0.0, 1.0) = 1.49 (cima: nucleo + aura 0.49)",
+               (double)hfc::traceProfileBreath(0.0f, 1.0f), 1.49, 1.0e-6);
+    check_near("P3  breath(0.55, 0.0) = 0.21 (pedestal del aura en reposo)",
+               (double)hfc::traceProfileBreath(0.55f, 0.0f), 0.21, 1.0e-6);
+    check_near("P4  breath(0.55, 1.0) = 0.49 (pedestal del aura a la cima)",
+               (double)hfc::traceProfileBreath(0.55f, 1.0f), 0.48999999999999994, 1.0e-6);
+    check_near("P5  breath(0.7, 1.0) = 0.3630 (falda del aura a la cima)",
+               (double)hfc::traceProfileBreath(0.7f, 1.0f), 0.362962962962963, 1.0e-6);
+    check_near("P6  breath(0.7, 0.0) = 0.1556 (falda del aura en reposo)",
+               (double)hfc::traceProfileBreath(0.7f, 0.0f), 0.15555555555555559, 1.0e-6);
+    {
+        bool invP = true;
+        for (int i9 = 0; i9 <= 100; i9++) {
+            const float sP = (float)i9 * 0.01f;
+            if (hfc::traceProfileBreath(sP, 0.5f) != hfc::traceProfile(sP)) invP = false;
+        }
+        check_bool("P7  invariante: breath(s, 0.5) == traceProfile(s) exacto (halo x1.0 = anclas M9c)", invP);
+    }
+    {
+        bool monoPs = true;
+        float prevP0 = hfc::traceProfileBreath(0.0f, 0.0f);
+        float prevP1 = hfc::traceProfileBreath(0.0f, 1.0f);
+        for (int i10 = 1; i10 <= 100; i10++) {
+            const float sP = (float)i10 * 0.01f;
+            if (hfc::traceProfileBreath(sP, 0.0f) > prevP0 + 1.0e-6f) monoPs = false;
+            if (hfc::traceProfileBreath(sP, 1.0f) > prevP1 + 1.0e-6f) monoPs = false;
+            prevP0 = hfc::traceProfileBreath(sP, 0.0f);
+            prevP1 = hfc::traceProfileBreath(sP, 1.0f);
+        }
+        check_bool("P8  breath monotona no-creciente en s (env 0 y 1)", monoPs);
+    }
+    {
+        bool monoPe = true;
+        float prevPe = hfc::traceProfileBreath(0.7f, 0.0f);
+        for (int i11 = 1; i11 <= 100; i11++) {
+            const float vP = hfc::traceProfileBreath(0.7f, (float)i11 * 0.01f);
+            if (vP < prevPe - 1.0e-6f) monoPe = false;
+            prevPe = vP;
+        }
+        check_bool("P9  breath no-decreciente en env a s=0.7 (el aura solo se enciende, nunca se apaga al paso)", monoPe);
+    }
+    check_near("P10 spill(0.0, 1.0) = 0.30 (derrame pleno en el centro)",
+               (double)hfc::glowSpill(0.0f, 1.0f), 0.30, 1.0e-6);
+    check_near("P11 spill(1.0, 1.0) = 0.0 (nada en el borde geometrico)",
+               (double)hfc::glowSpill(1.0f, 1.0f), 0.0, 1.0e-9);
+    check_near("P12 spill(0.7, 1.0) = 0.09 (falda del derrame a la cima)",
+               (double)hfc::glowSpill(0.7f, 1.0f), 0.09, 1.0e-6);
+    {
+        bool noSpill = true;
+        for (int i12 = 0; i12 <= 100; i12++) {
+            if (hfc::glowSpill((float)i12 * 0.01f, 0.0f) != 0.0f) noSpill = false;
+        }
+        check_bool("P13 fuera de la cabeza spill = 0 (boost 0): arco puro en reposo", noSpill);
+    }
+    check_near("P14 alpha compuesta falda-cima (s=0.85): 0.9*breath + spill = 0.1593",
+               (double)(0.9f * hfc::traceProfileBreath(0.85f, 1.0f) + hfc::glowSpill(0.85f, 1.0f)),
+               0.15933333333333333, 1.0e-6);
+    {
+        // contraste dst (SRC_ALPHA, ONE): rgb*alpha con rgb = mezcla*breath + spill
+        const float bhP = hfc::traceProfileBreath(0.7f, 1.0f);
+        const float spP = hfc::glowSpill(0.7f, 1.0f);
+        const float rgbHd = (0.55f + 0.9f) * bhP + spP;
+        const float aHd = 0.9f * bhP + spP;
+        const float brP = hfc::traceProfileBreath(0.7f, 0.0f);
+        const float rgbRd = 0.55f * brP;
+        const float aRd = 0.9f * brP;
+        check_bool("P15 contraste neon dst cabeza/reposo (s=0.7) >= 20x (2.6x en M9c)",
+                   (rgbHd * aHd) >= 20.0f * (rgbRd * aRd));
+    }
+    {
+        // falda tenida (M9fix extendido al derrame): G de banda verde < 1 a s=0.7 en la cima
+        const float rgbSkirt = (0.55f + 0.9f) * hfc::traceProfileBreath(0.7f, 1.0f)
+                             + hfc::glowSpill(0.7f, 1.0f);
+        check_bool("P16 falda sin clip a s=0.7 en la cima: G < 1.0 (neon TENIDO, no blanco)",
+                   rgbSkirt < 1.0f);
+    }
+    {
+        // nucleo a la cima sigue quemando como la demo (O18 con breath + spill)
+        const float ampPk = hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.0f), hfc::pulseHeadGate(0.0f));
+        const float gTot = 1.00f * ((0.55f + 0.9f) * hfc::traceProfileBreath(0.0f, 1.0f)
+                          + hfc::glowSpill(0.0f, 1.0f)) + 0.92f * ampPk;
+        check_bool("P17 nucleo a la cima: G >= 1 (cian-blanquecino de la demo conservado)",
+                   gTot >= 1.0f);
+    }
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

@@ -60,6 +60,20 @@
 // (hfc::pulseHeadBoost/Gate/Amplitude). Ancho nucleo M9b 0.0075 y
 // mezcla multiplicativa M9fix intactos; muestras y colores por tramo
 // intactos (P3/P4 sin cambio).
+// M9d (neon ambiental del cursor — fair shot M9c de DAVID: "en la demo
+// el cursor lleva un glow ambiental muy marcado; aqui solo brilla el
+// nucleo"; diseno MUSE sellado por GLM): el halo RESPIRA con la
+// envolvente del pulso (halo*(0.6+0.8*env) — hfc::haloPulseFloor/
+// haloPulseGain) y la cabeza DERRAMA luz tenida por todo el span
+// (hfc::glowSpill = 0.30*boost*(1-s)). ADAPTACION obligatoria al
+// sello: el ribbon mezcla (SRC_ALPHA, ONE) — dst recibe rgb*alpha, asi
+// que el derrame vive en rgb Y en alpha (un spill solo-rgb quedaria
+// atenuado a ~0.03 en la falda). Cero uniforms/vertex/draw nuevos; la
+// exp del cursor se reestructura como env unitaria (pulse = 0.9*env,
+// misma cuenta). El nucleo NO respira y la mezcla M9fix queda intacta:
+// solo el aura respira, solo la cabeza derrama (contraste dst del aura
+// cabeza/reposo ~21x en s=0.7, 2.6x en M9c). Twins: traceProfileBreath/
+// glowSpill (tests seccion P); el perfil M9c = breath(s, 0.5) exacto.
 // =============================================================================
 
 namespace hfc {
@@ -268,6 +282,38 @@ inline float pulseHeadGate(float s) {
 }
 inline float pulseHeadAmplitude(float boost, float gate) {
     return 0.55f * boost * gate;
+}
+
+// --- M9d: neon ambiental del cursor (respiracion del halo + derrame) ---
+// Diseno MUSE (fair shot M9c: "en la demo el cursor lleva un halo neon
+// marcado; aqui solo brilla el nucleo"), sellado con una adaptacion
+// obligatoria: el ribbon mezcla (SRC_ALPHA, ONE) — dst recibe rgb*alpha,
+// asi que el derrame vive en rgb Y en alpha (solo-rgb se atenuaria a
+// ~0.03 en la falda). El halo respira en la escala ANCHA (env, la misma
+// envolvente del cursor) y el derrame es el collar ESTRECHO (boost) —
+// dos escalas de neon como la demo. El nucleo y la mezcla M9fix quedan
+// intactos: en reposo el cuerpo del tubo apenas cambia (pedestal de aura
+// al 60%) y fuera de la cabeza spill = 0 (arco puro multiplicativo).
+inline float haloPulseFloor() { return 0.6f; }   // reposo: aura al 60%
+inline float haloPulseGain()  { return 0.8f; }   // cima: aura x1.4
+inline float glowSpillGain()  { return 0.30f; }  // derrame tenido de la cabeza
+
+// Perfil con respiracion: core(s) + halo(s)*(floor + gain*env), env en
+// [0,1]. INVARIANTE: breath(s, 0.5) == traceProfile(s) exacto (halo x1.0
+// en f32: 0.6f + 0.8f*0.5f redondea a 1.0f) — el perfil M9c sellado es
+// el breath a media envolvente. Anclas: breath(0, 1) = 1.49,
+// breath(0, 0) = 1.21, breath(0.55, 1) = 0.49, breath(0.7, 1) =
+// 0.362963, breath(0.7, 0) = 0.155556.
+inline float traceProfileBreath(float s, float env) {
+    const float core = 1.0f - smoothstepf(0.45f, 0.55f, s);
+    const float halo = 0.35f * (1.0f - smoothstepf(0.55f, 1.0f, s));
+    return core + halo * (haloPulseFloor() + haloPulseGain() * env);
+}
+
+// Derrame transversal de la cabeza: gain*boost*(1-s) — luz tenida (col)
+// con caida lineal hasta el borde geometrico. En rgb Y en alpha (shader).
+inline float glowSpill(float s, float boost) {
+    return glowSpillGain() * boost * (1.0f - s);
 }
 } // namespace hfc
 
