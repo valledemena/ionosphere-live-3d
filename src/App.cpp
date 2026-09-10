@@ -3554,7 +3554,7 @@ void App::render() {
             float y0 = glm::clamp(uvc.y - hh, 0.0f, 1.0f);
             float y1 = glm::clamp(uvc.y + hh, 0.0f, 1.0f);
             ImGui::Image((ImTextureID)(intptr_t)impl->sceneFBO.colorTexture,
-                         ImVec2(320, 190), ImVec2(x0, 1.0f - y1), ImVec2(x1, 1.0f - y0));
+                         ImVec2(320, 190), ImVec2(x0, y1), ImVec2(x1, y0));   // limb fix: sin espejo V (uvc ya es bottom-up; FBO fila 0 = abajo)
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("East limb magnified from the live framebuffer (scene without bloom). Watch shells stack edge-on.");
         } else {
             ImGui::TextDisabled("limb behind camera");
