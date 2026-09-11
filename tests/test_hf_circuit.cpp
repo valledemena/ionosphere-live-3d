@@ -276,8 +276,8 @@ int main() {
                (double)hfc::pulseHeadBoost(0.0f), 1.0, 1.0e-9);
     check_near("O12 boost(0.16) = 0.0 (fin de la cabeza, M9g +30%)",
                (double)hfc::pulseHeadBoost(0.16f), 0.0, 1.0e-9);
-    check_near("O13 boost(0.08) = 0.5 (media cabeza, M9g)",
-               (double)hfc::pulseHeadBoost(0.08f), 0.5, 1.0e-9);
+    check_near("O13 boost(0.14) = 0.5 (flanco AA, M9h flat-top)",
+               (double)hfc::pulseHeadBoost(0.14f), 0.5, 1.0e-6);
     check_near("O14 gate(0.40) = 1.0 (pedestal pleno, M9g)",
                (double)hfc::pulseHeadGate(0.40f), 1.0, 1.0e-9);
     check_near("O15 gate(0.70) = 0.0 (fuera del pedestal, M9g)",
@@ -293,7 +293,7 @@ int main() {
         const float gTot = 0.95f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.95f * ampPk;
         const float bTot = 0.55f * (0.55f + 0.9f) * hfc::traceProfile(0.0f) + 0.55f * ampPk;
         const float rHalf = 0.10f * (0.55f + 0.9f) * hfc::traceProfile(0.0f)
-                          + 0.10f * hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.08f), 1.0f);
+                          + 0.10f * hfc::pulseHeadAmplitude(hfc::pulseHeadBoost(0.14f), 1.0f);
         check_bool("O18 cabeza pico: G y B saturan (>=1, verde intenso demo)",
                    gTot >= 1.0 && bTot >= 1.0);
         check_bool("O19 cabeza no-blanca global: R diminuto a media cabeza (boost 0.5, <1)",

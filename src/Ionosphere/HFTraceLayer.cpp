@@ -96,7 +96,7 @@ void main() {
     // en la demo, no de una suma blanquecina (el vec3(0.85,0.92,1.0) M9c
     // eliminado: con R=0.10 el pico satura G/B = verde intenso, nunca
     // blanco). Fuera de la cabeza add = 0 (M9fix intacto).
-    float boost = 1.0 - smoothstep(0.0, 0.16, abs(p - 0.5));
+    float boost = 1.0 - smoothstep(0.12, 0.16, abs(p - 0.5));  // M9h: flat-top (bordes definidos, sello GLM)
     float gate  = 1.0 - smoothstep(0.40, 0.70, s);
     vec3 add = col * (0.55 * boost * gate);
     // M9d: derrame neon del cursor — luz TENIDA por el color del tramo

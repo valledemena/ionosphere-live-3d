@@ -292,7 +292,7 @@ inline float traceProfile(float s) {
 // (R 0.10) el pico satura G/B (verde intenso) y R queda diminuto
 // (~0.32 incluso a la cima x3.16) — nunca blanco (veredicto DAVID).
 inline float pulseHeadBoost(float absPhaseFromPeak) {
-    return 1.0f - smoothstepf(0.0f, 0.16f, absPhaseFromPeak);
+    return 1.0f - smoothstepf(0.12f, 0.16f, absPhaseFromPeak);  // M9h: flat-top
 }
 inline float pulseHeadGate(float s) {
     return 1.0f - smoothstepf(0.40f, 0.70f, s);
