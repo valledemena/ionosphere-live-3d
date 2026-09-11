@@ -358,7 +358,10 @@ inline glm::vec3 traceColorClosed()   { return glm::vec3(0.95f, 0.16f, 0.16f); }
 // en vuelo. Verificado en vivo contra la demo (TX->RX ~13 s de
 // captura). La percepcion de "tramo corto" era el collar + cabeza
 // blanca (M9c), no la velocidad.
-inline float pulseCycleHz()       { return 0.22f; }
+// M9h (memo GLM): el rate vive con nombre propio — kPulseRateHz no es el
+// threshold 0.72 del bloom (la cercania de digitos 0.22/0.72 es casual).
+inline constexpr float kPulseRateHz = 0.22f;  // periodo de barrido 1/0.22 = 4.545 s
+inline float pulseCycleHz()       { return kPulseRateHz; }
 inline float pulseRepeatsPerArc() { return 2.5f; }
 } // namespace hfc
 
