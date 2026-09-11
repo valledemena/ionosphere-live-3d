@@ -350,11 +350,11 @@ int main() {
         check_bool("P9  breath no-decreciente en env a s=0.7 (el aura solo se enciende, nunca se apaga al paso)", monoPe);
     }
     check_near("P10 spill(0.0, env 1) = 0.45 (M9e: plan-B sellado 0.30->0.45)",
-               (double)hfc::glowSpill(0.0f, 1.0f), 0.45, 1.0e-6);
+               (double)hfc::glowSpill(0.0f, 1.0f), 0.35, 1.0e-6);
     check_near("P11 spill(1.0, 1.0) = 0.0 (nada en el borde geometrico)",
                (double)hfc::glowSpill(1.0f, 1.0f), 0.0, 1.0e-9);
     check_near("P12 spill(0.7, env 1) = 0.135 (falda del derrame a la cima)",
-               (double)hfc::glowSpill(0.7f, 1.0f), 0.135, 1.0e-6);
+               (double)hfc::glowSpill(0.7f, 1.0f), 0.105, 1.0e-6);
     {
         bool noSpill = true;
         for (int i12 = 0; i12 <= 100; i12++) {
@@ -364,7 +364,7 @@ int main() {
     }
     check_near("P14 alpha compuesta falda-cima (s=0.85): 0.9*breath + spill = 0.1818",
                (double)(0.9f * hfc::traceProfileBreath(0.85f, 1.0f) + hfc::glowSpill(0.85f, 1.0f)),
-               0.18183333333333332, 1.0e-6);
+               0.16683333333333332, 1.0e-6);
     {
         // contraste dst (SRC_ALPHA, ONE): rgb*alpha con rgb = mezcla*breath + spill
         const float bhP = hfc::traceProfileBreath(0.7f, 1.0f);
@@ -432,11 +432,11 @@ int main() {
                    gPk >= 1.0f);
         check_bool("Q12 pico verde-cian: B >= 1 (G/B saturan, R diminuto — la firma del verde demo)",
                    bPk >= 1.0f);
-        check_near("Q13 pico R exacto = 0.10*3.1605 = 0.31605",
-                   (double)rPk, 0.31605000000000005, 1.0e-6);
+        check_near("Q13 pico R exacto = 0.10*3.0605 = 0.30605",
+                   (double)rPk, 0.30605000000000005, 1.0e-6);
     }
-    check_near("Q14 spill(0.5, env 0.24) = 0.054 (glow vivo a |p-0.5|=0.2: tramo ANCHO)",
-               (double)hfc::glowSpill(0.5f, 0.24f), 0.054, 1.0e-6);
+    check_near("Q14 spill(0.5, env 0.24) = 0.042 (glow vivo a |p-0.5|=0.2: tramo ANCHO)",
+               (double)hfc::glowSpill(0.5f, 0.24f), 0.042, 1.0e-6);
     {
         // tramo visible en la falda (s=0.7) a |p-0.5|=0.25 (env 0.105):
         // M9e supera 0.02 de dst (el glow llega lejos); M9d (boost=0 ahi,

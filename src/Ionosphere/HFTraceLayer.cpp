@@ -111,7 +111,7 @@ void main() {
     // en vez del collar estrecho (boost, +-0.12): el tramo que avanza se
     // lee LARGO y con fuerza como el gloom de la demo ("manda lo que se
     // ve"). En reposo env=0 => spill=0 (arco puro multiplicativo M9d).
-    float spill = 0.45 * env * (1.0 - s);
+    float spill = 0.35 * env * (1.0 - s);
     fragColor = vec4(col * ((0.55 + pulse) * prof + spill) + add,
                      0.9 * prof + spill);
 }

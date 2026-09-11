@@ -15,7 +15,7 @@ out vec4 fragColor;
 // mover el threshold.
 vec3 brightPass(vec3 c) {
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    return c * smoothstep(u_threshold, u_threshold + 0.6, l);
+    return c * smoothstep(u_threshold, u_threshold + 0.25, l);
 }
 
 void main() {

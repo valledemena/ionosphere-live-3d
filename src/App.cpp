@@ -146,9 +146,9 @@ struct App::Impl {
 
     float time = 0.0f;
     bool bloomEnabled = true;
-    float bloomThreshold = 0.35f;  // bright-pass threshold (scene luminance)
+    float bloomThreshold = 0.72f;  // bright-pass threshold (scene luminance)
     float bloomIntensity = 1.0f;   // blur pass gain
-    float bloomStrength = 0.6f;    // composite add amount
+    float bloomStrength = 0.55f;   // composite add amount
     bool toneMap = true;           // ACES en composite (bypass exacto si off)
     float exposure = 1.12f;        // M1: calibrado para ACES+sRGB (era 1.0 a mano)
     int msaaSamples = 4;           // M1: MSAA de escena 0/2/4 (default 4, persistible)
@@ -958,7 +958,7 @@ bool App::init(int width, int height, const char* title) {
             "out vec4 fragColor;\n"
             "vec3 brightPass(vec3 c){\n"
             "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
-            "  return c * smoothstep(u_threshold, u_threshold + 0.6, l);\n"
+            "  return c * smoothstep(u_threshold, u_threshold + 0.25, l);\n"
             "}\n"
             "void main(){\n"
             "  float weight[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n"
@@ -2242,7 +2242,7 @@ void App::render() {
         impl->bloomFBO[0].bind();
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-        impl->bloomShader.setVec2("u_direction", glm::vec2(1.0f, 0.0f));
+        impl->bloomShader.setVec2("u_direction", glm::vec2(6.0f, 0.0f));
         impl->bloomShader.setVec2("u_resolution", glm::vec2((float)impl->bloomFBO[0].width, (float)impl->bloomFBO[0].height));
         impl->bloomShader.setFloat("u_threshold", impl->bloomThreshold);
         impl->bloomShader.setFloat("u_intensity", impl->bloomIntensity);
@@ -2258,7 +2258,7 @@ void App::render() {
         impl->bloomFBO[1].bind();
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-        impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 1.0f));
+        impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 6.0f));
         impl->bloomShader.setInt("u_pass", 1);   // M1: pasada V (aplica intensity)
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->bloomFBO[0].colorTexture);
