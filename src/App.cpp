@@ -2228,6 +2228,19 @@ void App::render() {
     // (Atmosfera y terminador: se dibujan en el pase aditivo post-bloom para
     // que el halo salga nitido y no se queme a blanco con el bloom.)
 
+    // M9f (paridad demo): el ribbon HF se dibuja AQUI (pase de escena,
+    // antes del resolve) para que alimente el bloom como el TubeGeometry
+    // de la demo — en overlays post-bloom jamas lo hacia. Estado propio
+    // (el bloque fija el suyo despues); depth test de escena intacto.
+    if (impl->hfTraceVisible) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glDepthMask(GL_FALSE);
+        impl->hfTrace.render(view, proj, camPos, impl->time);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
     impl->sceneFBO.unbind();
     // M1: resolve MSAA -> colorTexture ANTES del bloom (las pasadas 2 y 3
     // siguen leyendo colorTexture; no-op con samples == 0).
@@ -2260,6 +2273,7 @@ void App::render() {
         glClear(GL_COLOR_BUFFER_BIT);
         impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 6.0f));
         impl->bloomShader.setInt("u_pass", 1);   // M1: pasada V (aplica intensity)
+        impl->bloomShader.setFloat("u_threshold", hfc::bloomBypassThreshold());  // M9f: V en passthrough (la H umbraliza; smoothstep(-1,-0.75,l>=0)=1)
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, impl->bloomFBO[0].colorTexture);
         glBindVertexArray(impl->quadVAO);
@@ -2348,9 +2362,8 @@ void App::render() {
         if (showSW) impl->solarWindLayer.render(view, proj);
         if (showFar) impl->faradayLayer.render(view, proj);
         if (showAur) impl->auroraLayer.render(view, proj);
-        // M8 (plan 11.3): trazado HF — ribbon aditivo en el bloque de overlays
-        // (depth write OFF lo fija el bloque); el pulso viaja con impl->time.
-        if (impl->hfTraceVisible) impl->hfTrace.render(view, proj, camPos, impl->time);
+        // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
+        // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);

@@ -315,6 +315,9 @@ inline float pulseHeadAmplitude(float boost, float gate) {
 inline float haloPulseFloor() { return 0.6f; }   // reposo: aura al 60%
 inline float haloPulseGain()  { return 0.8f; }   // cima: aura x1.4
 inline float glowSpillGain()  { return 0.35f; }  // paridad bloom-demo: aura via post-proceso
+// M9f: bypass del bright-pass para la pasada V del bloom (la H umbraliza
+// cada frame con u_threshold, sin restore necesario).
+inline float bloomBypassThreshold() { return -1.0f; }
 
 // Perfil con respiracion: core(s) + halo(s)*(floor + gain*env), env en
 // [0,1]. INVARIANTE: breath(s, 0.5) == traceProfile(s) exacto (halo x1.0

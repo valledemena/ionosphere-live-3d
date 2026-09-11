@@ -473,6 +473,8 @@ int main() {
         check_bool("Q20 cabeza tenida: add.G/add.R = col.G/col.R (el verde sale del propio col)",
                    addR < addG * 0.11f && ampQ > 0.0f);
     }
+    check_near("Q21 bypass V del bloom = -1.0 (M9f: smoothstep(-1,-0.75,l>=0)=1 passthrough)",
+               (double)hfc::bloomBypassThreshold(), -1.0, 0.0);
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
