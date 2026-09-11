@@ -47,14 +47,14 @@ void main() {
     float haloEff = halo * (0.6 + 0.8 * env);
     float prof = core + haloEff;
     // M9c (P2): cabeza del pulso — aditivo ACOTADO a la cima (|p-0.5| <
-    // 0.12, hfc::pulseHeadBoost) x nucleo transversal (s < 0.45,
+    // 0.16, hfc::pulseHeadBoost) x pedestal del nucleo (s < 0.70,
     // hfc::pulseHeadGate). M9e (matizacion de DAVID): la cabeza va TENIDA
     // por col — el verde del cursor sale del propio color del tramo como
     // en la demo, no de una suma blanquecina (el vec3(0.85,0.92,1.0) M9c
     // eliminado: con R=0.10 el pico satura G/B = verde intenso, nunca
     // blanco). Fuera de la cabeza add = 0 (M9fix intacto).
-    float boost = 1.0 - smoothstep(0.0, 0.12, abs(p - 0.5));
-    float gate  = 1.0 - smoothstep(0.15, 0.45, s);
+    float boost = 1.0 - smoothstep(0.0, 0.16, abs(p - 0.5));
+    float gate  = 1.0 - smoothstep(0.40, 0.70, s);
     vec3 add = col * (0.55 * boost * gate);
     // M9d: derrame neon del cursor — luz TENIDA por el color del tramo
     // (M9fix: nunca blanca) que se sale del tubo por todo el span con
@@ -65,7 +65,7 @@ void main() {
     // ~3-4x M9c. M9e: gain 0.30 -> 0.45 (plan-B sellado: "derrame exterior
     // flojo") y CABALGA LA ENVOLVENTE (env, ancha: +-0.25 de fase ~ 20%
     // del circuito — medido contra la demo en vivo; halo 2-3x el carril)
-    // en vez del collar estrecho (boost, +-0.12): el tramo que avanza se
+    // en vez del collar estrecho (boost, +-0.16): el tramo que avanza se
     // lee LARGO y con fuerza como el gloom de la demo ("manda lo que se
     // ve"). En reposo env=0 => spill=0 (arco puro multiplicativo M9d).
     float spill = 0.35 * env * (1.0 - s);

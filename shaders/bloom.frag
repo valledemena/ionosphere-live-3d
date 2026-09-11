@@ -26,6 +26,17 @@ void main() {
         result += brightPass(texture(u_texture, vUV + texel * float(i)).rgb) * weight[i];
         result += brightPass(texture(u_texture, vUV - texel * float(i)).rgb) * weight[i];
     }
+    // M9g FIX C (paridad mip0 UnrealBloom, prescrito GLM): taps cercanos
+    // 0.35/0.70 texel (~2/4px con u_direction x6) — el nucleo de 2-3px
+    // realimenta y la falda nace pegada (los taps >=6px la decapitaban).
+    // Sin renormalizar: fuera de la cabeza aportan ~0 -> falda lejana y
+    // reposo intactos (L 0.587 < 0.72 -> brightPass~=0).
+    vec2 nt1 = texel * 0.35;
+    vec2 nt2 = texel * 0.70;
+    result += brightPass(texture(u_texture, vUV + nt1).rgb) * 0.10;
+    result += brightPass(texture(u_texture, vUV - nt1).rgb) * 0.10;
+    result += brightPass(texture(u_texture, vUV + nt2).rgb) * 0.06;
+    result += brightPass(texture(u_texture, vUV - nt2).rgb) * 0.06;
     // M1: u_intensity SOLO en la pasada vertical (la final). Antes se
     // aplicaba en H y en V -> intensidad efectiva = u_intensity^2.
     if (u_pass == 1) result *= u_intensity;

@@ -284,17 +284,18 @@ inline float traceProfile(float s) {
 }
 
 // Cabeza del pulso (P2): boost = envolvente longitudinal en la cima
-// (|p-0.5| < 0.12 de fase); gate = acota al nucleo transversal (s <
-// 0.45 — hombro y aura no llevan cabeza); amplitud 0.55*boost*gate.
+// (|p-0.5| < 0.16 de fase, M9g: segmento caliente +30% largo); gate =
+// pedestal del nucleo (s < 0.70 — el blanco llena el nucleo, M9g);
+// amplitud 0.55*boost*gate.
 // M9e: el shader aplica la amplitud TENIDA por col (add = col*amp) —
 // la cabeza hereda el color del tramo como la demo. Con el verde demo
 // (R 0.10) el pico satura G/B (verde intenso) y R queda diminuto
 // (~0.32 incluso a la cima x3.16) — nunca blanco (veredicto DAVID).
 inline float pulseHeadBoost(float absPhaseFromPeak) {
-    return 1.0f - smoothstepf(0.0f, 0.12f, absPhaseFromPeak);
+    return 1.0f - smoothstepf(0.0f, 0.16f, absPhaseFromPeak);
 }
 inline float pulseHeadGate(float s) {
-    return 1.0f - smoothstepf(0.15f, 0.45f, s);
+    return 1.0f - smoothstepf(0.40f, 0.70f, s);
 }
 inline float pulseHeadAmplitude(float boost, float gate) {
     return 0.55f * boost * gate;
