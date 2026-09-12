@@ -1913,6 +1913,7 @@ void App::fetchWorker() {
     bool haveTec = false;
     bool haveXray = false;
     double sdoPubT[2] = {-1.0, -1.0};  // M11: ultimo publicado por producto
+    int sdoLastWant = -1;  // M11-fix: fuerza republicar al alternar producto
     bool firstPass = true;
 
     auto noteDone = [&]() {
@@ -2037,11 +2038,17 @@ void App::fetchWorker() {
             const SdoProduct want = impl->sunProduct == 1 ? SdoProduct::A304 : SdoProduct::HMIIF;
             const SdoProduct other = impl->sunProduct == 1 ? SdoProduct::HMIIF : SdoProduct::A304;
             const SdoProduct seq[2] = {want, other};
+            // M11-fix: al alternar producto hay que republicar la imagen ya
+            // descargada (el dedup por timeUtc la suprimia y la textura no
+            // cambiaba hasta el siguiente fetch fresco).
+            const bool switched = (int)want != sdoLastWant;
+            sdoLastWant = (int)want;
             for (int i = 0; i < 2; i++) {
                 if (i == 1 && sdo.getImage(seq[1]).valid) continue;  // steady: solo displayed
                 if (sdo.fetch(seq[i], epoch)) {
                     const SdoImage& im = sdo.getImage(seq[i]);
-                    if (im.valid && im.timeUtc != sdoPubT[(int)seq[i]]) {
+                    if (im.valid && (im.timeUtc != sdoPubT[(int)seq[i]] ||
+                                     (switched && seq[i] == want))) {
                         sdoPubT[(int)seq[i]] = im.timeUtc;
                         auto b = std::make_shared<Impl::SdoBundle>();
                         b->img = im;
