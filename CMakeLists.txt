@@ -66,6 +66,7 @@ set(SOURCES
     src/Data/EbroAdapter.cpp
     src/Data/XrayAdapter.cpp
     src/Data/DiasAdapter.cpp
+    src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp
@@ -180,3 +181,8 @@ add_test(NAME hop_geometry COMMAND test_hop_geometry)
 add_executable(test_m2_sun tests/test_m2_sun.cpp src/Utils/SolarPosition.cpp)
 target_include_directories(test_m2_sun PRIVATE src)
 add_test(NAME m2_sun COMMAND test_m2_sun)
+# M10 (cache TEC en disco): logica pura, sin GL/curl. Llama a PRODUCCION
+# (namespace teccache en src/Data/TecCache), no replica.
+add_executable(test_tec_cache tests/test_tec_cache.cpp src/Data/TecCache.cpp)
+target_include_directories(test_tec_cache PRIVATE src)
+add_test(NAME tec_cache COMMAND test_tec_cache)

@@ -39,6 +39,7 @@
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
 #include "Data/GiroAdapter.h"
+#include "Data/TecCache.h"  // M10: cache TEC en disco
 #include "Data/Kc2gAdapter.h"   // M4R-A: failover kc2g (FASE A sellada)
 #include "Data/SolarIndicesAdapter.h"
 #include "Data/SolarWindAdapter.h"
@@ -59,7 +60,7 @@
 
 struct App::Impl {
     // --- Bundles publicados por el hilo worker (inmutables, refcount) ---
-    struct TecBundle { GridData grid; bool simulated = false; };
+    struct TecBundle { GridData grid; bool simulated = false; bool fromCache = false; };  // M10: badge cache
     struct IndicesBundle {
         IndexSnapshot snap;
         std::vector<IndexHistoryPoint> kp, dst, f107, ssn;
@@ -273,6 +274,12 @@ struct App::Impl {
     std::atomic<bool> histLoading{false};
     // El worker la activa al publicar el primer TEC real (no mock).
     std::atomic<bool> liveTecArrived{false};
+    // M10 (cache TEC en disco): settings + estado de restore.
+    bool tecCacheEnabled = true;
+    double tecCacheMaxAgeH = 24.0;   // >maxAge puebla replay, no current
+    std::atomic<bool> cacheLoaded{false};     // init-read con frames reales
+    std::atomic<double> cacheNewestEpoch{-1.0};
+    std::atomic<int> cacheRestored{0};
     // Catalogo GIRO en background.
     std::atomic<bool> catalogReady{false};
     bool catalogApplied = false;
@@ -1063,16 +1070,25 @@ bool App::init(int width, int height, const char* title) {
             loader.setGridSize(72, 72);
             std::vector<GloTecFrame> idx;
             if (loader.fetchIndex(idx)) {
-                size_t take = idx.size() > 72 ? 72 : idx.size();   // M4/P3: ~6 h
+                // M10: delta — lo ya cacheado no se descarga (lower_bound por epoch).
+                size_t first = 0;
+                int nCached = 0;
+                if (self->impl->tecCacheEnabled && self->impl->cacheLoaded.load()) {
+                    const double cut = self->impl->cacheNewestEpoch.load();
+                    while (first < idx.size() && idx[first].timeUtc <= cut) first++;
+                    nCached = self->impl->cacheRestored.load();
+                }
+                size_t avail = idx.size() > first ? idx.size() - first : 0;
+                size_t take = avail > 72 ? 72 : avail;   // M4/P3: ~6 h
                 self->impl->histTotal.store((int)take);
                 for (size_t k = idx.size() - take; k < idx.size(); k++) {
                     if (self->impl->shutdownRequested.load()) break;   // M0.2
                     GridData fr;
                     if (loader.fetchFrame(idx[k].url, idx[k].timeUtc, fr))
-                        self->pushHistoryFrame(fr, idx[k].timeUtc);
+                        self->pushHistoryFrame(fr, idx[k].timeUtc, false);
                     self->impl->histDone.store(self->impl->histDone.load() + 1);
                 }
-                printf("[App] History preload done\n");
+                printf("[App] History preload: %d cached + %d fetched\n", nCached, (int)take);
             }
             self->impl->histLoading.store(false);
         });
@@ -1192,6 +1208,7 @@ bool App::init(int width, int height, const char* title) {
     // Persistencia GUI: aplicar settings.cfg si existe (visibilidades,
     // variables, sliders, camara) y refrescar las capas en consecuencia.
     loadSettings();
+    restoreTecCache();  // M10: anillo + bundle desde disco antes del worker
     // M1: settings.cfg puede pedir otro MSAA (la carga corre tras el primer
     // init de FBOs): un recreate unico si difiere del usado arriba.
     if (impl->msaaSamples != msaaUsedAtInit)
@@ -1731,6 +1748,8 @@ void App::saveSettings() {
     fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
     fprintf(f, "hfTraceVisible %d\n", impl->hfTraceVisible ? 1 : 0);   // M8 (plan 11.4)
     fprintf(f, "hfFreqMHz %g\n", (double)impl->hfFreqMHz);
+    fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
+    fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
     fclose(f);
 }
 
@@ -1801,6 +1820,8 @@ void App::loadSettings() {
         else if (k == "faradayScale") impl->faradayScale = glm::clamp((float)v, 0.2f, 4.0f);
         else if (k == "auroraVisible") impl->auroraVisible = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
+        else if (k == "tecCacheEnabled") impl->tecCacheEnabled = clB(v);   // M10
+        else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
@@ -1878,7 +1899,7 @@ void App::fetchWorker() {
             bool sim = false;
             if (ok) {
                 g = glo.getGrid();
-            } else if (!haveTec) {
+            } else if (!haveTec && !impl->cacheLoaded.load()) {  // M10: con cache real, nada de mock
                 esa.fetchTEC(epoch);
                 g.width = esa.getData().width;
                 g.height = esa.getData().height;
@@ -1997,7 +2018,7 @@ void App::consumeBundles() {
     if (t && t != impl->lastTec) {
         impl->lastTec = t;
         if (t->grid.valid) {
-            pushHistoryFrame(t->grid, t->grid.timestamp);
+            pushHistoryFrame(t->grid, t->grid.timestamp, t->simulated);
             if (!impl->replayMode) updateMainGrid(t->grid);
         }
     }
@@ -2097,7 +2118,55 @@ void App::rebuildSlice(bool force) {
     impl->slicePeakLog = 8.0f + 4.5f * peak;  // misma normalizacion que el volumen
 }
 
-void App::pushHistoryFrame(const GridData& grid, double ts) {    if (!grid.valid || grid.values.empty()) return;
+// M10: restaura anillo + bundle actual desde cache/ (init, pre-worker).
+// Solo dato real (el writer jamas cachea simulated); >maxAge puebla
+// replay pero no current. Badge "cache" hasta que llegue live.
+void App::restoreTecCache() {
+    if (!impl->tecCacheEnabled) return;
+    teccache::ScanResult scan = teccache::loadCached("cache");
+    if (scan.frames.empty()) return;
+    {
+        std::lock_guard<std::mutex> lk(impl->tecHistMutex);
+        for (const auto& f : scan.frames) {
+            GridData g;
+            g.width = f.w;
+            g.height = f.h;
+            g.values = f.v;
+            g.timestamp = f.epoch;
+            g.valid = true;
+            impl->tecHist.push_back(g);  // scan ordenado asc
+        }
+        while (impl->tecHist.size() > 72) impl->tecHist.erase(impl->tecHist.begin());
+    }
+    const double newest = scan.frames.back().epoch;
+    const double now = (double)std::time(nullptr);
+    impl->cacheNewestEpoch.store(newest);
+    impl->cacheRestored.store((int)scan.frames.size());
+    impl->cacheLoaded.store(true);
+    if (teccache::isFresh(newest, now, impl->tecCacheMaxAgeH)) {
+        auto b = std::make_shared<Impl::TecBundle>();
+        b->grid.width = scan.frames.back().w;
+        b->grid.height = scan.frames.back().h;
+        b->grid.values = scan.frames.back().v;
+        b->grid.timestamp = newest;
+        b->grid.valid = true;
+        b->simulated = false;
+        b->fromCache = true;
+        { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
+    }
+    char cbuf[16] = "--:--";
+    { std::time_t tt = (std::time_t)newest; std::tm gg;
+#ifdef _WIN32
+      gmtime_s(&gg, &tt);
+#else
+      gmtime_r(&tt, &gg);
+#endif
+      strftime(cbuf, sizeof(cbuf), "%H:%M", &gg); }
+    printf("[App] TEC cache: %d restored, newest %s UTC (pruned %d, dropped %d)\n",
+           (int)scan.frames.size(), cbuf, scan.pruned, scan.dropped);
+}
+
+void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {    if (!grid.valid || grid.values.empty()) return;
     std::lock_guard<std::mutex> lk(impl->tecHistMutex);
     for (const auto& e : impl->tecHist) {
         if (fabs(e.timestamp - ts) < 240.0) return;  // dedup ~4 min
@@ -2107,7 +2176,17 @@ void App::pushHistoryFrame(const GridData& grid, double ts) {    if (!grid.valid
     size_t pos = 0;
     while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
     impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
+    impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
     while (impl->tecHist.size() > 72) impl->tecHist.erase(impl->tecHist.begin());   // M4/P3: cap 72 (~6 h)
+    // M10: todo frame real que entra al anillo persiste (simulated/ESA excluidos).
+    if (teccache::shouldCacheFrame(grid.valid, simulated, impl->tecCacheEnabled)) {
+        teccache::Frame f;
+        f.epoch = ts;
+        f.w = grid.width;
+        f.h = grid.height;
+        f.v = grid.values;
+        teccache::saveFrame("cache", f);
+    }
 }
 
 void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/NmF2 interpoladas de GIRO.
@@ -2997,7 +3076,22 @@ void App::render() {
     ImGui::Separator();
     auto tecStatusB = impl->getTec();
     if (tecStatusB && tecStatusB->grid.valid) {
-        if (tecStatusB->simulated) {
+        if (tecStatusB->fromCache && !tecStatusB->simulated) {
+            char tcbuf[16] = "--:--";
+            {
+                std::time_t tt = (std::time_t)tecStatusB->grid.timestamp;
+                std::tm gg;
+#ifdef _WIN32
+                gmtime_s(&gg, &tt);
+#else
+                gmtime_r(&tt, &gg);
+#endif
+                strftime(tcbuf, sizeof(tcbuf), "%H:%M", &gg);
+            }
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "TEC: cache %s UTC (%dx%d)",
+                tcbuf, tecStatusB->grid.width, tecStatusB->grid.height);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Cached GloTEC grid from disk (M10): real data from a previous session. Live download replaces it automatically; frames older than tecCacheMaxAgeH feed replay only.");
+        } else if (tecStatusB->simulated) {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "TEC: %dx%d (MOCK offline)",
                 tecStatusB->grid.width, tecStatusB->grid.height);
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Simulated diurnal pattern (EsaAdapter): GloTEC unreachable. Switches to real data automatically when the download succeeds.");

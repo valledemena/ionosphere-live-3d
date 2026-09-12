@@ -23,7 +23,8 @@ private:
     void applyRelief();       // amplitud de relieve efectiva (storm swell) a ambas cascaras
     void applyAltitudes();    // altitudes base x explodeFactor (vista explotada)
     void updateMainGrid(const GridData& grid);  // TEC + outer shell a la vez
-    void pushHistoryFrame(const GridData& grid, double ts);  // anillo ordenado, dedup, cap 36
+    void pushHistoryFrame(const GridData& grid, double ts, bool simulated = false);  // anillo ordenado, dedup, cap 72 + write-through M10
+    void restoreTecCache();  // M10: anillo + bundle desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)
     void loadSettings();      // settings.cfg -> GUI (si existe)
     void fetchWorker();       // hilo background: red+parse, publica bundles
