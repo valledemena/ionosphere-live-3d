@@ -1,5 +1,6 @@
 // =============================================================================
-// test_sdo_projection — matemática del disco solar (M11, plan §13 verbatim).
+// test_sdo_projection — matemática del disco solar (M11, plan §13 verbatim;
+// M12/N6: regla de edad + Carlon preferente).
 //
 // Test de logica pura: sin GL, sin GLFW, sin red. Llama a PRODUCCION
 // (namespace sundisk en src/Utils/SunDiskMath.h + SolarPosition::
@@ -105,6 +106,32 @@ int main() {
         double d = b - a;
         if (d < 0.0) d += 360.0;
         check_near("λs avanza ~0.9856/dia", d, 0.9856, 0.02);
+    }
+
+    std::printf("--- M12/N6: regla de edad + Carlon preferente ---\n");
+    {
+        const double now = 1789000000.0;
+        Sunspot old25d = {4509, 10.0, 0.0, false, 0.0, false, "N10W91", 2,
+                          now - 25.0 * 86400.0};
+        Sunspot fresh30h = {4529, 12.0, 0.0, false, -18.0, true, "N12W18", 5,
+                            now - 30.0 * 3600.0};
+        check_bool("fila 25 d NO fresca", !isSpotFresh(old25d.timeUtc, now));
+        check_bool("fila 30 h fresca", isSpotFresh(fresh30h.timeUtc, now));
+        std::vector<Sunspot> v = {old25d, fresh30h};
+        std::vector<Sunspot> f = filterFreshSpots(v, now);
+        check_bool("filtro descarta 25 d", f.size() == 1 && f[0].region == 4529);
+        SpotPos pOld = resolveSpot(old25d, 100.0, now);
+        check_bool("stale no posiciona", !pOld.ok);
+        // Carlon preferido con loc >12 h: lonCarr=150, l0=100 -> dlon=+50.
+        Sunspot carlon30h = {4520, -12.0, 150.0, true, 0.0, false, "N12W18", 1,
+                             now - 30.0 * 3600.0};
+        SpotPos pC = resolveSpot(carlon30h, 100.0, now);
+        check_bool("Carlon preferido a loc>12 h", pC.ok && pC.dlon == 50.0);
+        // Location fresca manda.
+        Sunspot freshLoc = {4528, -11.0, 0.0, false, 0.0, false, "S11W18", 2,
+                            now - 3600.0};
+        SpotPos pL = resolveSpot(freshLoc, 100.0, now);
+        check_bool("loc fresca manda", pL.ok && pL.lat == -11.0 && pL.dlon == -18.0);
     }
 
     std::printf("\n[test_sdo_projection] %d OK, %d FAIL\n", g_ok, g_fail);

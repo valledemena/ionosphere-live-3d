@@ -5,6 +5,7 @@
 #include <stb_image.h>
 
 #include <cstdio>
+#include <filesystem>
 
 namespace {
 constexpr double kCacheMaxAgeS = 900.0;  // 15 min por producto (plan §13.1)
@@ -90,6 +91,86 @@ bool SdoImageAdapter::fetch(SdoProduct product, double utc) {
     const double age = utc - lastFetchUtc_[k];
     lastFetchUtc_[k] = utc;
     error_.clear();
+    saveDisk(product, jpg, utc);  // M12/N3: persiste para el proximo arranque
     printf("[Sdo] fetch %s %dx%d (age %.0fs)\n", nameFor(product), w, h, age);
     return true;
+}
+
+namespace {
+const char* kDiskNames[2] = {"sdo_hmiif", "sdo_a304"};
+}
+
+bool SdoImageAdapter::saveDisk(SdoProduct product, const std::vector<char>& jpg,
+                               double epoch) {
+    if (diskDir_.empty() || jpg.empty() || epoch <= 0.0) return false;
+    std::error_code ec;
+    std::filesystem::create_directories(diskDir_, ec);
+    if (ec) return false;
+    const std::string base = diskDir_ + "/" + kDiskNames[(int)product];
+    FILE* fj = std::fopen((base + ".jpg").c_str(), "wb");
+    if (!fj) return false;
+    bool ok = std::fwrite(jpg.data(), 1, jpg.size(), fj) == jpg.size();
+    if (std::fclose(fj) != 0) ok = false;
+    if (!ok) {
+        std::filesystem::remove(base + ".jpg", ec);
+        return false;
+    }
+    FILE* fu = std::fopen((base + ".utc").c_str(), "w");
+    if (fu) {
+        std::fprintf(fu, "%.0f\n", epoch);
+        std::fclose(fu);
+    }
+    return true;
+}
+
+bool SdoImageAdapter::restoreDisk() {
+    if (diskDir_.empty()) return false;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(diskDir_, ec) || ec) return false;
+    bool any = false;
+    for (int k = 0; k < 2; k++) {
+        const std::string base = diskDir_ + "/" + kDiskNames[k];
+        FILE* fj = std::fopen((base + ".jpg").c_str(), "rb");
+        if (!fj) continue;
+        std::fseek(fj, 0, SEEK_END);
+        long n = std::ftell(fj);
+        std::fseek(fj, 0, SEEK_SET);
+        bool ok = (n > 4 && n < 4 * 1024 * 1024);
+        std::vector<char> jpg;
+        if (ok) {
+            jpg.resize((size_t)n);
+            ok = std::fread(jpg.data(), 1, jpg.size(), fj) == jpg.size();
+        }
+        std::fclose(fj);
+        const unsigned char* b = (const unsigned char*)jpg.data();
+        if (ok && (b[0] != 0xFF || b[1] != 0xD8)) ok = false;  // SOI JPEG
+        int w = 0, h = 0, ch = 0;
+        unsigned char* px = nullptr;
+        if (ok) {
+            px = stbi_load_from_memory(b, (int)jpg.size(), &w, &h, &ch, 3);
+            ok = (px != nullptr && w > 0 && h > 0 && w <= 2048 && h <= 2048);
+        }
+        if (!ok) {
+            if (px) stbi_image_free(px);
+            continue;
+        }
+        double sidecar = 0.0;
+        FILE* fu = std::fopen((base + ".utc").c_str(), "r");
+        if (fu) {
+            if (std::fscanf(fu, "%lf", &sidecar) != 1) sidecar = 0.0;
+            std::fclose(fu);
+        }
+        SdoImage img;
+        img.w = w;
+        img.h = h;
+        img.rgb.assign(px, px + (size_t)w * h * 3);
+        stbi_image_free(px);
+        img.timeUtc = (sidecar > 0.0) ? sidecar : 0.0;
+        img.product = k;
+        img.valid = true;
+        images_[k] = std::move(img);
+        lastFetchUtc_[k] = images_[k].timeUtc;  // TTL corre desde el sidecar:
+        any = true;                             // refresco detras si caduco
+    }
+    return any;
 }

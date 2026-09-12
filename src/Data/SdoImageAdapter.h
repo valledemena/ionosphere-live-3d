@@ -25,6 +25,10 @@ public:
     void init();
     // Gate de trafico (lo alimenta el checkbox del panel Sun).
     void setVisible(bool v) { visible_.store(v); }
+    // M12/N3: cache en disco (stale-while-revalidate). Directorio con
+    // sdo_hmiif.jpg + sdo_a304.jpg + sidecars .utc (epoch).
+    void setDiskCacheDir(const std::string& d) { diskDir_ = d; }
+    bool restoreDisk();
     // Descarga+decodea si toca (cache 15 min/producto, gate visible).
     // Devuelve true con imagen valida (nueva o cacheada).
     bool fetch(SdoProduct product, double utc);
@@ -44,4 +48,6 @@ private:
     double lastFetchUtc_[2] = {0.0, 0.0};
     std::atomic<bool> visible_{true};
     std::string error_;
+    std::string diskDir_;  // M12/N3: "" = sin cache en disco
+    bool saveDisk(SdoProduct product, const std::vector<char>& jpg, double epoch);
 };

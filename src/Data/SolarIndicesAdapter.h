@@ -55,6 +55,10 @@ public:
     bool fetchSunspots(double utc);
     const std::vector<sundisk::Sunspot>& getSunspots() const { return sunspots_; }
     double getLastSunspotFetchTime() const { return lastSunspotUtc_; }
+    // M12/N7: TTL 60 min (el reporte es diario; no re-bajar en cada pase/kick).
+    static bool sunspotDue(double lastFetchUtc, double utc) {
+        return (utc - lastFetchUtc) >= 3600.0;
+    }
     // Parser puro (testeable): filas sin Region/lat/time se saltan.
     static bool parseSunspotReport(const std::string& js,
                                    std::vector<sundisk::Sunspot>& out);

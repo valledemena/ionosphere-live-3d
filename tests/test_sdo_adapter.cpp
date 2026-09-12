@@ -61,6 +61,13 @@ int main() {
     check_bool("vacio -> false", !SolarIndicesAdapter::parseSunspotReport("[]", empty));
     check_bool("basura -> false", !SolarIndicesAdapter::parseSunspotReport("not json", empty));
 
+    // M12/N7: TTL 60 min del reporte (harness sin red).
+    check_bool("TTL: primer fetch siempre", SolarIndicesAdapter::sunspotDue(0.0, 1789000000.0));
+    check_bool("TTL: reciente no refetch",
+               !SolarIndicesAdapter::sunspotDue(1789000000.0 - 100.0, 1789000000.0));
+    check_bool("TTL: 1 h justo si refetch",
+               SolarIndicesAdapter::sunspotDue(1789000000.0 - 3600.0, 1789000000.0));
+
     std::printf("\n[test_sdo_adapter] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

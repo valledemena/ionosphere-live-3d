@@ -101,6 +101,55 @@ struct Sunspot {
     double timeUtc = 0.0;  // time_tag (seen)
 };
 
+// M12/N6: regla de edad — Location caduca a ~13.2°/dia. Filtro 48 h;
+// >12 h prefiere Carlon (estable en rotacion) sobre Location.
+inline constexpr double kMaxSpotAgeS = 172800.0;      // 48 h
+inline constexpr double kCarlonPreferAgeS = 43200.0;  // 12 h
+
+inline bool isSpotFresh(double timeUtc, double nowUtc) {
+    return (nowUtc - timeUtc) <= kMaxSpotAgeS;
+}
+
+inline std::vector<Sunspot> filterFreshSpots(const std::vector<Sunspot>& v,
+                                             double nowUtc) {
+    std::vector<Sunspot> out;
+    for (const auto& s : v)
+        if (isSpotFresh(s.timeUtc, nowUtc)) out.push_back(s);
+    return out;
+}
+
+struct SpotPos {
+    double lat = 0.0, dlon = 0.0;
+    bool ok = false;
+};
+
+// Posicion usable: fresca + Location; >12 h prefiere Carlon; fallback dlon;
+// sin nada posicionable -> ok=false.
+inline SpotPos resolveSpot(const Sunspot& s, double l0deg, double nowUtc) {
+    SpotPos r;
+    if (!isSpotFresh(s.timeUtc, nowUtc)) return r;
+    const double age = nowUtc - s.timeUtc;
+    double la = 0.0, dl = 0.0;
+    if (s.hasLonCarr && age > kCarlonPreferAgeS) {
+        la = s.lat;
+        dl = wrap180(s.lonCarr - l0deg);
+    } else if (!s.loc.empty() && parseLocation(s.loc, la, dl)) {
+        // Location Stonyhurst al momento del reporte (fresca).
+    } else if (s.hasDlon) {
+        la = s.lat;
+        dl = s.dlon;
+    } else if (s.hasLonCarr) {
+        la = s.lat;
+        dl = wrap180(s.lonCarr - l0deg);
+    } else {
+        return r;
+    }
+    r.lat = la;
+    r.dlon = dl;
+    r.ok = true;
+    return r;
+}
+
 // Ultimo reporte por Region (campo seen del report).
 inline std::map<int, Sunspot> latestByRegion(const std::vector<Sunspot>& v) {
     std::map<int, Sunspot> m;

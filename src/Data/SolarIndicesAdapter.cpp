@@ -409,7 +409,7 @@ bool SolarIndicesAdapter::parseSunspotReport(const std::string& js,
 }
 
 bool SolarIndicesAdapter::fetchSunspots(double utc) {
-    (void)utc;
+    if (!sunspots_.empty() && !sunspotDue(lastSunspotUtc_, utc)) return true;  // M12/N7
     std::string js;
     if (!fetchURL(sunspotUrl(), js)) return false;
     std::vector<sundisk::Sunspot> rows;

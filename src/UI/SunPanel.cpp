@@ -44,30 +44,36 @@ void SunPanel::draw(const SunPanelInput& in, SunGeom& geom) {
             ImGui::SetItemTooltip("Click: alterna SDO/HMI <-> SDO/AIA-304");
 
         // Markers sobre grupos oscuros (plan §13.4 + paridad demo :128-133).
+        // M12/N6: solo regiones vivas (<=48 h); log al cambiar el conteo.
         if (in.spots && !in.spots->empty()) {
             const double jd = sundisk::unixToJD(in.utc);
             const double l0 = sundisk::carringtonL0(jd);
             const double lam = SolarPosition::getApparentEclipticLonDeg(in.utc);
             const double b0 = sundisk::solarB0(lam);
+            std::vector<sundisk::Sunspot> fresh =
+                sundisk::filterFreshSpots(*in.spots, in.utc);
+            std::map<int, sundisk::Sunspot> byReg = sundisk::latestByRegion(fresh);
+            {
+                static size_t lgRows = 0, lgFresh = 0, lgRegs = 0;
+                if (in.spots->size() != lgRows || fresh.size() != lgFresh ||
+                    byReg.size() != lgRegs) {
+                    lgRows = in.spots->size();
+                    lgFresh = fresh.size();
+                    lgRegs = byReg.size();
+                    printf("[SolarIndices] sunspots: %d filas -> %d regiones <=48 h (%d descartadas)\n",
+                           (int)lgRows, (int)lgRegs, (int)(lgRows - lgFresh));
+                }
+            }
             ImVec2 r0 = ImGui::GetItemRectMin();
             ImVec2 rsz = ImGui::GetItemRectSize();
             ImVec2 mouse = ImGui::GetMousePos();
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            std::map<int, sundisk::Sunspot> byReg = sundisk::latestByRegion(*in.spots);
             for (const auto& kv : byReg) {
                 const sundisk::Sunspot& s = kv.second;
-                double la = s.lat, dlon = 0.0;
-                bool okLoc = !s.loc.empty() &&
-                             sundisk::parseLocation(s.loc, la, dlon);
-                if (!okLoc) {
-                    if (s.hasDlon)
-                        dlon = s.dlon;
-                    else if (s.hasLonCarr)
-                        dlon = sundisk::wrap180(s.lonCarr - l0);
-                    else
-                        continue;  // sin posicion usable
-                }
-                sundisk::SpotProj p = sundisk::projectSpot(la, dlon, b0);
+                // M12/N6: posicion con regla de edad (Carlon >12 h).
+                sundisk::SpotPos sp = sundisk::resolveSpot(s, l0, in.utc);
+                if (!sp.ok) continue;
+                sundisk::SpotProj p = sundisk::projectSpot(sp.lat, sp.dlon, b0);
                 if (!p.visible) continue;
                 ImVec2 c(r0.x + (float)((p.x * 0.5 + 0.5) * rsz.x),
                          r0.y + (float)((0.5 - p.y * 0.5) * rsz.y));

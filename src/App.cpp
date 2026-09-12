@@ -255,11 +255,11 @@ struct App::Impl {
     // M11: Sun (disco SDO + ARs).
     int sunProduct = 0;             // 0=HMIIF 1=A304 (click alterna)
     bool sunVisible = true;         // toggle Layers + gate de trafico
-    GLuint sunTex = 0;              // textura GL (solo render thread)
-    int sunTexW = 0, sunTexH = 0;
+    GLuint sunTex[2] = {0, 0};      // D1: una por producto (toggle = 1 frame)
+    int sunTexW[2] = {0, 0}, sunTexH[2] = {0, 0};
     double sunUpTime[2] = {-1.0, -1.0};  // ultimo subido por producto (hilo main)
     std::atomic<bool> sdoKick{false};  // M11: click en Sun despierta al worker ya
-    double sunImgTime = -1.0;       // epoch de la imagen mostrada
+    double sunImgTime[2] = {-1.0, -1.0};  // epoch mostrada por producto
     SunPanel sunPanel;              // M11: ventana (UI/SunPanel.h)
     SunGeom sunGeom;                // persistente (settings sunWin*)
     // Volumen + shells de referencia.
@@ -1914,148 +1914,178 @@ void App::fetchWorker() {
     bool haveXray = false;
     double sdoPubT[2] = {-1.0, -1.0};  // M11: ultimo publicado por producto
     int sdoLastWant = -1;  // M11-fix: fuerza republicar al alternar producto
+    sdo.init();  // M12/N8
+    sdo.setDiskCacheDir("data/cache");  // M12/N3
+    // M12/N3: restore instantaneo; el fetch refresca detras (stale-while-revalidate).
+    if (sdo.restoreDisk()) {
+        for (int p = 0; p < 2; p++) {
+            const SdoImage& rim = sdo.getImage((SdoProduct)p);
+            if (rim.valid) {
+                sdoPubT[p] = rim.timeUtc;
+                auto rb = std::make_shared<Impl::SdoBundle>();
+                rb->img = rim;
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = rb; }
+            }
+        }
+    }
     bool firstPass = true;
 
     auto noteDone = [&]() {
         if (firstPass) impl->loadDone.store(impl->loadDone.load() + 1);
     };
 
-    while (!impl->shutdownRequested.load()) {
-        double epoch = (double)std::time(nullptr);
-
-        // 1) TEC GloTEC primero (es la capa principal; asi aparece en segundos).
-        //    Si falla y no hay nada todavia, mock Esa offline marcado simulated.
-        {
-            GridData g;
-            bool ok = glo.fetchTEC(epoch);
-            bool sim = false;
-            if (ok) {
-                g = glo.getGrid();
-            } else if (!haveTec && !impl->cacheLoaded.load()) {  // M10: con cache real, nada de mock
-                esa.fetchTEC(epoch);
-                g.width = esa.getData().width;
-                g.height = esa.getData().height;
-                g.values = esa.getData().values;
-                g.timestamp = epoch;
-                g.valid = esa.getData().valid;
-                sim = true;
-            }
-            if (g.valid) {
-                auto b = std::make_shared<Impl::TecBundle>();
-                b->grid = g;
-                b->grid.timestamp = epoch;
-                b->simulated = sim;
-                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
-                haveTec = true;
-                if (!sim) impl->liveTecArrived.store(true);
-            }
+    double lastDataPassUtc = -1e18;  // M12/N1: ultimo pase de datos completo
+    // M12: carril SDO (N1/D2/D4/N5 + fix2). Publica cambios; silent en steady.
+    auto runSdo = [&](double ep) {
+        sdo.setVisible(impl->sunVisible);
+        const SdoProduct want = impl->sunProduct == 1 ? SdoProduct::A304 : SdoProduct::HMIIF;
+        const SdoProduct other = impl->sunProduct == 1 ? SdoProduct::HMIIF : SdoProduct::A304;
+        const bool switched = (int)want != sdoLastWant;
+        sdoLastWant = (int)want;
+        if (switched) {
+            // N5: linea de conmutacion (el hit es silencioso por diseno).
+            const double ageW = ep - sdo.getLastFetchTime(want);
+            printf("[Sdo] switch -> %s (cache %.0f s)%s\n", SdoImageAdapter::nameFor(want), ageW,
+                   (ageW < 900.0) ? "" : " (stale, refrescando...)");
         }
-        noteDone();
-
-        // 2) Indices (Kp/Dst/F10.7/Ap/SSN).
-        if (sidx.fetch(epoch) && sidx.getSnapshot().valid) {
-            auto b = std::make_shared<Impl::IndicesBundle>();
-            b->snap = sidx.getSnapshot();
-            b->kp = sidx.getKpHistory();
-            b->dst = sidx.getDstHistory();
-            b->f107 = sidx.getF107History();
-            b->ssn = sidx.getSsnHistory();
-            b->spots = sidx.getSunspots();  // M11: manchas viajan con los indices
-            { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->indices = b; }
-        }
-        noteDone();
-
-        // 3) Viento solar.
-        if (sw.fetch(epoch) && sw.getLatest().valid) {
-            auto b = std::make_shared<Impl::WindBundle>();
-            b->latest = sw.getLatest();
-            b->bzHist = sw.getBzHistory();
-            b->simulated = sw.isSimulated();
-            b->error = sw.getErrorMessage();
-            { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->wind = b; }
-        }
-        noteDone();
-
-        // 4) Aurora Ovation.
-        {
-            GridData g;
-            std::string err;
-            if (au.fetchAurora(epoch)) {
-                g = au.getGrid();
-            } else {
-                err = au.getErrorMessage();
-            }
-            if (g.valid || !err.empty()) {
-                auto b = std::make_shared<Impl::AuroraBundle>();
-                b->grid = g;
-                b->error = err;
-                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->auroraB = b; }
-            }
-        }
-        noteDone();
-
-        // 5) Propagacion HF (usa muestras GIRO thread-safe).
-        {
-            // M4R-A: en kc2g-fallback la mediana MUF/foF2 del panel HF viene
-            // del batch kc2g (panel window <=24 h); si no, GIRO como siempre.
-            auto samples = (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK)
-                ? impl->kc2g.copySamples()
-                : impl->giro.copySamples();
-            // M7 (plan 10): el LUF global reacciona al flare X-ray. rp.fetch
-            // corre ANTES que xr.fetch() del mismo pase, asi que recibe el
-            // flujo del bundle del pase anterior (xr persiste entre pases de
-            // 300 s; stale <= 5 min, irrelevante para fulguraciones — sello).
-            float xrFlux = (xr.getLatest().valid ? xr.getLatest().flux : 0.0f);
-            rp.fetch(epoch, samples, xrFlux);
-            if (rp.getLatest().valid && (rp.usedGiroReal() || !impl->getRadio())) {
-                auto b = std::make_shared<Impl::RadioBundle>();
-                b->latest = rp.getLatest();
-                b->aeHist = rp.getAeHistory();
-                b->s4Hist = rp.getS4History();
-                b->simulated = rp.isSimulated();
-                b->usedGiro = rp.usedGiroReal();
-                b->error = rp.getErrorMessage();
-                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->radio = b; }
-            }
-        }
-        noteDone();
-
-        // 6) Rayos X GOES (capa D / fulguraciones).
-        {
-            bool real = xr.fetch(epoch);
-            if (xr.getLatest().valid && (real || !haveXray)) {
-                auto b = std::make_shared<Impl::XrayBundle>();
-                b->latest = xr.getLatest();
-                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->xray = b; }
-                haveXray = true;
-            }
-        }
-        noteDone();
-
-        // 7) SDO disco solar (M11: gate por panel + cache 15 min/producto).
-        {
-            sdo.setVisible(impl->sunVisible);
-            const SdoProduct want = impl->sunProduct == 1 ? SdoProduct::A304 : SdoProduct::HMIIF;
-            const SdoProduct other = impl->sunProduct == 1 ? SdoProduct::HMIIF : SdoProduct::A304;
-            const SdoProduct seq[2] = {want, other};
-            // M11-fix: al alternar producto hay que republicar la imagen ya
-            // descargada (el dedup por timeUtc la suprimia y la textura no
-            // cambiaba hasta el siguiente fetch fresco).
-            const bool switched = (int)want != sdoLastWant;
-            sdoLastWant = (int)want;
-            for (int i = 0; i < 2; i++) {
-                if (i == 1 && sdo.getImage(seq[1]).valid) continue;  // steady: solo displayed
-                if (sdo.fetch(seq[i], epoch)) {
-                    const SdoImage& im = sdo.getImage(seq[i]);
-                    if (im.valid && (im.timeUtc != sdoPubT[(int)seq[i]] ||
-                                     (switched && seq[i] == want))) {
-                        sdoPubT[(int)seq[i]] = im.timeUtc;
-                        auto b = std::make_shared<Impl::SdoBundle>();
-                        b->img = im;
-                        { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = b; }
-                    }
+        const SdoProduct seq[2] = {want, other};
+        for (int i = 0; i < 2; i++) {
+            // D4: el oculto solo se calienta si caduco (<15 min = skip).
+            if (i == 1 && sdo.getImage(seq[1]).valid &&
+                ep - sdo.getLastFetchTime(seq[1]) < 900.0)
+                continue;
+            if (sdo.fetch(seq[i], ep)) {
+                const SdoImage& im = sdo.getImage(seq[i]);
+                if (im.valid && (im.timeUtc != sdoPubT[(int)seq[i]] ||
+                                 (switched && seq[i] == want))) {
+                    sdoPubT[(int)seq[i]] = im.timeUtc;
+                    auto b = std::make_shared<Impl::SdoBundle>();
+                    b->img = im;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = b; }
                 }
             }
+        }
+    };
+    while (!impl->shutdownRequested.load()) {
+        double epoch = (double)std::time(nullptr);
+        const bool kicked = impl->sdoKick.exchange(false);  // M12/N1
+        // N1: kick con datos frescos (<60 s) salta 1-6; primer pase siempre full.
+        const bool sdoLane = kicked && !firstPass && (epoch - lastDataPassUtc < 60.0);
+        if (firstPass) runSdo(epoch);   // D2: sol primero al arrancar
+        if (!sdoLane) {
+            // 1) TEC GloTEC primero (es la capa principal; asi aparece en segundos).
+            //    Si falla y no hay nada todavia, mock Esa offline marcado simulated.
+            {
+                GridData g;
+                bool ok = glo.fetchTEC(epoch);
+                bool sim = false;
+                if (ok) {
+                    g = glo.getGrid();
+                } else if (!haveTec && !impl->cacheLoaded.load()) {  // M10: con cache real, nada de mock
+                    esa.fetchTEC(epoch);
+                    g.width = esa.getData().width;
+                    g.height = esa.getData().height;
+                    g.values = esa.getData().values;
+                    g.timestamp = epoch;
+                    g.valid = esa.getData().valid;
+                    sim = true;
+                }
+                if (g.valid) {
+                    auto b = std::make_shared<Impl::TecBundle>();
+                    b->grid = g;
+                    b->grid.timestamp = epoch;
+                    b->simulated = sim;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
+                    haveTec = true;
+                    if (!sim) impl->liveTecArrived.store(true);
+                }
+            }
+            noteDone();
+
+            // 2) Indices (Kp/Dst/F10.7/Ap/SSN).
+            if (sidx.fetch(epoch) && sidx.getSnapshot().valid) {
+                auto b = std::make_shared<Impl::IndicesBundle>();
+                b->snap = sidx.getSnapshot();
+                b->kp = sidx.getKpHistory();
+                b->dst = sidx.getDstHistory();
+                b->f107 = sidx.getF107History();
+                b->ssn = sidx.getSsnHistory();
+                b->spots = sidx.getSunspots();  // M11: manchas viajan con los indices
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->indices = b; }
+            }
+            noteDone();
+
+            // 3) Viento solar.
+            if (sw.fetch(epoch) && sw.getLatest().valid) {
+                auto b = std::make_shared<Impl::WindBundle>();
+                b->latest = sw.getLatest();
+                b->bzHist = sw.getBzHistory();
+                b->simulated = sw.isSimulated();
+                b->error = sw.getErrorMessage();
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->wind = b; }
+            }
+            noteDone();
+
+            // 4) Aurora Ovation.
+            {
+                GridData g;
+                std::string err;
+                if (au.fetchAurora(epoch)) {
+                    g = au.getGrid();
+                } else {
+                    err = au.getErrorMessage();
+                }
+                if (g.valid || !err.empty()) {
+                    auto b = std::make_shared<Impl::AuroraBundle>();
+                    b->grid = g;
+                    b->error = err;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->auroraB = b; }
+                }
+            }
+            noteDone();
+
+            // 5) Propagacion HF (usa muestras GIRO thread-safe).
+            {
+                // M4R-A: en kc2g-fallback la mediana MUF/foF2 del panel HF viene
+                // del batch kc2g (panel window <=24 h); si no, GIRO como siempre.
+                auto samples = (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK)
+                    ? impl->kc2g.copySamples()
+                    : impl->giro.copySamples();
+                // M7 (plan 10): el LUF global reacciona al flare X-ray. rp.fetch
+                // corre ANTES que xr.fetch() del mismo pase, asi que recibe el
+                // flujo del bundle del pase anterior (xr persiste entre pases de
+                // 300 s; stale <= 5 min, irrelevante para fulguraciones — sello).
+                float xrFlux = (xr.getLatest().valid ? xr.getLatest().flux : 0.0f);
+                rp.fetch(epoch, samples, xrFlux);
+                if (rp.getLatest().valid && (rp.usedGiroReal() || !impl->getRadio())) {
+                    auto b = std::make_shared<Impl::RadioBundle>();
+                    b->latest = rp.getLatest();
+                    b->aeHist = rp.getAeHistory();
+                    b->s4Hist = rp.getS4History();
+                    b->simulated = rp.isSimulated();
+                    b->usedGiro = rp.usedGiroReal();
+                    b->error = rp.getErrorMessage();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->radio = b; }
+                }
+            }
+            noteDone();
+
+            // 6) Rayos X GOES (capa D / fulguraciones).
+            {
+                bool real = xr.fetch(epoch);
+                if (xr.getLatest().valid && (real || !haveXray)) {
+                    auto b = std::make_shared<Impl::XrayBundle>();
+                    b->latest = xr.getLatest();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->xray = b; }
+                    haveXray = true;
+                }
+            }
+            noteDone();
+
+            lastDataPassUtc = epoch;
+            if (!firstPass) runSdo(epoch);   // regimen: tras datos
+        } else {
+            runSdo(epoch);                   // N1: solo SDO tras kick fresco
         }
         noteDone();
 
@@ -2065,10 +2095,10 @@ void App::fetchWorker() {
             printf("[App] Initial fetch pass done\n");
         }
 
-        // Espera interrumpible 300 s (o kick por click en Sun: fetch ya).
-        for (int i = 0; i < 300 && !impl->shutdownRequested.load() && !impl->sdoKick.load(); i++)
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        impl->sdoKick.store(false);
+        // Espera interrumpible 300 s con granularidad 100 ms (D3: kick en <=0.1 s).
+        for (int i = 0; i < 3000 && !impl->shutdownRequested.load() && !impl->sdoKick.load(); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // (el flag se consume al arrancar el pase: exchange en cabecera)
     }
 }
 
@@ -2111,9 +2141,9 @@ void App::consumeBundles() {
     auto sd = impl->getSdo();
     if (sd && sd != impl->lastSdo) {
         impl->lastSdo = sd;
-        if (sd->img.product == impl->sunProduct &&
-            sd->img.timeUtc != impl->sunUpTime[sd->img.product])
-            uploadSunTexture(sd->img);  // M11: solo displayed, solo si cambia
+        const int p = sd->img.product;
+        if (p >= 0 && p <= 1 && sd->img.timeUtc != impl->sunUpTime[p])
+            uploadSunTexture(sd->img);  // D1: ambas texturas (toggle = 1 frame)
     }
 }
 
@@ -2260,25 +2290,27 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
 // M11: subida GL de la imagen SDO (render thread, patron Earth.cpp:14-31
 // adaptado: GL_RGB8 — JPG sin alpha — LINEAR + CLAMP, sin mipmaps).
 void App::uploadSunTexture(const SdoImage& im) {
-    if (im.rgb.empty() || im.w <= 0 || im.h <= 0) return;
-    if (impl->sunTex == 0) glGenTextures(1, &impl->sunTex);
-    glBindTexture(GL_TEXTURE_2D, impl->sunTex);
+    const int p = im.product;
+    if (p < 0 || p > 1 || im.rgb.empty() || im.w <= 0 || im.h <= 0) return;
+    if (impl->sunTex[p] == 0) glGenTextures(1, &impl->sunTex[p]);
+    glBindTexture(GL_TEXTURE_2D, impl->sunTex[p]);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, im.w, im.h, 0, GL_RGB, GL_UNSIGNED_BYTE, im.rgb.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    impl->sunTexW = im.w;
-    impl->sunTexH = im.h;
-    impl->sunImgTime = im.timeUtc;
+    impl->sunTexW[p] = im.w;
+    impl->sunTexH[p] = im.h;
+    impl->sunImgTime[p] = im.timeUtc;
 }
 
 // M11: ventana Sun (disco SDO + ARs). Primera imagen en la UI del motor.
 void App::drawSunPanel() {
     if (!impl->sunVisible) return;
     SunPanelInput in;
-    in.texId = impl->sunTex;
+    const int dp = impl->sunProduct >= 0 && impl->sunProduct <= 1 ? impl->sunProduct : 0;
+    in.texId = impl->sunTex[dp];
     auto ix = impl->getIndices();
     in.spots = ix ? &ix->spots : nullptr;
     in.utc = (double)std::time(nullptr);
@@ -2289,8 +2321,8 @@ void App::drawSunPanel() {
     in.prodName = a304 ? "SDO - AIA 304 (cromosfera)" : "SDO - HMI (fotosfera)";
     in.prodTag = a304 ? "A304" : "HMIIF";
     char tbuf[16] = "--:--";
-    if (impl->sunImgTime > 0.0) {
-        std::time_t tt = (std::time_t)impl->sunImgTime;
+    if (impl->sunImgTime[dp] > 0.0) {
+        std::time_t tt = (std::time_t)impl->sunImgTime[dp];
         std::tm gg;
 #ifdef _WIN32
         gmtime_s(&gg, &tt);
@@ -2738,7 +2770,9 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Starfield background. Decorative only.");
     ImGui::Checkbox("Terminator", &impl->terminatorVisible);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Thin ring on the day/night boundary (follows the real sun). Turn off if you prefer a clean globe.");
-    ImGui::Checkbox("Sun", &impl->sunVisible);  // M11: disco SDO + regiones activas
+    bool sunWas = impl->sunVisible;
+    ImGui::Checkbox("Sun", &impl->sunVisible);  // M11 (N2: abrir patea)
+    if (impl->sunVisible && !sunWas) impl->sdoKick.store(true);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SDO solar disk (HMI/AIA-304) with active regions. Downloads only while open (1 JPG/15 min).");
     ImGui::Separator();
     ImGui::Text("Ionosphere");
