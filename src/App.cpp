@@ -40,6 +40,8 @@
 #include "Data/GloTecAdapter.h"
 #include "Data/GiroAdapter.h"
 #include "Data/TecCache.h"  // M10: cache TEC en disco
+#include "Data/SdoImageAdapter.h"  // M11: disco solar
+#include "UI/SunPanel.h"  // M11: ventana Sun
 #include "Data/Kc2gAdapter.h"   // M4R-A: failover kc2g (FASE A sellada)
 #include "Data/SolarIndicesAdapter.h"
 #include "Data/SolarWindAdapter.h"
@@ -64,6 +66,7 @@ struct App::Impl {
     struct IndicesBundle {
         IndexSnapshot snap;
         std::vector<IndexHistoryPoint> kp, dst, f107, ssn;
+        std::vector<sundisk::Sunspot> spots;  // M11: manchas (vienen con sidx.fetch)
     };
     struct WindBundle {
         SolarWindSample latest;
@@ -80,6 +83,7 @@ struct App::Impl {
         std::string error;
     };
     struct XrayBundle { XraySample latest; };
+    struct SdoBundle { SdoImage img; };  // M11: frame SDO publicado
     mutable std::mutex bundleMutex;
     std::shared_ptr<const TecBundle> tec;
     std::shared_ptr<const IndicesBundle> indices;
@@ -87,12 +91,14 @@ struct App::Impl {
     std::shared_ptr<const AuroraBundle> auroraB;
     std::shared_ptr<const RadioBundle> radio;
     std::shared_ptr<const XrayBundle> xray;
+    std::shared_ptr<const SdoBundle> sdoB;  // M11
     std::shared_ptr<const TecBundle> getTec() const { std::lock_guard<std::mutex> lk(bundleMutex); return tec; }
     std::shared_ptr<const IndicesBundle> getIndices() const { std::lock_guard<std::mutex> lk(bundleMutex); return indices; }
     std::shared_ptr<const WindBundle> getWind() const { std::lock_guard<std::mutex> lk(bundleMutex); return wind; }
     std::shared_ptr<const AuroraBundle> getAurora() const { std::lock_guard<std::mutex> lk(bundleMutex); return auroraB; }
     std::shared_ptr<const RadioBundle> getRadio() const { std::lock_guard<std::mutex> lk(bundleMutex); return radio; }
     std::shared_ptr<const XrayBundle> getXray() const { std::lock_guard<std::mutex> lk(bundleMutex); return xray; }
+    std::shared_ptr<const SdoBundle> getSdo() const { std::lock_guard<std::mutex> lk(bundleMutex); return sdoB; }  // M11
     // Hilo worker de red + progreso de carga inicial.
     std::thread fetchThread;
     // M0.2: las precargas en background pasan de detach() a miembros joinables
@@ -245,6 +251,16 @@ struct App::Impl {
     std::shared_ptr<const AuroraBundle> lastAurora;
     std::shared_ptr<const RadioBundle> lastRadio;
     std::shared_ptr<const XrayBundle> lastXray;
+    std::shared_ptr<const SdoBundle> lastSdo;  // M11
+    // M11: Sun (disco SDO + ARs).
+    int sunProduct = 0;             // 0=HMIIF 1=A304 (click alterna)
+    bool sunVisible = true;         // toggle Layers + gate de trafico
+    GLuint sunTex = 0;              // textura GL (solo render thread)
+    int sunTexW = 0, sunTexH = 0;
+    double sunUpTime[2] = {-1.0, -1.0};  // ultimo subido por producto (hilo main)
+    double sunImgTime = -1.0;       // epoch de la imagen mostrada
+    SunPanel sunPanel;              // M11: ventana (UI/SunPanel.h)
+    SunGeom sunGeom;                // persistente (settings sunWin*)
     // Volumen + shells de referencia.
     VolumeRenderer volumeLayer;
     bool volumeVisible = false;
@@ -1748,6 +1764,12 @@ void App::saveSettings() {
     fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
     fprintf(f, "hfTraceVisible %d\n", impl->hfTraceVisible ? 1 : 0);   // M8 (plan 11.4)
     fprintf(f, "hfFreqMHz %g\n", (double)impl->hfFreqMHz);
+    fprintf(f, "sunVisible %d\n", impl->sunVisible ? 1 : 0);   // M11
+    fprintf(f, "sunProduct %d\n", impl->sunProduct);   // M11
+    fprintf(f, "sunWinX %g\n", (double)impl->sunGeom.x);   // M11
+    fprintf(f, "sunWinY %g\n", (double)impl->sunGeom.y);   // M11
+    fprintf(f, "sunWinW %g\n", (double)impl->sunGeom.w);   // M11
+    fprintf(f, "sunWinH %g\n", (double)impl->sunGeom.h);   // M11
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
     fclose(f);
@@ -1820,6 +1842,12 @@ void App::loadSettings() {
         else if (k == "faradayScale") impl->faradayScale = glm::clamp((float)v, 0.2f, 4.0f);
         else if (k == "auroraVisible") impl->auroraVisible = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
+        else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
+        else if (k == "sunProduct") impl->sunProduct = glm::clamp((int)v, 0, 1);   // M11
+        else if (k == "sunWinX") impl->sunGeom.x = glm::clamp((float)v, -100.0f, 3840.0f);   // M11
+        else if (k == "sunWinY") impl->sunGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);   // M11
+        else if (k == "sunWinW") impl->sunGeom.w = glm::clamp((float)v, 200.0f, 700.0f);   // M11
+        else if (k == "sunWinH") impl->sunGeom.h = glm::clamp((float)v, 200.0f, 700.0f);   // M11
         else if (k == "tecCacheEnabled") impl->tecCacheEnabled = clB(v);   // M10
         else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
@@ -1879,9 +1907,11 @@ void App::fetchWorker() {
     au.setGridSize(72, 72);
     RadioPropagationAdapter rp;
     XrayAdapter xr;
+    SdoImageAdapter sdo;   // M11: disco solar (worker-local, patron xr)
     EsaAdapter esa;   // solo mock offline para el TEC
     bool haveTec = false;
     bool haveXray = false;
+    double sdoPubT[2] = {-1.0, -1.0};  // M11: ultimo publicado por producto
     bool firstPass = true;
 
     auto noteDone = [&]() {
@@ -1928,6 +1958,7 @@ void App::fetchWorker() {
             b->dst = sidx.getDstHistory();
             b->f107 = sidx.getF107History();
             b->ssn = sidx.getSsnHistory();
+            b->spots = sidx.getSunspots();  // M11: manchas viajan con los indices
             { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->indices = b; }
         }
         noteDone();
@@ -1999,6 +2030,27 @@ void App::fetchWorker() {
         }
         noteDone();
 
+        // 7) SDO disco solar (M11: gate por panel + cache 15 min/producto).
+        {
+            sdo.setVisible(impl->sunVisible);
+            const SdoProduct want = impl->sunProduct == 1 ? SdoProduct::A304 : SdoProduct::HMIIF;
+            const SdoProduct other = impl->sunProduct == 1 ? SdoProduct::HMIIF : SdoProduct::A304;
+            const SdoProduct seq[2] = {want, other};
+            for (int i = 0; i < 2; i++) {
+                if (i == 1 && sdo.getImage(seq[1]).valid) continue;  // steady: solo displayed
+                if (sdo.fetch(seq[i], epoch)) {
+                    const SdoImage& im = sdo.getImage(seq[i]);
+                    if (im.valid && im.timeUtc != sdoPubT[(int)seq[i]]) {
+                        sdoPubT[(int)seq[i]] = im.timeUtc;
+                        auto b = std::make_shared<Impl::SdoBundle>();
+                        b->img = im;
+                        { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = b; }
+                    }
+                }
+            }
+        }
+        noteDone();
+
         if (firstPass) {
             firstPass = false;
             impl->initialLoadDone.store(true);
@@ -2046,6 +2098,13 @@ void App::consumeBundles() {
     auto xr = impl->getXray();
     if (xr && xr != impl->lastXray) {
         impl->lastXray = xr;
+    }
+    auto sd = impl->getSdo();
+    if (sd && sd != impl->lastSdo) {
+        impl->lastSdo = sd;
+        if (sd->img.product == impl->sunProduct &&
+            sd->img.timeUtc != impl->sunUpTime[sd->img.product])
+            uploadSunTexture(sd->img);  // M11: solo displayed, solo si cambia
     }
 }
 
@@ -2187,6 +2246,56 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
         f.v = grid.values;
         teccache::saveFrame("cache", f);
     }
+}
+
+// M11: subida GL de la imagen SDO (render thread, patron Earth.cpp:14-31
+// adaptado: GL_RGB8 — JPG sin alpha — LINEAR + CLAMP, sin mipmaps).
+void App::uploadSunTexture(const SdoImage& im) {
+    if (im.rgb.empty() || im.w <= 0 || im.h <= 0) return;
+    if (impl->sunTex == 0) glGenTextures(1, &impl->sunTex);
+    glBindTexture(GL_TEXTURE_2D, impl->sunTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, im.w, im.h, 0, GL_RGB, GL_UNSIGNED_BYTE, im.rgb.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    impl->sunTexW = im.w;
+    impl->sunTexH = im.h;
+    impl->sunImgTime = im.timeUtc;
+}
+
+// M11: ventana Sun (disco SDO + ARs). Primera imagen en la UI del motor.
+void App::drawSunPanel() {
+    if (!impl->sunVisible) return;
+    SunPanelInput in;
+    in.texId = impl->sunTex;
+    auto ix = impl->getIndices();
+    in.spots = ix ? &ix->spots : nullptr;
+    in.utc = (double)std::time(nullptr);
+    in.pProduct = &impl->sunProduct;
+    in.pVisible = &impl->sunVisible;
+    const bool a304 = impl->sunProduct == 1;
+    in.prodName = a304 ? "SDO - AIA 304 (cromosfera)" : "SDO - HMI (fotosfera)";
+    in.prodTag = a304 ? "A304" : "HMIIF";
+    char tbuf[16] = "--:--";
+    if (impl->sunImgTime > 0.0) {
+        std::time_t tt = (std::time_t)impl->sunImgTime;
+        std::tm gg;
+#ifdef _WIN32
+        gmtime_s(&gg, &tt);
+#else
+        gmtime_r(&tt, &gg);
+#endif
+        strftime(tbuf, sizeof(tbuf), "%H:%M", &gg);
+    }
+    in.imgTime = tbuf;
+    char xbuf[16] = "--";
+    auto xB = impl->getXray();
+    if (xB && xB->latest.valid)
+        snprintf(xbuf, sizeof(xbuf), "%c%.1f", xB->latest.fclass, (double)xB->latest.fsub);
+    in.xrayText = xbuf;
+    impl->sunPanel.draw(in, impl->sunGeom);
 }
 
 void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/NmF2 interpoladas de GIRO.
@@ -2619,6 +2728,8 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Starfield background. Decorative only.");
     ImGui::Checkbox("Terminator", &impl->terminatorVisible);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Thin ring on the day/night boundary (follows the real sun). Turn off if you prefer a clean globe.");
+    ImGui::Checkbox("Sun", &impl->sunVisible);  // M11: disco SDO + regiones activas
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SDO solar disk (HMI/AIA-304) with active regions. Downloads only while open (1 JPG/15 min).");
     ImGui::Separator();
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
@@ -3116,6 +3227,8 @@ void App::render() {
         ImGui::TextDisabled("TEC: waiting for data...");
     }
     ImGui::End();
+
+    drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)
 
     // ---- Space Weather HUD (indices NOAA SWPC, Fase 1) ----
     auto idxB = impl->getIndices();

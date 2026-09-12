@@ -31,6 +31,11 @@ const char* SolarIndicesAdapter::ssnUrl() {
     return "https://services.swpc.noaa.gov/json/solar-cycle/swpc_observed_ssn.json";
 }
 
+// M11: reporte de regiones activas (verificado HTTP 200 en vivo).
+const char* SolarIndicesAdapter::sunspotUrl() {
+    return "https://services.swpc.noaa.gov/json/sunspot_report.json";
+}
+
 // --- Mini-parser JSON (mismo estilo que SolarWindAdapter) ---
 static void skipWsCl(const std::string& s, size_t& i) {
     while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' ||
@@ -340,6 +345,10 @@ bool SolarIndicesAdapter::fetch(double utc) {
         }
     }
 
+    // M11: manchas solares (best-effort, fuera del conteo realFields: en
+    // fallo conserva las anteriores sin ensuciar el error de indices).
+    fetchSunspots(utc);
+
     snapshot_.timeUtc = utc;
     snapshot_.valid = (realFields > 0);
     snapshot_.simulated = (realFields == 0);
@@ -353,4 +362,60 @@ bool SolarIndicesAdapter::fetch(double utc) {
     printf("[SolarIndices] Kp=%.2f Dst=%.0f F10.7=%.0f Ap=%.0f SSN=%.0f (%d/5 real)\n",
            snapshot_.kp, snapshot_.dst, snapshot_.f107, snapshot_.ap, snapshot_.ssn, realFields);
     return snapshot_.valid;
+}
+
+// M11: parseo puro del sunspot_report (filas live verificadas 2026-09-12:
+// Region/lat/Location/Carlon/Numspot/time_tag; Region null -> skip).
+bool SolarIndicesAdapter::parseSunspotReport(const std::string& js,
+                                             std::vector<sundisk::Sunspot>& out) {
+    out.clear();
+    size_t pos = 0;
+    bool any = false;
+    while (true) {
+        size_t open = js.find('{', pos);
+        if (open == std::string::npos) break;
+        size_t close = findMatchingBrace(js, open);
+        if (close == std::string::npos) break;
+        double region = 0, lat = 0, t = 0;
+        std::string ts, loc;
+        bool hasRegion = objectNumber(js, open, close, "Region", region);
+        bool hasLat = objectNumber(js, open, close, "Latitude", lat);
+        bool hasTime = objectString(js, open, close, "time_tag", ts);
+        if (hasTime) t = isoToEpoch(ts);
+        if (hasRegion && hasLat && t > 0.0 && region > 0.0 &&
+            lat >= -90.0 && lat <= 90.0) {
+            sundisk::Sunspot s;
+            s.region = (int)region;
+            s.lat = lat;
+            s.timeUtc = t;
+            double v = 0;
+            if (objectNumber(js, open, close, "Carlon", v)) {
+                s.lonCarr = v;
+                s.hasLonCarr = true;
+            }
+            if (objectNumber(js, open, close, "Longitude", v)) {
+                s.dlon = v;
+                s.hasDlon = true;
+            }
+            if (objectString(js, open, close, "Location", loc)) s.loc = loc;
+            if (objectNumber(js, open, close, "Numspot", v) && v >= 0.0)
+                s.numspot = (int)v;
+            out.push_back(s);
+            any = true;
+        }
+        pos = close + 1;
+    }
+    return any;
+}
+
+bool SolarIndicesAdapter::fetchSunspots(double utc) {
+    (void)utc;
+    std::string js;
+    if (!fetchURL(sunspotUrl(), js)) return false;
+    std::vector<sundisk::Sunspot> rows;
+    if (!parseSunspotReport(js, rows)) return false;
+    sunspots_ = std::move(rows);
+    lastSunspotUtc_ = utc;
+    printf("[SolarIndices] sunspots: %d filas\n", (int)sunspots_.size());
+    return true;
 }

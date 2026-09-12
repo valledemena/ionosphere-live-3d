@@ -6,25 +6,33 @@ namespace SolarPosition {
 static const double PI = 3.14159265358979323846;
 static const double DEG2RAD = PI / 180.0;
 
+// Meeus compartido: longitud ecliptica aparente (rad, sin normalizar).
+static double eclipticLonRad(double utcSeconds) {
+    double j2000 = utcSeconds / 86400.0 + 10957.5;
+    double T = j2000 / 36525.0;
+    double L0 = fmod(280.46646 + 36000.76983 * T + 0.0003032 * T * T, 360.0);
+    double M = fmod(357.52911 + 35999.05029 * T - 0.0001537 * T * T, 360.0);
+    double Mrad = M * DEG2RAD;
+    double C = (1.914602 - 0.004817 * T) * sin(Mrad)
+             + (0.019993 - 0.000101 * T) * sin(2.0 * Mrad)
+             + 0.000289 * sin(3.0 * Mrad);
+    return (L0 + C) * DEG2RAD;
+}
+
+double getApparentEclipticLonDeg(double utcSeconds) {
+    double lon = eclipticLonRad(utcSeconds) / DEG2RAD;
+    lon = fmod(lon, 360.0);
+    if (lon < 0.0) lon += 360.0;
+    return lon;
+}
+
 glm::vec3 getDirection(double utcSeconds) {
     // Day of year from J2000 epoch
     double j2000 = utcSeconds / 86400.0 + 10957.5; // days since J2000.0
     double T = j2000 / 36525.0; // centuries
 
-    // Mean longitude (degrees)
-    double L0 = fmod(280.46646 + 36000.76983 * T + 0.0003032 * T * T, 360.0);
-
-    // Mean anomaly (degrees)
-    double M = fmod(357.52911 + 35999.05029 * T - 0.0001537 * T * T, 360.0);
-    double Mrad = M * DEG2RAD;
-
-    // Equation of center
-    double C = (1.914602 - 0.004817 * T) * sin(Mrad)
-             + (0.019993 - 0.000101 * T) * sin(2.0 * Mrad)
-             + 0.000289 * sin(3.0 * Mrad);
-
-    // Sun's ecliptic longitude
-    double lon = (L0 + C) * DEG2RAD;
+    // Sun's ecliptic longitude (M11: helper compartido, mismo Meeus)
+    double lon = eclipticLonRad(utcSeconds);
 
     // Obliquity of ecliptic
     double obliquity = (23.439291 - 0.0130042 * T) * DEG2RAD;

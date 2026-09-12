@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "Utils/SunDiskMath.h"  // M11: Sunspot (parseo sunspot_report)
+
 // Snapshot de indices solares/geomagneticos para el HUD.
 // Fuentes NOAA SWPC reales (JSON), con fallback a mock por campo si falla la red:
 //   Kp    <- planetary_k_index_1m.json (estimated_kp, 1 min)
@@ -47,6 +49,15 @@ public:
     static const char* dstUrl();
     static const char* f107ApUrl();
     static const char* ssnUrl();
+    static const char* sunspotUrl();  // M11: sunspot_report.json (verificado 200)
+
+    // M11: manchas solares (best-effort: en fallo conserva las anteriores).
+    bool fetchSunspots(double utc);
+    const std::vector<sundisk::Sunspot>& getSunspots() const { return sunspots_; }
+    double getLastSunspotFetchTime() const { return lastSunspotUtc_; }
+    // Parser puro (testeable): filas sin Region/lat/time se saltan.
+    static bool parseSunspotReport(const std::string& js,
+                                   std::vector<sundisk::Sunspot>& out);
 
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
@@ -62,4 +73,6 @@ private:
     std::vector<IndexHistoryPoint> dstHistory_;
     std::vector<IndexHistoryPoint> f107History_;
     std::vector<IndexHistoryPoint> ssnHistory_;
+    std::vector<sundisk::Sunspot> sunspots_;  // M11: ultimo fetch bueno
+    double lastSunspotUtc_ = 0.0;
 };

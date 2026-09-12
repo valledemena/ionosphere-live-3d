@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 struct GridData;   // Ionosphere/GridLayer.h (solo referencia en la interfaz)
+#include "Data/SdoImageAdapter.h"  // M11: SdoImage (std-only, seguro en header)
 
 class App {
 public:
@@ -23,7 +24,9 @@ private:
     void applyRelief();       // amplitud de relieve efectiva (storm swell) a ambas cascaras
     void applyAltitudes();    // altitudes base x explodeFactor (vista explotada)
     void updateMainGrid(const GridData& grid);  // TEC + outer shell a la vez
-    void pushHistoryFrame(const GridData& grid, double ts, bool simulated = false);  // anillo ordenado, dedup, cap 72 + write-through M10
+    void pushHistoryFrame(const GridData& grid, double ts, bool simulated = false);
+    void uploadSunTexture(const SdoImage& im);  // M11: subida GL (render thread)
+    void drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)  // anillo ordenado, dedup, cap 72 + write-through M10
     void restoreTecCache();  // M10: anillo + bundle desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)
     void loadSettings();      // settings.cfg -> GUI (si existe)

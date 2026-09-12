@@ -67,9 +67,11 @@ set(SOURCES
     src/Data/XrayAdapter.cpp
     src/Data/DiasAdapter.cpp
     src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
+    src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp
+    src/UI/SunPanel.cpp  # M11: ventana Sun
     src/Utils/CoordinateSystem.cpp
     src/Utils/SolarPosition.cpp
 )
@@ -186,3 +188,19 @@ add_test(NAME m2_sun COMMAND test_m2_sun)
 add_executable(test_tec_cache tests/test_tec_cache.cpp src/Data/TecCache.cpp)
 target_include_directories(test_tec_cache PRIVATE src)
 add_test(NAME tec_cache COMMAND test_tec_cache)
+# M11 (SDO): matematica del disco + λs. Llama a PRODUCCION (sundisk +
+# SolarPosition::getApparentEclipticLonDeg), no replica.
+add_executable(test_sdo_projection tests/test_sdo_projection.cpp src/Utils/SolarPosition.cpp)
+target_include_directories(test_sdo_projection PRIVATE src libs/glm)
+add_test(NAME sdo_projection COMMAND test_sdo_projection)
+# M11 (SDO): parseo sunspot_report con fixture real en vivo — llama a
+# PRODUCCION (SolarIndicesAdapter::parseSunspotReport), no replica.
+# std::thread -> pthread en Linux (patron getbest/kc2g).
+add_executable(test_sdo_adapter tests/test_sdo_adapter.cpp)
+target_include_directories(test_sdo_adapter PRIVATE src)
+target_sources(test_sdo_adapter PRIVATE src/Data/SolarIndicesAdapter.cpp)
+target_link_libraries(test_sdo_adapter PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_sdo_adapter PRIVATE Threads::Threads)
+endif()
+add_test(NAME sdo_adapter COMMAND test_sdo_adapter)
