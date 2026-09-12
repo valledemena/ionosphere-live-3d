@@ -258,6 +258,7 @@ struct App::Impl {
     GLuint sunTex = 0;              // textura GL (solo render thread)
     int sunTexW = 0, sunTexH = 0;
     double sunUpTime[2] = {-1.0, -1.0};  // ultimo subido por producto (hilo main)
+    std::atomic<bool> sdoKick{false};  // M11: click en Sun despierta al worker ya
     double sunImgTime = -1.0;       // epoch de la imagen mostrada
     SunPanel sunPanel;              // M11: ventana (UI/SunPanel.h)
     SunGeom sunGeom;                // persistente (settings sunWin*)
@@ -2057,9 +2058,10 @@ void App::fetchWorker() {
             printf("[App] Initial fetch pass done\n");
         }
 
-        // Espera interrumpible 300 s.
-        for (int i = 0; i < 300 && !impl->shutdownRequested.load(); i++)
+        // Espera interrumpible 300 s (o kick por click en Sun: fetch ya).
+        for (int i = 0; i < 300 && !impl->shutdownRequested.load() && !impl->sdoKick.load(); i++)
             std::this_thread::sleep_for(std::chrono::seconds(1));
+        impl->sdoKick.store(false);
     }
 }
 
@@ -2274,6 +2276,7 @@ void App::drawSunPanel() {
     in.spots = ix ? &ix->spots : nullptr;
     in.utc = (double)std::time(nullptr);
     in.pProduct = &impl->sunProduct;
+    in.pKick = &impl->sdoKick;
     in.pVisible = &impl->sunVisible;
     const bool a304 = impl->sunProduct == 1;
     in.prodName = a304 ? "SDO - AIA 304 (cromosfera)" : "SDO - HMI (fotosfera)";

@@ -6,6 +6,7 @@
 // spots copiados, producto, X-ray, geometria persistente) y SunPanel dibuja.
 // Primer uso de ImGui::Image en el motor (backend intacto, sin cambios).
 // =============================================================================
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@ struct SunPanelInput {
     const std::vector<sundisk::Sunspot>* spots = nullptr;
     double utc = 0.0;
     int* pProduct = nullptr;        // inout 0=HMIIF 1=A304 (click alterna)
+    std::atomic<bool>* pKick = nullptr;  // out: click -> worker despierta ya
     bool* pVisible = nullptr;       // inout (X de la ventana)
     const char* prodName = "";      // "SDO · HMI (fotosfera)"
     const char* prodTag = "";       // "HMIIF" (caption)

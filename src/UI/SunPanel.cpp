@@ -36,8 +36,10 @@ void SunPanel::draw(const SunPanelInput& in, SunGeom& geom) {
     ImGui::TextUnformatted(in.prodName);
     if (in.texId != 0) {
         ImGui::Image((ImTextureID)(intptr_t)in.texId, ImVec2(300, 300));
-        if (in.pProduct && ImGui::IsItemHovered() && ImGui::IsMouseClicked(0))
+        if (in.pProduct && ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
             *in.pProduct ^= 1;  // M11: click alterna HMIIF<->A304 sin recomputar
+            if (in.pKick) in.pKick->store(true);  // M11: fetch ya, no en 5 min
+        }
         if (ImGui::IsItemHovered())
             ImGui::SetItemTooltip("Click: alterna SDO/HMI <-> SDO/AIA-304");
 
