@@ -112,6 +112,11 @@ ScanResult loadCached(const std::string& dir) {
     for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
         if (ec) break;
         if (!e.is_regular_file(ec) || ec) continue;
+        const std::string name = e.path().filename().string();
+        // Solo nuestros frames (el dir se comparte con kc2gcache: FASE B).
+        if (name.compare(0, 4, "tec_") != 0 ||
+            name.size() < 8 || name.compare(name.size() - 4, 4, ".bin") != 0)
+            continue;
         Frame f;
         if (!readAll(e.path().string(), f)) {
             std::filesystem::remove(e.path(), ec);

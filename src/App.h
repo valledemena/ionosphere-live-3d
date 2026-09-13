@@ -28,6 +28,7 @@ private:
     void uploadSunTexture(const SdoImage& im);  // M11: subida GL (render thread)
     void drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)  // anillo ordenado, dedup, cap 72 + write-through M10
     void restoreTecCache();  // M10: anillo + bundle desde cache/ (init)
+    void restoreKc2gCache();  // FASE B (P2): historia kc2g desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)
     void loadSettings();      // settings.cfg -> GUI (si existe)
     void fetchWorker();       // hilo background: red+parse, publica bundles

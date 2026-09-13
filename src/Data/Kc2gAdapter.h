@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include <mutex>
 #include <atomic>
 
@@ -75,8 +76,7 @@ public:
 
     // Conversion kc2g -> StationSample (pipeline comun de la app):
     // valid = panelUsable; stale = !gridUsable (>6 h o EG931-2024: panel
-    // si, grids no); historia de 1 punto (sampleHistoryAt clampa al
-    // ultimo valor: replay congelado pero honesto, sello FASE A).
+    // si, grids no). La historia vive en kccHist_ (FASE B P1), no aqui.
     static StationSample toSample(const Kc2gRow& r, double nowUtc);
 
     Kc2gAdapter();
@@ -87,6 +87,34 @@ public:
     bool fetch(double nowUtc);
     // Igual en hilo background (no bloquea el render). Patron GiroAdapter.
     void fetchAsync(double nowUtc);
+
+    // FASE B (P1): historia por acumulacion de batches. Reusa
+    // StationSample.history (<=72 puntos ascendentes, cap paridad GIRO);
+    // epoch del punto = timeUtc DE LA FILA (no del fetch); mismo epoch ->
+    // reemplaza (dedup); EG931 jamas se acumula. Corre con cada batch bueno,
+    // independiente del modo. Ventanas selladas intactas al USAR.
+    static constexpr int kHistCap = 72;
+    void accumulateBatch(const std::vector<Kc2gRow>& rows, double nowUtc);
+    // Muestreo al instante epoch (para replay): misma semantica clamp/lerp
+    // que GiroAdapter::sampleHistoryAt; stale se evalua al epoch consumidor
+    // (>6 h). Sin historia usa el ultimo valor (clamp honesto FASE A).
+    std::vector<StationSample> sampleHistoryAt(double epoch) const;
+
+    // FASE B (P2): persistencia en disco (patron TecCache M10, modulo
+    // kc2gcache KCC1, mismo dir "cache/"). Restaura frames en orden
+    // ascendente via accumulateBatch (dedup por epoch: idempotente).
+    // Devuelve batches restaurados. Solo filas panelUsable se guardan
+    // (gate shouldCacheBatch); la historia NO se serializa, el barrido
+    // la reconstruye.
+    int restoreFromCache(const std::string& dir, double nowUtc);
+    // Rango de la historia acumulada (para el log de replay/restauracion):
+    // nSt estaciones, [t0..t1] min/max sobre los puntos. false si vacia.
+    bool historyStats(int& nSt, double& t0, double& t1) const;
+    // FASE B (P4): edad viva al pintar — now menos el timeUtc de la fila
+    // gridUsable mas fresca de samples_ (bajo lock). El freshestAgeMin del
+    // status queda como metrica de fetch (diagnostico); lo visible es vivo.
+    // -1 si no hay fila grid-fresca.
+    double freshestAgeMinLive(double nowUtc) const;
 
     bool isFetching() const { return fetching_; }
     std::vector<StationSample> copySamples() const;
@@ -110,6 +138,8 @@ private:
 
     mutable std::mutex mutex_;
     std::vector<StationSample> samples_;   // panel window (<=24 h), flags al lote
+    // FASE B (P1): historia acumulada por codigo (identidad + serie <=72).
+    std::map<std::string, StationSample> kccHist_;
     Kc2gStatus status_;
     std::atomic<bool> fetching_{false};
     std::string error_;

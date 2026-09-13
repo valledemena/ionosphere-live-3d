@@ -43,3 +43,11 @@ imgui.ini
 *.tmp
 *.bak
 *.swp
+
+# Runtime (FASE B P5): cache/ y data/ son locales por sesion; settings.cfg
+# puede llevar credenciales LGDC opcionales — NUNCA entran al arbol.
+# Anclados a raiz con /: en Windows el match es case-insensitive y un
+# "data/" suelto cazaria tambien src/Data/ (fuentes versionadas).
+/cache/
+/data/
+/settings.cfg

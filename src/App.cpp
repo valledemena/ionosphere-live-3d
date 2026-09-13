@@ -1234,6 +1234,7 @@ bool App::init(int width, int height, const char* title) {
     // variables, sliders, camara) y refrescar las capas en consecuencia.
     loadSettings();
     restoreTecCache();  // M10: anillo + bundle desde disco antes del worker
+    restoreKc2gCache();  // FASE B (P2): historia kc2g desde disco antes del worker
     // M1: settings.cfg puede pedir otro MSAA (la carga corre tras el primer
     // init de FBOs): un recreate unico si difiere del usado arriba.
     if (impl->msaaSamples != msaaUsedAtInit)
@@ -1448,6 +1449,7 @@ void App::update(float dt) {
     // En replay, puntos, grids derivados (foF2/MUF/hmF2/NmF2/LUF/FOT/Spread-F)
     // y panel de estacion siguen al tiempo de replay, no al directo.
     double replayEpoch = -1.0;
+    static bool kc2gReplayLogged = false;  // FASE B (P3): log una vez por entrada
     {
         // Copia minima bajo lock (el hilo de precarga puede estar escribiendo).
         GridData fa, fb;
@@ -1476,12 +1478,44 @@ void App::update(float dt) {
                 updateMainGrid(blendGrids(fa, fb, f));
             }
             replayEpoch = fa.timestamp * (1.0 - f) + fb.timestamp * f;
-            // M4R-A: en kc2g-fallback el replay se congela al ultimo batch
-            // (kc2g no trae historia; el clamp de sampleHistoryAt al ultimo
-            // valor es lo equivalente — replay congelado pero honesto,
-            // marcado stale: sello FASE A).
-            impl->giroReplayCache = kc2gMode ? impl->kc2gMerged
-                                              : impl->giro.sampleHistoryAt(replayEpoch);
+            // FASE B (P3): en fallback se fusionan HISTORIAS muestreadas al
+            // replayEpoch (GIRO pre-caida + kc2g acumulada P1). Fuera del
+            // rango acumulado el clamp es freeze honesto (una linea de log).
+            if (kc2gMode) {
+                impl->giroReplayCache = mergeKc2g(impl->giro.sampleHistoryAt(replayEpoch),
+                                                  impl->kc2g.sampleHistoryAt(replayEpoch));
+                if (!kc2gReplayLogged) {
+                    kc2gReplayLogged = true;
+                    int nSt = 0;
+                    double t0 = 0.0, t1 = 0.0;
+                    if (impl->kc2g.historyStats(nSt, t0, t1) && nSt > 0) {
+                        char c0[16] = "--:--", c1[16] = "--:--";
+                        { std::time_t tt = (std::time_t)t0; std::tm gg;
+#ifdef _WIN32
+                          gmtime_s(&gg, &tt);
+#else
+                          gmtime_r(&tt, &gg);
+#endif
+                          strftime(c0, sizeof(c0), "%H:%M", &gg); }
+                        { std::time_t tt = (std::time_t)t1; std::tm gg;
+#ifdef _WIN32
+                          gmtime_s(&gg, &tt);
+#else
+                          gmtime_r(&tt, &gg);
+#endif
+                          strftime(c1, sizeof(c1), "%H:%M", &gg); }
+                        printf("[kc2g] replay: %d st con historia, rango [%s..%s UTC]\n",
+                               nSt, c0, c1);
+                    } else {
+                        printf("[kc2g] replay: sin historia acumulada (freeze honesto FASE A)\n");
+                    }
+                }
+            } else {
+                impl->giroReplayCache = impl->giro.sampleHistoryAt(replayEpoch);
+                kc2gReplayLogged = false;
+            }
+        } else {
+            kc2gReplayLogged = false;
         }
     }
 
@@ -2278,6 +2312,35 @@ void App::restoreTecCache() {
            (int)scan.frames.size(), cbuf, scan.pruned, scan.dropped);
 }
 
+// FASE B (P2): restaura historia kc2g desde cache/ (init, pre-worker).
+// El barrido KCC1 re-acumula por epoch ascendente (dedup: idempotente).
+// Sin cache: freeze honesto FASE A (primera sesion de fallback sin historia).
+void App::restoreKc2gCache() {
+    const double now = (double)std::time(nullptr);
+    const int n = impl->kc2g.restoreFromCache("cache", now);
+    if (n <= 0) return;
+    int nSt = 0;
+    double t0 = 0.0, t1 = 0.0;
+    if (!impl->kc2g.historyStats(nSt, t0, t1) || nSt <= 0) return;
+    char c0[16] = "--:--", c1[16] = "--:--";
+    { std::time_t tt = (std::time_t)t0; std::tm gg;
+#ifdef _WIN32
+      gmtime_s(&gg, &tt);
+#else
+      gmtime_r(&tt, &gg);
+#endif
+      strftime(c0, sizeof(c0), "%H:%M", &gg); }
+    { std::time_t tt = (std::time_t)t1; std::tm gg;
+#ifdef _WIN32
+      gmtime_s(&gg, &tt);
+#else
+      gmtime_r(&tt, &gg);
+#endif
+      strftime(c1, sizeof(c1), "%H:%M", &gg); }
+    printf("[kc2g] cache: %d batches restored, %d st con historia, rango [%s..%s UTC]\n",
+           n, nSt, c0, c1);
+}
+
 void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {    if (!grid.valid || grid.values.empty()) return;
     std::lock_guard<std::mutex> lk(impl->tecHistMutex);
     for (const auto& e : impl->tecHist) {
@@ -2768,6 +2831,13 @@ void App::render() {
         }
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Hide every panel and window. The hint fades after 4 s; press H to bring the UI back.");
+    // FASE B (P5): bloque unico de atribucion (G7). Texto completo aqui;
+    // los badges por fuente siguen visibles en sus paneles.
+    if (ImGui::CollapsingHeader("Data sources & attribution")) {
+        ImGui::TextWrapped("GIRO / LGDC community ionosonde data (CC BY-NC-SA 4.0, non-commercial educational use). Please cite: Reinisch, B. W., and I. A. Galkin, Global ionospheric radio observatory (GIRO), Earth, Planets and Space, 63, 377-381, doi:10.5047/eps.2011.03.001, 2011. SPASE: http://spase.info/SMWG/Observatory/GIRO.");
+        ImGui::TextWrapped("Failover: prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds). Also: eSWua/INGV, DIAS, NOAA SWPC (GloTEC, SDO/HMI, sunspots).");
+        ImGui::TextWrapped("Access policy: polite cadence and mirrors lower the risk; they don't remove it - we have measured 429/504 under load, which is why the kc2g failover exists.");
+    }
     ImGui::End();
 
     // Layer panel
@@ -2983,9 +3053,16 @@ void App::render() {
     // M4R-A (FASE A): badge de fuente + estado y atribucion del failover.
     if (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK) {
         Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+        // FASE B (P4): edad viva al pintar — now menos el timeUtc de la
+        // fila gridUsable mas fresca (recorre samples_ bajo lock). Misma
+        // enmienda semantica que cerro M12/N3-read: la edad es del DATO
+        // contra el reloj de LECTURA. El status queda como metrica de
+        // fetch (diagnostico).
+        const double liveAge =
+            impl->kc2g.freshestAgeMinLive((double)std::time(nullptr));
         ImGui::TextColored(ImVec4(0.9f, 0.75f, 0.3f, 1.0f),
             "Source: kc2g-fallback (%d/%d st, freshest %.0f min)",
-            ks.panelUsable, ks.rows, ks.freshestAgeMin < 0.0 ? 0.0 : ks.freshestAgeMin);
+            ks.panelUsable, ks.rows, liveAge < 0.0 ? 0.0 : liveAge);
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
             "GIRO (lgdc.uml.edu) is failing or rate-limited: automatic failover to the prop.kc2g.com redistribution (101 stations; GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds). One request per cycle, only while GIRO fails. Rows older than 6 h stay out of the maps; up to 24 h they only feed panels, marked stale. EG931 is excluded from maps (NOAA feed frozen since 2024).");
         ImGui::TextDisabled("Data: GIRO/WWROF via kc2g + eSWua/INGV");
@@ -3469,7 +3546,13 @@ void App::render() {
         ImGui::TextDisabled("Global median - hover a station");
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("No station under the cursor. Hover a GIRO dot on the globe, or click it to pin, to see per-station values.");
     }
-    ImGui::Text("MUF: %.1f MHz", showMuf);
+    // FASE B (P3): la mediana global rp.* sigue al pase de datos vivo
+    // (worker, §5); en replay se etiqueta "live" — nunca ambigua. Los
+    // valores por estacion (pinned/hover) si siguen al replay via gsAct.
+    if (!rpStation && impl->replayMode)
+        ImGui::Text("MUF: %.1f MHz (live)", showMuf);
+    else
+        ImGui::Text("MUF: %.1f MHz", showMuf);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(rpStation ? "MUF(D): highest usable frequency at 3000 km (MHz), measured at this station. Above it there is no F2 reflection." : "MUF(D): highest usable frequency at 3000 km (MHz). Global GIRO median. Above it there is no F2 reflection.");
     ImGui::Text("FOT (0.85*MUF): %.1f MHz", showFot);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("FOT = 0.85*MUF (ITU). Optimum working frequency: reliable ~90% of the time. Transmit here.");

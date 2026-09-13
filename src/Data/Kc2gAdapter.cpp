@@ -1,4 +1,5 @@
 #include "Kc2gAdapter.h"
+#include "Data/Kc2gCache.h"
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
@@ -228,6 +229,157 @@ StationSample Kc2gAdapter::toSample(const Kc2gRow& r, double nowUtc) {
     return s;
 }
 
+// FASE B (P1): acumulacion por batch en kccHist_. Epoch del punto =
+// timeUtc DE LA FILA (paridad GIRO); mismo epoch reemplaza (dedup);
+// EG931 jamas; solo ventana panel (<=24 h) al fetch.
+void Kc2gAdapter::accumulateBatch(const std::vector<Kc2gRow>& rows, double nowUtc) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const auto& r : rows) {
+        if (r.code.empty() || isGridBlockedCode(r.code)) continue;
+        if (!rowHasData(r) || r.timeUtc <= 0.0) continue;
+        if (rowAgeSec(r, nowUtc) > kPanelMaxAgeSec) continue;
+        StationSample& e = kccHist_[r.code];
+        e.code = r.code;
+        e.name = r.name;
+        e.latDeg = (float)r.latDeg;
+        e.lonDeg = (float)r.lonDeg;
+        e.cs = (int)(r.cs + 0.5f);
+        e.valid = true;
+        GiroHistoryPoint p;
+        p.timeUtc = r.timeUtc;
+        p.foF2 = r.fof2;
+        p.foF1 = r.fof1;
+        p.muf  = r.mufd;
+        p.hmF2 = r.hmf2;
+        p.foE  = r.foe;
+        p.foEs = r.foes;
+        p.fxI  = 0.0f;
+        p.B0   = 0.0f;
+        p.B1   = 0.0f;
+        p.fmin = 0.0f;
+        auto& h = e.history;
+        if (!h.empty() && h.back().timeUtc == r.timeUtc) {
+            h.back() = p;
+        } else {
+            auto it = h.begin();
+            while (it != h.end() && it->timeUtc < r.timeUtc) ++it;
+            h.insert(it, p);
+            while ((int)h.size() > kHistCap) h.erase(h.begin());
+        }
+        e.timeUtc = h.back().timeUtc;
+    }
+}
+
+// FASE B (P1): muestreo al instante epoch — misma semantica clamp/lerp
+// que GiroAdapter::sampleHistoryAt; stale se evalua al epoch consumidor.
+std::vector<StationSample> Kc2gAdapter::sampleHistoryAt(double epoch) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto lerp = [](float a, float b, double f) -> float {
+        if (a > 0.0f && b > 0.0f) return (float)(a + (b - a) * f);
+        if (f < 0.5) return a > 0.0f ? a : b;
+        return b > 0.0f ? b : a;
+    };
+    auto fromHist = [](StationSample& c, const GiroHistoryPoint& p) {
+        c.foF2 = p.foF2; c.muf = p.muf; c.hmF2 = p.hmF2;
+        c.foF1 = p.foF1; c.fxI = p.fxI;
+        c.foE = p.foE; c.foEs = p.foEs; c.B0 = p.B0; c.B1 = p.B1; c.fmin = p.fmin;
+        c.nmF2 = (p.foF2 > 0.0f) ? (float)(1.24e10 * (double)p.foF2 * (double)p.foF2) : 0.0f;
+        c.timeUtc = p.timeUtc;
+    };
+    std::vector<StationSample> out;
+    for (const auto& kv : kccHist_) {
+        StationSample c = kv.second;
+        const auto& h = c.history;
+        if (h.empty()) continue;
+        size_t i = 0;
+        while (i + 1 < h.size() && h[i + 1].timeUtc <= epoch) i++;
+        if (h.size() == 1 || epoch <= h.front().timeUtc) {
+            fromHist(c, h.front());
+        } else if (epoch >= h.back().timeUtc) {
+            fromHist(c, h.back());
+        } else {
+            double t0 = h[i].timeUtc, t1 = h[i + 1].timeUtc;
+            double f = (t1 > t0) ? (epoch - t0) / (t1 - t0) : 0.0;
+            GiroHistoryPoint p;
+            p.timeUtc = epoch;
+            p.foF2 = lerp(h[i].foF2, h[i + 1].foF2, f);
+            p.muf  = lerp(h[i].muf,  h[i + 1].muf,  f);
+            p.hmF2 = lerp(h[i].hmF2, h[i + 1].hmF2, f);
+            p.foE  = lerp(h[i].foE,  h[i + 1].foE,  f);
+            p.foEs = lerp(h[i].foEs, h[i + 1].foEs, f);
+            p.B0   = lerp(h[i].B0,   h[i + 1].B0,   f);
+            p.B1   = lerp(h[i].B1,   h[i + 1].B1,   f);
+            p.fmin = lerp(h[i].fmin, h[i + 1].fmin, f);
+            p.foF1 = lerp(h[i].foF1, h[i + 1].foF1, f);
+            p.fxI  = lerp(h[i].fxI,  h[i + 1].fxI,  f);
+            fromHist(c, p);
+        }
+        c.stale = (epoch - c.timeUtc > kGridMaxAgeSec);  // ventana al consumidor
+        out.push_back(c);
+    }
+    return out;
+}
+
+// FASE B (P2): persistencia en disco (KCC1). La historia NO se serializa:
+// el barrido la reconstruye via accumulateBatch (dedup por epoch).
+int Kc2gAdapter::restoreFromCache(const std::string& dir, double nowUtc) {
+    kc2gcache::ScanResult scan = kc2gcache::loadCached(dir);
+    for (const auto& f : scan.frames) {
+        std::vector<Kc2gRow> rows;
+        rows.reserve(f.rows.size());
+        for (const auto& cr : f.rows) {
+            Kc2gRow r;
+            r.code = cr.code;
+            r.name = cr.name;
+            r.latDeg = cr.latDeg;
+            r.lonDeg = cr.lonDeg;
+            r.timeUtc = cr.timeUtc;
+            r.fof2 = cr.foF2;
+            r.mufd = cr.muf;
+            r.hmf2 = cr.hmF2;
+            r.fof1 = cr.foF1;
+            r.foe = cr.foE;
+            r.foes = cr.foEs;
+            r.hf2 = cr.hF2;
+            r.he = cr.hE;
+            r.cs = (float)cr.cs;
+            rows.push_back(std::move(r));
+        }
+        accumulateBatch(rows, nowUtc);
+    }
+    return (int)scan.frames.size();
+}
+
+bool Kc2gAdapter::historyStats(int& nSt, double& t0, double& t1) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nSt = 0;
+    t0 = 1.0e18;
+    t1 = -1.0e18;
+    for (const auto& kv : kccHist_) {
+        const auto& h = kv.second.history;
+        if (h.empty()) continue;
+        nSt++;
+        for (const auto& p : h) {
+            if (p.timeUtc < t0) t0 = p.timeUtc;
+            if (p.timeUtc > t1) t1 = p.timeUtc;
+        }
+    }
+    return nSt > 0;
+}
+
+double Kc2gAdapter::freshestAgeMinLive(double nowUtc) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    double freshest = 1.0e18;
+    for (const auto& s : samples_) {
+        if (!s.valid || s.timeUtc <= 0.0 || isGridBlockedCode(s.code)) continue;
+        const double age = nowUtc - s.timeUtc;
+        if (age < 0.0) continue;  // clock skew: como fresca al fetch
+        if (age > kGridMaxAgeSec) continue;
+        if (age < freshest) freshest = age;
+    }
+    return (freshest < 1.0e17) ? freshest / 60.0 : -1.0;
+}
+
 // ---------------------------------------------------------------------------
 // Parser del array completo
 // ---------------------------------------------------------------------------
@@ -450,6 +602,35 @@ bool Kc2gAdapter::fetch(double nowUtc) {
         samples_ = std::move(samples);
         status_ = st;
         error_.clear();
+    }
+    accumulateBatch(rows, nowUtc);  // FASE B (P1): historia, independiente del modo
+    // FASE B (P2): persiste el batch bueno (gate: >=1 fila panelUsable).
+    // La historia NO se serializa: el restore la reconstruye por barrido.
+    if (kc2gcache::shouldCacheBatch(st.panelUsable)) {
+        kc2gcache::Frame f;
+        f.epoch = nowUtc;
+        for (const auto& r : rows) {
+            if (!panelUsable(r, nowUtc)) continue;
+            kc2gcache::Row cr;
+            cr.code = r.code;
+            cr.name = r.name;
+            cr.latDeg = r.latDeg;
+            cr.lonDeg = r.lonDeg;
+            cr.foF2 = r.fof2;
+            cr.muf = r.mufd;
+            cr.hmF2 = r.hmf2;
+            cr.foF1 = r.fof1;
+            cr.foE = r.foe;
+            cr.foEs = r.foes;
+            cr.hF2 = r.hf2;
+            cr.hE = r.he;
+            cr.timeUtc = r.timeUtc;
+            cr.valid = true;
+            cr.stale = !gridUsable(r, nowUtc);
+            cr.cs = (int)(r.cs + 0.5f);
+            f.rows.push_back(std::move(cr));
+        }
+        kc2gcache::saveFrame("cache", f);
     }
     printf("[Kc2gAdapter] failover: %d/%d filas usables (%d grid, %d stale, fresco %.1f min)\n",
            st.panelUsable, st.rows, st.gridUsable, st.stale,

@@ -61,6 +61,7 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 |---|---|---|
 | TEC | NOAA SWPC GloTEC (GeoJSON 72×72) | 5 min + 3 h preload |
 | foF2/MUF/hmF2/… | GIRO DIDBase `scaled.php` (129 stations) | 5 min |
+| foF2/MUF/hmF2/… (failover) | prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds) | on GIRO failure only, 1 req/10 min |
 | EB040 profile | Ebre Observatory FTP (`EB040_*.SAO`) | 5 min, background |
 | Kp/Dst/F10.7/Ap/SSN | NOAA SWPC JSON | 5 min |
 | Solar wind | NOAA RTSW 1-min | 5 min |
@@ -70,6 +71,11 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 
 Any unreachable source degrades gracefully (per-field mock/offline badges,
 stale-data warnings). GIRO data: CC BY-NC-SA 4.0 (non-commercial).
+Please cite: Reinisch, B. W., and I. A. Galkin, Global ionospheric radio
+observatory (GIRO), Earth, Planets and Space, 63, 377-381,
+doi:10.5047/eps.2011.03.001, 2011 — SPASE: http://spase.info/SMWG/Observatory/GIRO.
+Access policy: polite cadence and mirrors lower the risk; they don't remove
+it — we have measured 429/504 under load, which is why the kc2g failover exists.
 
 ## Controls
 

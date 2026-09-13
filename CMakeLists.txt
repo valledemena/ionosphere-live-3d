@@ -67,6 +67,7 @@ set(SOURCES
     src/Data/XrayAdapter.cpp
     src/Data/DiasAdapter.cpp
     src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
+    src/Data/Kc2gCache.cpp  # FASE B (P2): cache kc2g en disco (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -148,7 +149,7 @@ add_test(NAME getbest_parse COMMAND test_getbest_parse)
 # (patron model_foF2). std::thread -> pthread en Linux (patron getbest).
 add_executable(test_kc2g_parse tests/test_kc2g_parse.cpp)
 target_include_directories(test_kc2g_parse PRIVATE src libs/glad/include)
-target_sources(test_kc2g_parse PRIVATE src/Data/Kc2gAdapter.cpp)
+target_sources(test_kc2g_parse PRIVATE src/Data/Kc2gAdapter.cpp src/Data/Kc2gCache.cpp)
 target_link_libraries(test_kc2g_parse PRIVATE CURL::libcurl)
 if(NOT WIN32)
     target_link_libraries(test_kc2g_parse PRIVATE Threads::Threads)
@@ -204,3 +205,18 @@ if(NOT WIN32)
     target_link_libraries(test_sdo_adapter PRIVATE Threads::Threads)
 endif()
 add_test(NAME sdo_adapter COMMAND test_sdo_adapter)
+# FASE B (P1): historia kc2g por acumulacion — llama a PRODUCCION
+# (Kc2gAdapter::accumulateBatch/sampleHistoryAt), no replica.
+add_executable(test_kc2g_history tests/test_kc2g_history.cpp)
+target_include_directories(test_kc2g_history PRIVATE src)
+target_sources(test_kc2g_history PRIVATE src/Data/Kc2gAdapter.cpp src/Data/Kc2gCache.cpp)
+target_link_libraries(test_kc2g_history PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_kc2g_history PRIVATE Threads::Threads)
+endif()
+add_test(NAME kc2g_history COMMAND test_kc2g_history)
+# FASE B (P2): cache kc2g en disco — llama a PRODUCCION
+# (namespace kc2gcache en src/Data/Kc2gCache), no replica.
+add_executable(test_kc2g_cache tests/test_kc2g_cache.cpp src/Data/Kc2gCache.cpp)
+target_include_directories(test_kc2g_cache PRIVATE src)
+add_test(NAME kc2g_cache COMMAND test_kc2g_cache)
