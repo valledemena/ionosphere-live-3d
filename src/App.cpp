@@ -1125,8 +1125,16 @@ bool App::init(int width, int height, const char* title) {
         // EMPEZAR un fetch durante el cierre (un fetch en vuelo se espera,
         // acotado por el timeout interno de curl).
         impl->catalogPreloadThread = std::thread([self]() {
-            if (!self->impl->shutdownRequested.load() && self->impl->giro.fetchCatalog())
-                self->impl->catalogReady.store(true);
+            // Release-prep: reintento visible (antes 1x silencioso al arranque).
+            for (int a = 0; a < 3 && !self->impl->shutdownRequested.load(); a++) {
+                if (self->impl->giro.fetchCatalog()) {
+                    self->impl->catalogReady.store(true);
+                    break;
+                }
+                printf("[GiroAdapter] catalogo intento %d/3 fallido\n", a + 1);
+                for (int s = 0; s < 5 && !self->impl->shutdownRequested.load(); s++)
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
             self->impl->catalogDone.store(true);   // M4R-A: catalogo intentado (exito o fallo)
         });
     }
@@ -1887,6 +1895,12 @@ void App::loadSettings() {
         printf("[App] settings v1 -> v2: bloomIntensity migrada (I^2) = %.4f\n",
                (double)impl->bloomIntensity);
     }
+    // Release-prep: migracion del default viejo 0.35 -> 0.72 (solo el valor
+    // exacto +-0.001; gustos preservados). El proximo save escribe 0.72.
+    if (std::fabs(impl->bloomThreshold - 0.35f) <= 0.001f) {
+        impl->bloomThreshold = 0.72f;
+        printf("[App] settings: bloomThreshold 0.35 -> 0.72 (default M9e)\n");
+    }
     fclose(f);
     printf("[App] settings.cfg loaded\n");
 }
@@ -2477,6 +2491,23 @@ void App::render() {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
+    // Release-prep (paridad demo: en la demo florecen): las ionosondas se
+    // dibujan AQUI (pase de escena, pre-bloom) en vez del overlay post-bloom.
+    // Estado propio como el bloque M9f; IonosondeLayer no fija blend.
+    {
+        const bool showPtsScene = impl->ionosondeLayer.isVisible() &&
+                                  impl->legendSolo == Impl::SoloTarget::None;
+        if (showPtsScene) {
+            glEnable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glDepthMask(GL_FALSE);
+            impl->ionosondeLayer.render(view, proj);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+        }
+    }
     impl->sceneFBO.unbind();
     // M1: resolve MSAA -> colorTexture ANTES del bloom (las pasadas 2 y 3
     // siguen leyendo colorTexture; no-op con samples == 0).
@@ -2542,12 +2573,12 @@ void App::render() {
     bool showVol = impl->volumeLayer.isVisible() && soloOk(Impl::SoloTarget::Volume);
     bool showVolScene = showVol && impl->volumeMode == 0;   // con tonemap
     bool showVolCat = showVol && impl->volumeMode == 1;     // post-composite, exacto
-    bool showPts = impl->ionosondeLayer.isVisible() && solo == Impl::SoloTarget::None;
+    // (showPts: pase de escena pre-bloom desde release-prep; solo sigue para el resto)
     bool showSW = impl->solarWindLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showFar = impl->faradayLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showAur = impl->auroraLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showSlice = impl->sliceOn && impl->sliceLayer.isVisible() && solo == Impl::SoloTarget::None;
-    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showPts || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
+    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
@@ -2594,7 +2625,7 @@ void App::render() {
             impl->terminator.render();
         }
         if (impl->refShells.isVisible()) impl->refShells.render(view, proj);
-        if (showPts) impl->ionosondeLayer.render(view, proj);
+        // (showPts: pase de escena pre-bloom desde release-prep)
         if (showSW) impl->solarWindLayer.render(view, proj);
         if (showFar) impl->faradayLayer.render(view, proj);
         if (showAur) impl->auroraLayer.render(view, proj);
@@ -3177,36 +3208,8 @@ void App::render() {
         ImGui::TextDisabled("Aurora: waiting for data...");
     }
 
-    // --- Disco solar (D2+D3): rotacion de Carrington + manchas geolocalizadas ---
-    ImGui::Separator();
-    time_t nowEpoch = time(nullptr);
-    int cr = SolarWindAdapter::getCarringtonRotation((double)nowEpoch);
-    ImGui::Text("Solar disk  (Carrington %d)", cr);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Carrington rotation (~27.27 days). Black dots are simulated spots (SSN); didactic disk, not a real image.");
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 wp = ImGui::GetCursorScreenPos();
-    const float dd = 96.0f;   // diametro del disco en px
-    ImVec2 c0(wp.x + dd * 0.5f, wp.y + dd * 0.5f);
-    dl->AddCircleFilled(c0, dd * 0.5f, IM_COL32(240, 180, 40, 255), 64);
-    // Manchas solares (regiones activas) simuladas, geolocalizadas por
-    // longitud de Carrington y latitud heliografica.
-    static const float spots[][3] = {
-        { 10.0f, 12.0f, 1.0f }, { -30.0f, -8.0f, 0.7f }, { 55.0f, 20.0f, 0.5f },
-        { -55.0f, -15.0f, 0.6f }, { 20.0f, -25.0f, 0.4f }, { -80.0f, 5.0f, 0.5f },
-    };
-    const float R = dd * 0.48f;
-    for (const auto& sp : spots) {
-        float clon = sp[0] * 3.14159265f / 180.0f;
-        float blat = sp[1] * 3.14159265f / 180.0f;
-        float px = c0.x + R * cosf(blat) * sinf(clon);
-        float py = c0.y - R * sinf(blat);
-        float pr = dd * 0.5f * (0.06f + 0.05f * sp[2]);
-        dl->AddCircleFilled(ImVec2(px, py), pr, IM_COL32(20, 10, 5, 255), 20);
-        dl->AddCircle(ImVec2(px, py), pr * 1.6f, IM_COL32(180, 100, 30, 160), 20);
-    }
-    ImGui::Dummy(ImVec2(dd, dd + 6.0f));
-    ImGui::Text("Spots: NOAA SWPC SSN (sim)");
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Spots placed by Carrington longitude (simulated). The real SSN is in Space Weather.");
+    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
+    // el dato real vive en la ventana Sun M11.)
 
     ImGui::Separator();
     ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);

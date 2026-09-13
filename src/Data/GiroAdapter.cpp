@@ -356,7 +356,8 @@ int GiroAdapter::pollRound(double nowUtc) {
                 st.intervalSec = std::min(st.intervalSec * 2.0, 1800.0);   // x2, cap 30 min
                 st.degraded = true;
             }
-            progress_ = (int)(100.0f * next.load() / total);
+            int pct = (int)(100.0f * next.load() / total);  // Release-prep: clamp (overshoot del pool)
+            progress_ = pct > 100 ? 100 : (pct < 0 ? 0 : pct);
         }
     };
     unsigned nth = std::thread::hardware_concurrency();

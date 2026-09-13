@@ -28,7 +28,11 @@ public:
             if (maxSamples > 0 && samples > maxSamples) samples = maxSamples;
             if (samples > 0 && initMsaa(w, h))
                 return true;
-            fprintf(stderr, "Framebuffer: MSAA %dx no soportado, cayendo a 0x\n", msaaSamples);
+            static bool msaaWarned = false;  // Release-prep: log-una-vez
+            if (!msaaWarned) {
+                msaaWarned = true;
+                fprintf(stderr, "Framebuffer: MSAA %dx no soportado, cayendo a 0x\n", msaaSamples);
+            }
             destroy();   // limpia los ids parciales y los deja a 0
         }
         return initSingle(w, h);
