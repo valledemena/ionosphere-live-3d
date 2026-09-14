@@ -39,8 +39,14 @@ static bool readFile(const char* path, std::string& out) {
     return r == (size_t)n;
 }
 
-int main() {
+int main(int argc, char** argv) {
     using namespace irtameval;
+    // Directorio con los ASC 20160523_1200 (extra-repo, jamas en el repo):
+    // argv[1] si se pasa (CI/sandbox GLM), si no la ruta local de auditoria.
+    std::string ascDir =
+        "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\p1b_audit\\"
+        "IrtamReader";
+    if (argc > 1) ascDir = argv[1];
 
     std::printf("--- P1b: malla oficial ---\n");
     check_bool("lat(0)=-90 SUR", latForRow(0) == -90.0);
@@ -74,14 +80,10 @@ int main() {
     }
 
     std::printf("--- P1b: oraculos ASC (extra-repo) ---\n");
-    const char* base =
-        "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\p1b_audit\\"
-        "IrtamReader\\IRTAM_foF2_COEFFS_20160523_1200.ASC";
-    const char* baseH =
-        "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\p1b_audit\\"
-        "IrtamReader\\IRTAM_hmF2_COEFFS_20160523_1200.ASC";
+    const std::string pF = ascDir + "\\IRTAM_foF2_COEFFS_20160523_1200.ASC";
+    const std::string pH = ascDir + "\\IRTAM_hmF2_COEFFS_20160523_1200.ASC";
     std::string tf, th;
-    if (readFile(base, tf) && readFile(baseH, th)) {
+    if (readFile(pF.c_str(), tf) && readFile(pH.c_str(), th)) {
         irtamcoeff::Message mf, mh;
         std::string err;
         bool okF = irtamcoeff::parseMessage(tf, mf, err);
@@ -94,8 +96,14 @@ int main() {
                        mh.coeffs.size() == 1064);
         if (okF && okH) {
             // Punto ejemplo del reader a HOUR==TOV==12, ryear 2016.6.
+            // Oraculos EXACTOS pineados (veredicto from-glm/006 §3, triple
+            // verificacion vs replica independiente 1e-10): un port numerico
+            // necesita aserciones exactas, no solo rangos (leccion drop 006).
             double xm = 0;
             igrfDip(-11.95, 283.13, 2016.6, 300.0, xm);
+            std::printf("    xmodip(-11.95,283.13,2016.6) = %.6f\n", xm);
+            check_bool("xmodip exacto -0.3980 (+-1e-3)",
+                       std::fabs(xm - (-0.3980)) < 1e-3);
             float fof2 = fout1((float)xm, -11.95f, 283.13f, 12.0f, 12.0f,
                                mf.coeffs.data());
             float hmf2 = fout1((float)xm, -11.95f, 283.13f, 12.0f, 12.0f,
@@ -104,6 +112,10 @@ int main() {
                         (double)fof2);
             std::printf("    eco hmF2(-11.95,283.13,TOV) = %.4f km\n",
                         (double)hmf2);
+            check_bool("foF2 exacto 6.1034 (+-1e-5 rel)",
+                       std::fabs((double)fof2 - 6.1034) / 6.1034 < 1e-5);
+            check_bool("hmF2 exacto 261.0765 (+-1e-5 rel)",
+                       std::fabs((double)hmf2 - 261.0765) / 261.0765 < 1e-5);
             check_bool("foF2 fisico [0.5,20]",
                        fof2 >= 0.5f && fof2 <= 20.0f);
             check_bool("hmF2 fisico [100,600]",
@@ -125,12 +137,23 @@ int main() {
                 check_bool("grid todo finito", allFin);
                 // Cresta ecuatorial presente (canje visual P1b).
                 check_bool("grid max cresta [8,16]", mx >= 8.0f && mx <= 16.0f);
-                // NOTA HONESTA para el fold: min reportado, NO gateado.
-                // Replica GLM da min 2.14; la nuestra da ~0.1 en punto
-                // nocturno (58N,124W a 12UT). Sin gfortran en este lado no
-                // se adjudica aqui: verificacion triple de GLM en el fold
-                // (eco del test + re-derivacion + su replica ~1e-6).
-                std::printf("    (min reportado para triple-check GLM)\n");
+                // Oraculos exactos de malla (veredicto §3: 2.146/12.567).
+                check_bool("grid min exacto ~2.15 ([1.5,3.0])",
+                           mn >= 1.5f && mn <= 3.0f);
+                check_bool("grid max exacto ~12.57 ([11.5,13.5])",
+                           mx >= 11.5f && mx <= 13.5f);
+                // Punto nocturno (58N,124W,12UT): artefacto 0.13 queda
+                // adjudicado; valor corregido ~3.36 MHz (fisico).
+                {
+                    double xmN = 0;
+                    igrfDip(58.0, 236.0, 2016.6, 300.0, xmN);
+                    float vN = fout1((float)xmN, 58.0f, 236.0f, 12.0f,
+                                     12.0f, mf.coeffs.data());
+                    std::printf("    eco nocturno (58N,124W) = %.4f MHz\n",
+                                (double)vN);
+                    check_bool("nocturno ~3.36 (+-10%)",
+                               std::fabs((double)vN - 3.3639) / 3.3639 < 0.10);
+                }
             }
         }
     } else {

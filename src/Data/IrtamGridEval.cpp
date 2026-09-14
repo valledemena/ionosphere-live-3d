@@ -116,7 +116,7 @@ bool feldg(float glat, float glon, float alt, float& bnorth, float& beast,
                     h[il + m - 1] =
                         g_G[il + m - 1] + z * h[ih + m - 1] +
                         x * (h[ih + m + 1] - h[ih + m - 3]) +
-                        y * (h[ih + m + 2] + h[ih + m]);
+                        y * (h[ih + m + 2] + h[ih + m - 2]);
                 }
                 // FALL-THROUGH a label 4 y 5 (explicito, critico GLM #3)
             }
@@ -226,8 +226,8 @@ float fout1(float xmodip, float lat, float lon, float hourUt, float tov,
         int mi = (k - 1) * mm;  // 0-based de SFE(MI+1)
         double acc = (double)sfe[mi];
         for (int j = 1; j <= iharm; j++)
-            acc += (double)sfe[mi + 2 * j] * s[j - 1] +
-                   (double)sfe[mi + 2 * j + 1] * c[j - 1];
+            acc += (double)sfe[mi + 2 * j - 1] * s[j - 1] +
+                   (double)sfe[mi + 2 * j] * c[j - 1];
         float slopeProd = sfe[mmm + k - 1] * xmin;  // SINGLE (critico)
         acc += (double)slopeProd;
         coef[k - 1] = acc;
