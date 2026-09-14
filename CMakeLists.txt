@@ -69,6 +69,7 @@ set(SOURCES
     src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
     src/Data/Kc2gCache.cpp  # FASE B (P2): cache kc2g en disco (puro, sin curl/GL)
     src/Data/IrtamCache.cpp  # M-IRTAM (F1): cache IRTAM en disco (puro, sin curl/GL)
+    src/Data/IrtamCoeffParse.cpp  # M-IRTAM-F2 (P1a): parse gambit-coeffs (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -226,3 +227,8 @@ add_test(NAME kc2g_cache COMMAND test_kc2g_cache)
 add_executable(test_irtam_cache tests/test_irtam_cache.cpp src/Data/IrtamCache.cpp)
 target_include_directories(test_irtam_cache PRIVATE src)
 add_test(NAME irtam_cache COMMAND test_irtam_cache)
+# M-IRTAM-F2 (P1a): parse gambit-coeffs — llama a PRODUCCION
+# (namespace irtamcoeff en src/Data/IrtamCoeffParse), no replica.
+add_executable(test_irtam_coeff_parse tests/test_irtam_coeff_parse.cpp src/Data/IrtamCoeffParse.cpp)
+target_include_directories(test_irtam_coeff_parse PRIVATE src)
+add_test(NAME irtam_coeff_parse COMMAND test_irtam_coeff_parse)
