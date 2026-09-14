@@ -51,6 +51,9 @@
 #include "Data/XrayAdapter.h"
 #include "Data/DiasAdapter.h"
 #include "Data/IrtamCoeffAdapter.h"  // M-IRTAM-F2 (P4): backfill gambit + bundle
+#include "Data/IrtamCoeffCache.h"  // M-IRTAM-F2 (P1b): flip aditivo (buckets)
+#include "Data/IrtamCoeffParse.h"  // M-IRTAM-F2 (P1b): flip aditivo (parse)
+#include "Data/IrtamGridEval.h"    // M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
@@ -1150,7 +1153,10 @@ bool App::init(int width, int height, const char* title) {
     // Hilo propio joinable (molde M0.2): el pase worker va a 300 s y el
     // backfill frio necesita ritmo de gate (1 req/15 s ~= 48 min UNA vez).
     // Steady: rechequeo cada 300 s (nace ~1 slot/ciclo, natural <= 2).
-    // Publica IrtamBundle con valid=false SIEMPRE en P4 (grids en P1b).
+    // P1b (flip aditivo, F2-R2 cond. 1-2): si el cache P2 tiene buckets
+    // frescos foF2+hmF2 con TOV COMUN, se evalua a malla 46x45 y se publica
+    // valid=true; si no, valid=false (comportamiento P4 honesto intacto).
+    // Sin cirugia de tipos ni wiring: solo relleno + valid.
     {
         App* self = this;
         impl->irtamBackfillThread = std::thread([self]() {
@@ -1162,6 +1168,63 @@ bool App::init(int width, int height, const char* title) {
                 b->dataEpoch = irt.freshestTov();
                 b->valid = false;  // P4: sin dato no se dibuja (F2-R2)
                 b->error = irt.getErrorMessage();
+                // P1b: intento de flip aditivo (mismo TOV en ambos params).
+                do {
+                    const irtamccache::ScanResult sc =
+                        irtamccache::loadCached("cache");
+                    if (sc.buckets.empty()) break;
+                    // TOV comun mas fresca: interseccion foF2 x hmF2.
+                    double tovF = 0.0, tovH = 0.0;
+                    const irtamccache::Bucket* bF = nullptr;
+                    const irtamccache::Bucket* bH = nullptr;
+                    for (const auto& bk : sc.buckets) {
+                        if (bk.param == "fof2" && bk.tovEpoch > tovF) {
+                            tovF = bk.tovEpoch;
+                            bF = &bk;
+                        } else if (bk.param == "hmf2" && bk.tovEpoch > tovH) {
+                            tovH = bk.tovEpoch;
+                            bH = &bk;
+                        }
+                    }
+                    if (!bF || !bH || tovF <= 0.0 || tovF != tovH) break;
+                    irtamcoeff::Message mf, mh;
+                    std::string err;
+                    if (!irtamcoeff::parseMessage(
+                            std::string(bF->bytes.begin(), bF->bytes.end()),
+                            mf, err) ||
+                        !irtamcoeff::isStandardBasis(mf.header))
+                        break;
+                    if (!irtamcoeff::parseMessage(
+                            std::string(bH->bytes.begin(), bH->bytes.end()),
+                            mh, err) ||
+                        !irtamcoeff::isStandardBasis(mh.header))
+                        break;
+                    const double tov = mf.header.tovEpoch;
+                    const long long day = (long long)std::floor(tov / 86400.0);
+                    const double sod = tov - (double)day * 86400.0;
+                    const float tovHour = (float)(sod / 3600.0);
+                    const double ryear = irtameval::decimalYearForTov(tov);
+                    std::vector<float> gF, gH;
+                    if (!irtameval::evalGrid(mf.coeffs, ryear, tovHour,
+                                             tovHour, gF))
+                        break;
+                    if (!irtameval::evalGrid(mh.coeffs, ryear, tovHour,
+                                             tovHour, gH))
+                        break;
+                    b->foF2.width = irtameval::kGridW;
+                    b->foF2.height = irtameval::kGridH;
+                    b->foF2.values = std::move(gF);
+                    b->foF2.timestamp = tov;
+                    b->foF2.valid = true;
+                    b->hmF2.width = irtameval::kGridW;
+                    b->hmF2.height = irtameval::kGridH;
+                    b->hmF2.values = std::move(gH);
+                    b->hmF2.timestamp = tov;
+                    b->hmF2.valid = true;
+                    b->dataEpoch = tov;
+                    b->valid = true;
+                    b->error.clear();
+                } while (false);
                 { std::lock_guard<std::mutex> lk(self->impl->bundleMutex); self->impl->irtam = b; }
             };
             auto sleepIntr = [&](int ms100) {

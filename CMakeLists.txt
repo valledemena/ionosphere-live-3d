@@ -73,6 +73,7 @@ set(SOURCES
     src/Data/IrtamCoeffCache.cpp  # M-IRTAM-F2 (P2): cache numerica (puro, sin curl/GL)
     src/Data/LgdcPacing.cpp  # M-IRTAM-F2 (P3): gate lgdc compartido (puro, sin curl/GL)
     src/Data/IrtamCoeffAdapter.cpp  # M-IRTAM-F2 (P4): adaptador gambit (curl/gate; URL vive aqui)
+    src/Data/IrtamGridEval.cpp  # M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45 (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -255,3 +256,8 @@ if(NOT WIN32)
     target_link_libraries(test_irtam_adapter PRIVATE Threads::Threads)
 endif()
 add_test(NAME irtam_adapter COMMAND test_irtam_adapter)
+# M-IRTAM-F2 (P1b): evaluacion Jones-Gallet — llama a PRODUCCION
+# (namespace irtameval en src/Data/IrtamGridEval), no replica.
+add_executable(test_irtam_grid_eval tests/test_irtam_grid_eval.cpp src/Data/IrtamGridEval.cpp src/Data/IrtamCoeffParse.cpp)
+target_include_directories(test_irtam_grid_eval PRIVATE src)
+add_test(NAME irtam_grid_eval COMMAND test_irtam_grid_eval)
