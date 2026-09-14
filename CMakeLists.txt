@@ -68,6 +68,7 @@ set(SOURCES
     src/Data/DiasAdapter.cpp
     src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
     src/Data/Kc2gCache.cpp  # FASE B (P2): cache kc2g en disco (puro, sin curl/GL)
+    src/Data/IrtamCache.cpp  # M-IRTAM (F1): cache IRTAM en disco (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -220,3 +221,8 @@ add_test(NAME kc2g_history COMMAND test_kc2g_history)
 add_executable(test_kc2g_cache tests/test_kc2g_cache.cpp src/Data/Kc2gCache.cpp)
 target_include_directories(test_kc2g_cache PRIVATE src)
 add_test(NAME kc2g_cache COMMAND test_kc2g_cache)
+# M-IRTAM (F1): cache IRTAM en disco — llama a PRODUCCION
+# (namespace irtamcache en src/Data/IrtamCache), no replica.
+add_executable(test_irtam_cache tests/test_irtam_cache.cpp src/Data/IrtamCache.cpp)
+target_include_directories(test_irtam_cache PRIVATE src)
+add_test(NAME irtam_cache COMMAND test_irtam_cache)
