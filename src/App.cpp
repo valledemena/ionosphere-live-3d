@@ -50,6 +50,7 @@
 #include "Data/EbroAdapter.h"
 #include "Data/XrayAdapter.h"
 #include "Data/DiasAdapter.h"
+#include "Data/IrtamCoeffAdapter.h"  // M-IRTAM-F2 (P4): backfill gambit + bundle
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
@@ -84,6 +85,8 @@ struct App::Impl {
     };
     struct XrayBundle { XraySample latest; };
     struct SdoBundle { SdoImage img; };  // M11: frame SDO publicado
+    // M-IRTAM-F2 (P4, F2-R2): el bundle VIENE del adapter (estructura final +
+    // valid). P4 publica valid=false siempre; P1b hara flip aditivo.
     mutable std::mutex bundleMutex;
     std::shared_ptr<const TecBundle> tec;
     std::shared_ptr<const IndicesBundle> indices;
@@ -92,6 +95,7 @@ struct App::Impl {
     std::shared_ptr<const RadioBundle> radio;
     std::shared_ptr<const XrayBundle> xray;
     std::shared_ptr<const SdoBundle> sdoB;  // M11
+    std::shared_ptr<const irtamfetch::IrtamBundle> irtam;  // M-IRTAM-F2 (P4)
     std::shared_ptr<const TecBundle> getTec() const { std::lock_guard<std::mutex> lk(bundleMutex); return tec; }
     std::shared_ptr<const IndicesBundle> getIndices() const { std::lock_guard<std::mutex> lk(bundleMutex); return indices; }
     std::shared_ptr<const WindBundle> getWind() const { std::lock_guard<std::mutex> lk(bundleMutex); return wind; }
@@ -99,12 +103,14 @@ struct App::Impl {
     std::shared_ptr<const RadioBundle> getRadio() const { std::lock_guard<std::mutex> lk(bundleMutex); return radio; }
     std::shared_ptr<const XrayBundle> getXray() const { std::lock_guard<std::mutex> lk(bundleMutex); return xray; }
     std::shared_ptr<const SdoBundle> getSdo() const { std::lock_guard<std::mutex> lk(bundleMutex); return sdoB; }  // M11
+    std::shared_ptr<const irtamfetch::IrtamBundle> getIrtam() const { std::lock_guard<std::mutex> lk(bundleMutex); return irtam; }  // M-IRTAM-F2 (P4)
     // Hilo worker de red + progreso de carga inicial.
     std::thread fetchThread;
     // M0.2: las precargas en background pasan de detach() a miembros joinables
     // (cerrar la ventana durante una precarga podia usar impl tras liberarlo).
     std::thread histPreloadThread;
     std::thread catalogPreloadThread;
+    std::thread irtamBackfillThread;  // M-IRTAM-F2 (P4): backfill gambit (joinable, M0.2)
     std::atomic<bool> shutdownRequested{false};
     std::atomic<int> loadTotal{6}, loadDone{0};
     std::atomic<bool> initialLoadDone{false};
@@ -184,6 +190,7 @@ struct App::Impl {
     float tecOpacity = 1.0f;
     // Variable del mapa de colores esferico (Seccion A del plan + Fase 5):
     // 0=TEC(GloTEC), 1=foF2, 2=MUF, 3=hmF2, 4=NmF2 (1-4 GIRO),
+    // 5-7 derivados Radio, 8-9 IRTAM retrospectivo (M-IRTAM-F2 P4).
     // 5=LUF, 6=FOT, 7=Spread-F (5-7 derivados GIRO via RadioPropagationAdapter).
     int mapVariable = 0;
     // Colormap manual (override): si colormapOverride es true, el colormap elegido
@@ -1138,6 +1145,44 @@ bool App::init(int width, int height, const char* title) {
             self->impl->catalogDone.store(true);   // M4R-A: catalogo intentado (exito o fallo)
         });
     }
+
+    // M-IRTAM-F2 (P4, F2-R2): backfill gambit-coeffs en background (foF2+hmF2).
+    // Hilo propio joinable (molde M0.2): el pase worker va a 300 s y el
+    // backfill frio necesita ritmo de gate (1 req/15 s ~= 48 min UNA vez).
+    // Steady: rechequeo cada 300 s (nace ~1 slot/ciclo, natural <= 2).
+    // Publica IrtamBundle con valid=false SIEMPRE en P4 (grids en P1b).
+    {
+        App* self = this;
+        impl->irtamBackfillThread = std::thread([self]() {
+            irtamfetch::IrtamCoeffAdapter irt;  // instancia propia del hilo
+            irt.init();  // solo curl_global_init + printf (sin red)
+            irt.setCacheDir("cache");
+            auto publish = [&]() {
+                auto b = std::make_shared<irtamfetch::IrtamBundle>();
+                b->dataEpoch = irt.freshestTov();
+                b->valid = false;  // P4: sin dato no se dibuja (F2-R2)
+                b->error = irt.getErrorMessage();
+                { std::lock_guard<std::mutex> lk(self->impl->bundleMutex); self->impl->irtam = b; }
+            };
+            auto sleepIntr = [&](int ms100) {
+                for (int i = 0; i < ms100 && !self->impl->shutdownRequested.load(); i++)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            };
+            publish();
+            for (;;) {
+                if (self->impl->shutdownRequested.load()) break;
+                const double now = (double)std::time(nullptr);
+                const std::vector<irtamfetch::FetchTarget> targets =
+                    irt.planBackfill(now);
+                if (targets.empty()) { sleepIntr(3000); continue; }  // steady: 300 s
+                if (irt.fetchOnce(targets.front())) publish();
+                else {
+                    publish();
+                    sleepIntr(50);  // gate o fallo: reintento en ~5 s (sin burst, C1)
+                }
+            }
+        });
+    }
     impl->dias.init();
     impl->dias.fetchAsync((double)std::time(nullptr));  // complemento EU en background
     impl->kc2g.init();   // M4R-A: failover (solo curl_global_init + printf)
@@ -1571,6 +1616,11 @@ void App::update(float dt) {
             ? impl->lastXray->latest.flux : 0.0f;
         updateMainGrid(radioInterpGrid(gsAct,
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
+    } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
+        // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
+        auto ib = impl->getIrtam();
+        if (ib && ib->valid)
+            updateMainGrid(impl->mapVariable == 8 ? ib->foF2 : ib->hmF2);
     }
 
     // M8 (plan 11.5): grids del circuito HF cacheados en impl + rebuild del
@@ -1844,7 +1894,7 @@ void App::loadSettings() {
         }
         if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
         std::string k = key;
-        if (k == "mapVariable") impl->mapVariable = glm::clamp((int)v, 0, 7);
+        if (k == "mapVariable") impl->mapVariable = glm::clamp((int)v, 0, 9);  // M-IRTAM-F2 (P4): 8-9 IRTAM
         else if (k == "manualColormap") impl->manualColormap = glm::clamp((int)v, 0, 3);
         else if (k == "colormapOverride") impl->colormapOverride = clB(v);
         else if (k == "tecOpacity") impl->tecOpacity = glm::clamp((float)v, 0.0f, 2.0f);
@@ -2417,11 +2467,10 @@ void App::drawSunPanel() {
     impl->sunPanel.draw(in, impl->sunGeom);
 }
 
-void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/NmF2 interpoladas de GIRO.
-    // 5-7 = LUF/FOT/Spread-F derivados GIRO via RadioPropagationAdapter (Fase 5).
+void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = derivados Radio. 8-9 = IRTAM retrospectivo (P4: sin dato no se dibuja).
     // Si hay override manual se respeta; si no, automatico por variable.
     static const char* CM_NAMES[4] = { "viridis", "inferno", "plasma", "turbo" };
-    static const int VAR_AUTO_CM[8] = { 0, 2, 1, 3, 3, 2, 1, 3 };  // TEC,foF2,MUF,hmF2,NmF2,LUF,FOT,SpF
+    static const int VAR_AUTO_CM[10] = { 0, 2, 1, 3, 3, 2, 1, 3, 2, 3 };  // ... + IRTAM foF2=plasma, hmF2=turbo (espejo GIRO)
 
     // M4R-A: fuente viva por modo (kc2g-fallback -> fusion cacheada;
     // misma cache/estampado que usa update() — lambda dentro del metodo
@@ -2468,6 +2517,17 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = foF2/MUF/hmF2/N
         else impl->tecLayer.clearRange();
         updateMainGrid(g);
         if (var != 2) { /* rango auto para LUF/FOT */ }
+    } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
+        // M-IRTAM-F2 (P4, F2-R2 cond. 1): el draw path EXIGE valid. P4 publica
+        // valid=false siempre -> la capa esta AUSENTE (return sin dibujar).
+        // P1b rellenara grids 46x45 + valid=true (flip aditivo).
+        auto b = impl->getIrtam();
+        if (!b || !b->valid) return;
+        const bool centered = (impl->mapVariable == 9);  // IRTAM hmF2: relieve real
+        impl->tecLayer.setDisplaceCentered(centered);
+        impl->shellLayer.setDisplaceCentered(centered);
+        impl->tecLayer.clearRange();
+        updateMainGrid(impl->mapVariable == 8 ? b->foF2 : b->hmF2);
     } else {
         return;
     }
@@ -2837,6 +2897,7 @@ void App::render() {
         ImGui::TextWrapped("GIRO / LGDC community ionosonde data (CC BY-NC-SA 4.0, non-commercial educational use). Please cite: Reinisch, B. W., and I. A. Galkin, Global ionospheric radio observatory (GIRO), Earth, Planets and Space, 63, 377-381, doi:10.5047/eps.2011.03.001, 2011. SPASE: http://spase.info/SMWG/Observatory/GIRO.");
         ImGui::TextWrapped("Failover: prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds). Also: eSWua/INGV, DIAS, NOAA SWPC (GloTEC, SDO/HMI, sunspots).");
         ImGui::TextWrapped("Access policy: polite cadence and mirrors lower the risk; they don't remove it - we have measured 429/504 under load, which is why the kc2g failover exists.");
+        ImGui::TextWrapped("IRTAM/GAMBIT (UML): retrospective IRTAM coefficients via LGDC gambit-coeffs (same GIRO citation above; 1 req/15 s per client, last 3 days unavailable by design).");
     }
     ImGui::End();
 
@@ -2878,13 +2939,32 @@ void App::render() {
     ImGui::Separator();
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
-    // Variable de la capa de colores esferica (Seccion A + Fase 5):
-    // TEC / GIRO (foF2,MUF,hmF2,NmF2) / Radio (LUF,FOT,Spread-F).
-    const char* mapVars[] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F" };
-    if (ImGui::Combo("Variable", &impl->mapVariable, mapVars, 8)) {
+    // Variable de la capa de colores esferica (Seccion A + Fase 5 + M-IRTAM-F2 P4):
+    // TEC / GIRO (foF2,MUF,hmF2,NmF2) / Radio (LUF,FOT,Spread-F) / IRTAM (foF2,hmF2 retrospectivos).
+    const char* mapVars[] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2" };
+    if (ImGui::Combo("Variable", &impl->mapVariable, mapVars, 10)) {
         applyColorLayer();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC: electron content (TECU, NOAA GloTEC).\nfoF2: F2-layer critical frequency (MHz, GIRO).\nMUF: max usable at 3000 km (MHz, GIRO).\nhmF2: F2 peak height (km, GIRO).\nNmF2: F2 peak density (e/m3, from foF2).\nLUF: lowest usable (MHz, ITU-style derived).\nFOT: optimum working = 0.85*MUF (MHz).\nSpread-F: % spread-echo occurrence (diverging).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC: electron content (TECU, NOAA GloTEC).\nfoF2: F2-layer critical frequency (MHz, GIRO).\nMUF: max usable at 3000 km (MHz, GIRO).\nhmF2: F2 peak height (km, GIRO).\nNmF2: F2 peak density (e/m3, from foF2).\nLUF: lowest usable (MHz, ITU-style derived).\nFOT: optimum working = 0.85*MUF (MHz).\nSpread-F: % spread-echo occurrence (diverging).\nIRTAM foF2/hmF2: retrospective IRTAM grids (MHz/km, gambit-coeffs, lag ~3 d).");
+    // M-IRTAM-F2 (P4, F2-R2 cond. 3): badge DATA-age desde el cache P2.
+    // Fuente = TOV del bucket (red line); visibilidad = solo con capa IRTAM.
+    // Edad andante: se calcula AL PINTAR con el reloj de lectura (E10).
+    if (impl->mapVariable == 8 || impl->mapVariable == 9) {
+        const char* ipName = (impl->mapVariable == 8) ? "foF2" : "hmF2";
+        auto ib = impl->getIrtam();
+        const double nowUtc = (double)std::time(nullptr);
+        const double ageMin = (ib && ib->dataEpoch > 0.0)
+            ? (nowUtc - ib->dataEpoch) / 60.0 : -1.0;
+        if (ageMin < 0.0) {
+            ImGui::TextDisabled("IRTAM %s: sin datos (backfill en curso)", ipName);
+            if (ib && !ib->error.empty() && ImGui::IsItemHovered())
+                ImGui::SetItemTooltip("IRTAM: %s", ib->error.c_str());
+        } else {
+            ImGui::Text("IRTAM %s | retrospectivo (lag ~3d) | %.0f min",
+                ipName, ageMin);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DATA-age del bucket gambit-coeffs (TOV del mensaje, no del fetch). Malla pendiente de P1b: la capa no se dibuja hasta el flip.");
+        }
+    }
     bool showTEC = impl->tecVisible;
     if (ImGui::Checkbox("Color Layer", &showTEC)) {
         impl->tecVisible = showTEC;
@@ -3732,9 +3812,9 @@ void App::render() {
 
     // ---- Legend: active color scale of the spherical layer (units + range) ----
     {
-        static const char* LEG_NAMES[8] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F" };
-        static const char* LEG_UNITS[8] = { "TECU", "MHz", "MHz", "km", "e/m3", "MHz", "MHz", "%" };
-        int li = glm::clamp(impl->mapVariable, 0, 7);
+        static const char* LEG_NAMES[10] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2" };
+        static const char* LEG_UNITS[10] = { "TECU", "MHz", "MHz", "km", "e/m3", "MHz", "MHz", "%", "MHz", "km" };
+        int li = glm::clamp(impl->mapVariable, 0, 9);
         ImGui::SetNextWindowPos(ImVec2(10, (float)winH - 130), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(220, 110), ImGuiCond_FirstUseEver);
         ImGui::Begin("Legend");
@@ -4078,6 +4158,7 @@ void App::shutdown() {
     // M0.2: esperar las precargas ANTES de destruir impl (leen impl).
     if (impl->histPreloadThread.joinable()) impl->histPreloadThread.join();
     if (impl->catalogPreloadThread.joinable()) impl->catalogPreloadThread.join();
+    if (impl->irtamBackfillThread.joinable()) impl->irtamBackfillThread.join();  // M-IRTAM-F2 (P4)
     impl->tecLayer.destroy();
     impl->volumeLayer.destroy();
     impl->peakShell.destroy();

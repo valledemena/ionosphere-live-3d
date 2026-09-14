@@ -72,6 +72,7 @@ set(SOURCES
     src/Data/IrtamCoeffParse.cpp  # M-IRTAM-F2 (P1a): parse gambit-coeffs (puro, sin curl/GL)
     src/Data/IrtamCoeffCache.cpp  # M-IRTAM-F2 (P2): cache numerica (puro, sin curl/GL)
     src/Data/LgdcPacing.cpp  # M-IRTAM-F2 (P3): gate lgdc compartido (puro, sin curl/GL)
+    src/Data/IrtamCoeffAdapter.cpp  # M-IRTAM-F2 (P4): adaptador gambit (curl/gate; URL vive aqui)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -244,3 +245,13 @@ add_test(NAME irtamc_cache COMMAND test_irtamc_cache)
 add_executable(test_irtamc_gate tests/test_irtamc_gate.cpp src/Data/LgdcPacing.cpp)
 target_include_directories(test_irtamc_gate PRIVATE src)
 add_test(NAME irtamc_gate COMMAND test_irtamc_gate)
+# M-IRTAM-F2 (P4): planificacion del backfill — llama a PRODUCCION
+# (namespace irtamfetch en src/Data/IrtamCoeffAdapter), no replica.
+# El adapter usa curl (twin getbest_parse): enlaza CURL::libcurl.
+add_executable(test_irtam_adapter tests/test_irtam_adapter.cpp src/Data/IrtamCoeffAdapter.cpp src/Data/IrtamCoeffCache.cpp src/Data/IrtamCoeffParse.cpp src/Data/LgdcPacing.cpp)
+target_include_directories(test_irtam_adapter PRIVATE src libs/glad/include)  # GridData via GridLayer.h: glad solo cabeceras (patron kc2g_parse)
+target_link_libraries(test_irtam_adapter PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_irtam_adapter PRIVATE Threads::Threads)
+endif()
+add_test(NAME irtam_adapter COMMAND test_irtam_adapter)
