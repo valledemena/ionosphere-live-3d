@@ -71,6 +71,7 @@ set(SOURCES
     src/Data/IrtamCache.cpp  # M-IRTAM (F1): cache IRTAM en disco (puro, sin curl/GL)
     src/Data/IrtamCoeffParse.cpp  # M-IRTAM-F2 (P1a): parse gambit-coeffs (puro, sin curl/GL)
     src/Data/IrtamCoeffCache.cpp  # M-IRTAM-F2 (P2): cache numerica (puro, sin curl/GL)
+    src/Data/LgdcPacing.cpp  # M-IRTAM-F2 (P3): gate lgdc compartido (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -137,7 +138,7 @@ enable_testing()
 # (GiroAdapter::parseGetbest real sobre fixture real), no replica.
 add_executable(test_getbest_parse tests/test_getbest_parse.cpp)
 target_include_directories(test_getbest_parse PRIVATE src)
-target_sources(test_getbest_parse PRIVATE src/Data/GiroAdapter.cpp)
+target_sources(test_getbest_parse PRIVATE src/Data/GiroAdapter.cpp src/Data/LgdcPacing.cpp)  # M-IRTAM-F2 (P3): GiroAdapter registra en el gate
 target_link_libraries(test_getbest_parse PRIVATE CURL::libcurl)
 if(NOT WIN32)
     # Linux: GiroAdapter.cpp usa std::thread -> pthread. En MSYS2 (winpthreads)
@@ -238,3 +239,8 @@ add_test(NAME irtam_coeff_parse COMMAND test_irtam_coeff_parse)
 add_executable(test_irtamc_cache tests/test_irtamc_cache.cpp src/Data/IrtamCoeffCache.cpp src/Data/IrtamCoeffParse.cpp)
 target_include_directories(test_irtamc_cache PRIVATE src)
 add_test(NAME irtamc_cache COMMAND test_irtamc_cache)
+# M-IRTAM-F2 (P3): gate lgdc compartido — llama a PRODUCCION
+# (namespace lgdcpacing en src/Data/LgdcPacing), no replica.
+add_executable(test_irtamc_gate tests/test_irtamc_gate.cpp src/Data/LgdcPacing.cpp)
+target_include_directories(test_irtamc_gate PRIVATE src)
+add_test(NAME irtamc_gate COMMAND test_irtamc_gate)
