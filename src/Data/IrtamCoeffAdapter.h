@@ -6,13 +6,15 @@
 // IonosphereLive3D/1.0 + timeout 20 s + FOLLOWLOCATION. La URL gambit vive
 // AQUI y solo aqui (UN sitio, G6: 3er endpoint lgdc sancionado).
 //
-// Reglas de trafico (C1 refinada, ruling F2-R2 cond. 3):
+// Reglas de trafico (C1 refinada, ruling F2-R2 cond. 3 + F2-B0B1-R1 Q5):
 //   - CONSULTA el gate antes de lanzar (canLaunchGambit) y REGISTRA al lanzar
 //     (recordLaunch). Cero primitivas de pacing nuevas: el choke point unico
 //     sigue siendo lgdcpacing.
-//   - Backfill incremental: solo faltantes de la ventana (96 slots x 2 params
-//     = 192 req >= 15 s UNA vez, resumable via cache P2); steady: el hilo de
-//     backfill rechequea cada 300 s (de forma natural <= 2: nace ~1 slot/ciclo).
+//   - Backfill incremental: solo faltantes de la ventana (96 slots x 4 params
+//     = 384 req >= 15 s UNA vez ~= 96 min, resumable via cache P2); steady:
+//     el hilo de backfill rechequea cada 300 s (de forma natural <= 4: nace
+//     ~1 slot/ciclo/param). G10: 1 req/15 s sostenido, justo E11.
+//   - Pares: foF2+hmF2 (primario) y B0+B1 (F2-B0B1-R1: TOV-comun por pareja).
 //   - B0/B1 DIFERIDOS a backlog (scope tight: foF2 + hmF2).
 //
 // El contenido se valida con irtamcoeff::parseMessage (P1a) y persiste via
@@ -41,7 +43,8 @@ namespace irtamfetch {
 inline constexpr int kSlots = 96;               // 24 h a cadencia IRTAM 15 min
 inline constexpr double kSlotSec = 900.0;       // 15 min
 inline constexpr double kGambitLagSec = 259200.0;  // 3 d: ultimos 3 dias NO disponibles (E11)
-inline constexpr const char* kParams[2] = {"foF2", "hmF2"};  // B0/B1 diferidos
+inline constexpr const char* kParams[4] = {"foF2", "hmF2", "B0",
+                                           "B1"};  // F2-B0B1-R1: par B0xB1
 
 struct FetchTarget {
     std::string param;  // "foF2" | "hmF2" (forma display; el fichero sanea a minusculas)
@@ -73,9 +76,13 @@ std::vector<FetchTarget> planMissing(const CacheHave& have, double windowEnd);
 
 // Bundle publicado al hilo principal (molde TecBundle/SdoBundle).
 // P4: grids VACIOS (0x0, jamas 46x45 de ceros) + valid=false SIEMPRE.
+// F2-B0B1-R1 Q1: b0/b1 aditivos al final; valid/dataEpoch los gobierna SOLO
+// el par foF2+hmF2 (primario) — B0/B1 jamas degradan el estado existente.
 struct IrtamBundle {
     GridData foF2;  // P1b: malla 46x45 real + valid=true (flip aditivo)
     GridData hmF2;
+    GridData b0;  // B0/B1: mallas 46x45 reales (par propio, Q2)
+    GridData b1;
     double dataEpoch = 0.0;  // TOV fresca del cache P2 (fuente del badge DATA-age)
     bool valid = false;
     std::string error;

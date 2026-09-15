@@ -231,4 +231,20 @@ ScanResult loadCached(const std::string& dir) {
     return r;
 }
 
+double commonTovEpoch(const std::vector<Bucket>& buckets,
+                      const std::string& paramA, const std::string& paramB) {
+    double best = -1.0;
+    for (const Bucket& a : buckets) {
+        if (a.param != paramA || a.tovEpoch <= 0.0 || a.tovEpoch <= best)
+            continue;
+        for (const Bucket& b : buckets) {
+            if (b.param == paramB && b.tovEpoch == a.tovEpoch) {
+                best = a.tovEpoch;
+                break;
+            }
+        }
+    }
+    return best;
+}
+
 }  // namespace irtamccache

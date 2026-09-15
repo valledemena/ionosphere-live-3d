@@ -157,6 +157,29 @@ int main() {
                    r.buckets.front().serverLastMod == "lm");
     }
 
+    std::printf("--- F2-B0B1-R1 Q2: TOV comun por parejas ---\n");
+    {
+        // Buckets sinteticos (param en minusculas, como en disco).
+        auto mk = [](const char* p, double tov) {
+            Bucket b;
+            b.param = p;
+            b.tovEpoch = tov;
+            return b;
+        };
+        std::vector<Bucket> v = {mk("b0", 100.0), mk("b0", 200.0),
+                                 mk("b1", 200.0), mk("b1", 300.0)};
+        check_bool("comun mas fresco = 200",
+                   commonTovEpoch(v, "b0", "b1") == 200.0);
+        std::vector<Bucket> d = {mk("b0", 100.0), mk("b1", 200.0)};
+        check_bool("sin interseccion = -1",
+                   commonTovEpoch(d, "b0", "b1") == -1.0);
+        std::vector<Bucket> e;
+        check_bool("vacio = -1", commonTovEpoch(e, "b0", "b1") == -1.0);
+        std::vector<Bucket> f = {mk("fof2", 500.0), mk("hmf2", 500.0)};
+        check_bool("par F/H intacto = 500",
+                   commonTovEpoch(f, "fof2", "hmf2") == 500.0);
+    }
+
     std::printf("\n[test_irtamc_cache] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

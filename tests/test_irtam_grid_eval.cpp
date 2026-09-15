@@ -42,9 +42,10 @@ static bool readFile(const char* path, std::string& out) {
 int main(int argc, char** argv) {
     using namespace irtameval;
     // Directorio con los ASC 20160523_1200 (extra-repo, jamas en el repo):
-    // argv[1] si se pasa (CI/sandbox GLM), si no la ruta local de auditoria.
+    // argv[1] si se pasa (CI/sandbox GLM), si no las rutas locales de
+    // auditoria (b0b1_audit vigente; p1b_audit historica si existe).
     std::string ascDir =
-        "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\p1b_audit\\"
+        "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\b0b1_audit\\"
         "IrtamReader";
     if (argc > 1) ascDir = argv[1];
     // Carry-along P5 (veredicto 007 §6, test-only): join portable — '/' vale
@@ -161,6 +162,99 @@ int main(int argc, char** argv) {
     } else {
         std::printf("    (ASC extra-repo ausentes: oraculo completo en drop)\n");
         check_bool("skip oraculo sin fixture (no es fallo)", true);
+    }
+
+    std::printf("--- B0/B1: oraculos ASC cross-anchored (F2-B0B1-R1) ---\n");
+    const std::string pB0 = ascDir + "/IRTAM_B0in_COEFFS_20160523_1200.ASC";
+    const std::string pB1 = ascDir + "/IRTAM_B1in_COEFFS_20160523_1200.ASC";
+    std::string t0, t1;
+    if (readFile(pB0.c_str(), t0) && readFile(pB1.c_str(), t1)) {
+        irtamcoeff::Message m0, m1;
+        std::string err;
+        bool ok0 = irtamcoeff::parseMessage(t0, m0, err);
+        bool ok1 = irtamcoeff::parseMessage(t1, m1, err);
+        check_bool("parse B0 ASC standard",
+                   ok0 && irtamcoeff::isStandardBasis(m0.header) &&
+                       m0.coeffs.size() == 1064);
+        check_bool("parse B1 ASC standard",
+                   ok1 && irtamcoeff::isStandardBasis(m1.header) &&
+                       m1.coeffs.size() == 1064);
+        check_bool("TOV comun B0xB1",
+                   ok0 && ok1 &&
+                       m0.header.tovEpoch == m1.header.tovEpoch);
+        if (ok0 && ok1) {
+            // Ecos EXACTOS cross-anchored con replica GLM independiente
+            // (ruling 012 §1: B0=84.5733871 / B1=2.48623586 en el punto
+            // ejemplo a HOUR==TOV==12, ryear 2016.6).
+            double xm = 0;
+            igrfDip(-11.95, 283.13, 2016.6, 300.0, xm);
+            float b0 = fout1((float)xm, -11.95f, 283.13f, 12.0f, 12.0f,
+                             m0.coeffs.data());
+            float b1 = fout1((float)xm, -11.95f, 283.13f, 12.0f, 12.0f,
+                             m1.coeffs.data());
+            std::printf("    eco B0 = %.7f km / B1 = %.7f []\n", (double)b0,
+                        (double)b1);
+            check_bool("B0 exacto 84.5733871 (+-1e-5 rel)",
+                       std::fabs((double)b0 - 84.5733871) / 84.5733871 < 1e-5);
+            check_bool("B1 exacto 2.4862359 (+-1e-5 rel)",
+                       std::fabs((double)b1 - 2.4862359) / 2.4862359 < 1e-5);
+            // Tripwires anti-corrupcion (ruling Q4, poblaciones con signo).
+            check_bool("B0 tripwire [-100,+400]",
+                       b0 >= -100.0f && b0 <= 400.0f);
+            check_bool("B1 tripwire [-1,+8]", b1 >= -1.0f && b1 <= 8.0f);
+            // Mallas + bandas de la rebanada hour=12 del ruling §1.
+            std::vector<float> g0, g1;
+            bool okG0 = evalGrid(m0.coeffs, 2016.6, 12.0f, 12.0f, g0);
+            bool okG1 = evalGrid(m1.coeffs, 2016.6, 12.0f, 12.0f, g1);
+            check_bool("evalGrid B0/B1 2070",
+                       okG0 && okG1 && g0.size() == 2070 &&
+                           g1.size() == 2070);
+            if (okG0 && okG1) {
+                float mn0 = g0[0], mx0 = g0[0], mn1 = g1[0], mx1 = g1[0];
+                for (float v : g0) {
+                    if (v < mn0) mn0 = v;
+                    if (v > mx0) mx0 = v;
+                }
+                for (float v : g1) {
+                    if (v < mn1) mn1 = v;
+                    if (v > mx1) mx1 = v;
+                }
+                std::printf("    grid B0 [%.3f,%.3f] B1 [%.3f,%.3f]\n",
+                            (double)mn0, (double)mx0, (double)mn1,
+                            (double)mx1);
+                check_bool("grid B0 [43.249,199.194] (+-2%)",
+                           mn0 >= 43.249f * 0.98f && mx0 <= 199.194f * 1.02f &&
+                               mn0 > 0.0f);
+                check_bool("grid B1 [0.392,5.708] (+-2%)",
+                           mn1 >= 0.392f * 0.98f && mx1 <= 5.708f * 1.02f &&
+                               mn1 > 0.0f);
+            }
+            // evalPairGrids: exito + caminos de fallo (Q2 por test).
+            {
+                GridData e0, e1;
+                const double ry = decimalYearForTov(m0.header.tovEpoch);
+                check_bool("evalPairGrids exito",
+                           evalPairGrids(m0, m1, ry, 12.0f, 12.0f, e0, e1) &&
+                               e0.valid && e1.valid && e0.width == 45 &&
+                               e1.height == 46);
+                irtamcoeff::Message badTov = m1;
+                badTov.header.tovEpoch += 900.0;
+                GridData f0, f1;
+                check_bool("evalPairGrids rechaza TOV desigual",
+                           !evalPairGrids(m0, badTov, ry, 12.0f, 12.0f, f0,
+                                          f1) &&
+                               f0.values.empty() && f1.values.empty());
+                irtamcoeff::Message badBasis = m1;
+                badBasis.header.nTemporal = 13;
+                GridData h0, h1;
+                check_bool("evalPairGrids rechaza basis no-standard",
+                           !evalPairGrids(m0, badBasis, ry, 12.0f, 12.0f, h0,
+                                          h1));
+            }
+        }
+    } else {
+        std::printf("    (ASC B0/B1 extra-repo ausentes: skip, no es fallo)\n");
+        check_bool("skip B0/B1 sin fixture (no es fallo)", true);
     }
 
     std::printf("\n[test_irtam_grid_eval] %d OK, %d FAIL\n", g_ok, g_fail);

@@ -1226,6 +1226,47 @@ bool App::init(int width, int height, const char* title) {
                     b->valid = true;
                     b->error.clear();
                 } while (false);
+                // F2-B0B1-R1 Q2 (gate por parejas, aditivo): par B0xB1 con el
+                // mismo shape. TOV-comun propio (tovB0 == tovB1); si falla o
+                // desincroniza, b0/b1 quedan ausentes y el bundle PUBLICA
+                // igual con el par F/H (valid/dataEpoch: solo F/H, Q1).
+                // El bloque F/H de arriba ni se toca.
+                do {
+                    const double tovBB = irtamccache::commonTovEpoch(
+                        irtamccache::loadCached("cache").buckets, "b0", "b1");
+                    if (tovBB <= 0.0) break;
+                    const irtamccache::ScanResult scB =
+                        irtamccache::loadCached("cache");
+                    const irtamccache::Bucket* b0 = nullptr;
+                    const irtamccache::Bucket* b1 = nullptr;
+                    for (const auto& bk : scB.buckets) {
+                        if (bk.param == "b0" && bk.tovEpoch == tovBB) b0 = &bk;
+                        if (bk.param == "b1" && bk.tovEpoch == tovBB) b1 = &bk;
+                    }
+                    if (!b0 || !b1) break;
+                    irtamcoeff::Message m0, m1;
+                    std::string errB;
+                    if (!irtamcoeff::parseMessage(
+                            std::string(b0->bytes.begin(), b0->bytes.end()),
+                            m0, errB) ||
+                        !irtamcoeff::parseMessage(
+                            std::string(b1->bytes.begin(), b1->bytes.end()),
+                            m1, errB))
+                        break;
+                    const double ryearB =
+                        irtameval::decimalYearForTov(tovBB);
+                    const long long dayB =
+                        (long long)std::floor(tovBB / 86400.0);
+                    const float tovHourB =
+                        (float)((tovBB - (double)dayB * 86400.0) / 3600.0);
+                    GridData g0, g1;
+                    // evalPairGrids exige basis standard + mismo TOV (Q2).
+                    if (!irtameval::evalPairGrids(m0, m1, ryearB, tovHourB,
+                                                 tovHourB, g0, g1))
+                        break;
+                    b->b0 = std::move(g0);
+                    b->b1 = std::move(g1);
+                } while (false);
                 { std::lock_guard<std::mutex> lk(self->impl->bundleMutex); self->impl->irtam = b; }
             };
             auto sleepIntr = [&](int ms100) {
@@ -1690,6 +1731,24 @@ void App::update(float dt) {
         auto ib = impl->getIrtam();
         if (ib && ib->valid)
             updateMainGrid(impl->mapVariable == 8 ? ib->foF2 : ib->hmF2);
+    } else if (impl->mapVariable == 10 || impl->mapVariable == 11) {
+        // F2-B0B1-R1 Q3: streaming B0/B1 (misma honestidad; par ausente =
+        // ausente). B0 con clamp-color via copia display-only.
+        auto ib = impl->getIrtam();
+        if (ib && ib->valid) {
+            const GridData& src =
+                (impl->mapVariable == 10) ? ib->b0 : ib->b1;
+            if (!src.values.empty() && src.valid) {
+                if (impl->mapVariable == 10) {
+                    GridData g = src;
+                    for (float& v : g.values)
+                        if (v < 0.0f) v = 0.0f;
+                    updateMainGrid(g);
+                } else {
+                    updateMainGrid(src);
+                }
+            }
+        }
     }
 
     // M8 (plan 11.5): grids del circuito HF cacheados en impl + rebuild del
@@ -1963,7 +2022,7 @@ void App::loadSettings() {
         }
         if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
         std::string k = key;
-        if (k == "mapVariable") impl->mapVariable = glm::clamp((int)v, 0, 9);  // M-IRTAM-F2 (P4): 8-9 IRTAM
+        if (k == "mapVariable") impl->mapVariable = glm::clamp((int)v, 0, 11);  // M-IRTAM-F2 (P4: 8-9 IRTAM; B0B1: 10-11)
         else if (k == "manualColormap") impl->manualColormap = glm::clamp((int)v, 0, 3);
         else if (k == "colormapOverride") impl->colormapOverride = clB(v);
         else if (k == "tecOpacity") impl->tecOpacity = glm::clamp((float)v, 0.0f, 2.0f);
@@ -2539,7 +2598,7 @@ void App::drawSunPanel() {
 void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = derivados Radio. 8-9 = IRTAM retrospectivo (P4: sin dato no se dibuja).
     // Si hay override manual se respeta; si no, automatico por variable.
     static const char* CM_NAMES[4] = { "viridis", "inferno", "plasma", "turbo" };
-    static const int VAR_AUTO_CM[10] = { 0, 2, 1, 3, 3, 2, 1, 3, 2, 3 };  // ... + IRTAM foF2=plasma, hmF2=turbo (espejo GIRO)
+    static const int VAR_AUTO_CM[12] = { 0, 2, 1, 3, 3, 2, 1, 3, 2, 3, 1, 2 };  // ... + IRTAM foF2=plasma, hmF2=turbo (espejo GIRO) + IRTAM B0=inferno, B1=plasma
 
     // M4R-A: fuente viva por modo (kc2g-fallback -> fusion cacheada;
     // misma cache/estampado que usa update() — lambda dentro del metodo
@@ -2597,6 +2656,26 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         impl->shellLayer.setDisplaceCentered(centered);
         impl->tecLayer.clearRange();
         updateMainGrid(impl->mapVariable == 8 ? b->foF2 : b->hmF2);
+    } else if (impl->mapVariable == 10 || impl->mapVariable == 11) {
+        // F2-B0B1-R1 Q3: capas B0/B1 (valid lo gobierna F/H (Q1); el par
+        // propio ausente = capa ausente, jamas ceros). B0: clamp a 0 SOLO
+        // en color (dato crudo intacto; negativos = fisica real nocturna).
+        auto b = impl->getIrtam();
+        if (!b || !b->valid) return;
+        const GridData& src =
+            (impl->mapVariable == 10) ? b->b0 : b->b1;
+        if (src.values.empty() || !src.valid) return;
+        impl->tecLayer.setDisplaceCentered(false);
+        impl->shellLayer.setDisplaceCentered(false);
+        impl->tecLayer.clearRange();
+        if (impl->mapVariable == 10) {
+            GridData g = src;  // copia display-only para el clamp
+            for (float& v : g.values)
+                if (v < 0.0f) v = 0.0f;
+            updateMainGrid(g);
+        } else {
+            updateMainGrid(src);  // B1 lineal, unidad "[]"
+        }
     } else {
         return;
     }
@@ -3008,25 +3087,36 @@ void App::render() {
     ImGui::Separator();
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
-    // Variable de la capa de colores esferica (Seccion A + Fase 5 + M-IRTAM-F2 P4):
-    // TEC / GIRO (foF2,MUF,hmF2,NmF2) / Radio (LUF,FOT,Spread-F) / IRTAM (foF2,hmF2 retrospectivos).
-    const char* mapVars[] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2" };
-    if (ImGui::Combo("Variable", &impl->mapVariable, mapVars, 10)) {
+    // Variable de la capa de colores esferica (Seccion A + Fase 5 + M-IRTAM-F2 P4 + B0B1):
+    // TEC / GIRO (foF2,MUF,hmF2,NmF2) / Radio (LUF,FOT,Spread-F) / IRTAM (foF2,hmF2,B0,B1 retrospectivos).
+    const char* mapVars[] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2", "IRTAM B0", "IRTAM B1" };
+    if (ImGui::Combo("Variable", &impl->mapVariable, mapVars, 12)) {
         applyColorLayer();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC: electron content (TECU, NOAA GloTEC).\nfoF2: F2-layer critical frequency (MHz, GIRO).\nMUF: max usable at 3000 km (MHz, GIRO).\nhmF2: F2 peak height (km, GIRO).\nNmF2: F2 peak density (e/m3, from foF2).\nLUF: lowest usable (MHz, ITU-style derived).\nFOT: optimum working = 0.85*MUF (MHz).\nSpread-F: % spread-echo occurrence (diverging).\nIRTAM foF2/hmF2: retrospective IRTAM grids (MHz/km, gambit-coeffs, lag ~3 d).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC: electron content (TECU, NOAA GloTEC).\nfoF2: F2-layer critical frequency (MHz, GIRO).\nMUF: max usable at 3000 km (MHz, GIRO).\nhmF2: F2 peak height (km, GIRO).\nNmF2: F2 peak density (e/m3, from foF2).\nLUF: lowest usable (MHz, ITU-style derived).\nFOT: optimum working = 0.85*MUF (MHz).\nSpread-F: % spread-echo occurrence (diverging).\nIRTAM foF2/hmF2: retrospective IRTAM grids (MHz/km, gambit-coeffs, lag ~3 d).\nIRTAM B0/B1: bottomside thickness/shape (km/[], gambit-coeffs, lag ~3 d).");
     // M-IRTAM-F2 (P4 cond. 3 + P5): badge DATA-age desde el cache P2.
     // Fuente = TOV del bucket (red line); visibilidad = solo con capa IRTAM.
     // Edad andante: se calcula AL PINTAR con el reloj de lectura (E10).
     // P5: estado textual honesto via irtamstate (motivo en linea, no solo
     // tooltip) + nota frozen-declarada en replay (C9).
-    if (impl->mapVariable == 8 || impl->mapVariable == 9) {
-        const char* ipName = (impl->mapVariable == 8) ? "foF2" : "hmF2";
+    // F2-B0B1-R1 Q3: badge para 8-11; B0/B1 exigen ademas su grid presente
+    // (par ausente = ausente); DATA-age y valid los gobierna F/H (Q1).
+    if ((impl->mapVariable >= 8 && impl->mapVariable <= 9) ||
+        (impl->mapVariable >= 10 && impl->mapVariable <= 11)) {
+        const char* ipName = (impl->mapVariable == 8)    ? "foF2"
+                             : (impl->mapVariable == 9)  ? "hmF2"
+                             : (impl->mapVariable == 10) ? "B0"
+                                                         : "B1";
         auto ib = impl->getIrtam();
         const double nowUtc = (double)std::time(nullptr);
         const double ageMin = (ib && ib->dataEpoch > 0.0)
             ? (nowUtc - ib->dataEpoch) / 60.0 : -1.0;
-        const bool bValid = (ib && ib->valid);
+        bool bValid = (ib && ib->valid);
+        if (ib && (impl->mapVariable == 10 || impl->mapVariable == 11)) {
+            const GridData& src =
+                (impl->mapVariable == 10) ? ib->b0 : ib->b1;
+            if (src.values.empty() || !src.valid) bValid = false;
+        }
         const std::string bErr = ib ? ib->error : "";
         const std::string line = irtamstate::badgeLine(
             ipName, bValid, ib ? ib->dataEpoch : 0.0, bErr, ageMin,
@@ -3885,9 +3975,9 @@ void App::render() {
 
     // ---- Legend: active color scale of the spherical layer (units + range) ----
     {
-        static const char* LEG_NAMES[10] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2" };
-        static const char* LEG_UNITS[10] = { "TECU", "MHz", "MHz", "km", "e/m3", "MHz", "MHz", "%", "MHz", "km" };
-        int li = glm::clamp(impl->mapVariable, 0, 9);
+        static const char* LEG_NAMES[12] = { "TEC", "foF2", "MUF", "hmF2", "NmF2", "LUF", "FOT", "Spread-F", "IRTAM foF2", "IRTAM hmF2", "IRTAM B0", "IRTAM B1" };
+        static const char* LEG_UNITS[12] = { "TECU", "MHz", "MHz", "km", "e/m3", "MHz", "MHz", "%", "MHz", "km", "km", "[]" };
+        int li = glm::clamp(impl->mapVariable, 0, 11);
         ImGui::SetNextWindowPos(ImVec2(10, (float)winH - 130), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(220, 110), ImGuiCond_FirstUseEver);
         ImGui::Begin("Legend");

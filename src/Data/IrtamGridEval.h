@@ -31,6 +31,9 @@
 //   ano decimal del TOV; altura modip 300 km (ejemplo). Sin gfortran en este
 //   lado (desviacion documentada): oraculo cruzado via replica float32.
 // =============================================================================
+#include "Data/IrtamCoeffParse.h"  // Message (pares evaluados F2-B0B1-R1)
+#include "Ionosphere/GridLayer.h"  // GridData (mallas del bundle)
+
 #include <string>
 #include <vector>
 
@@ -64,5 +67,14 @@ float fout1(float xmodip, float lat, float lon, float hourUt, float tov,
 // (46*45 = 2070). false si coeffs.size()!=1064 o year<2015.
 bool evalGrid(const std::vector<double>& coeffs1064, double decimalYear,
               float hourUt, float tov, std::vector<float>& out2070);
+
+// F2-B0B1-R1 Q2 (gate por parejas): evalua un par coherente a mallas 46x45.
+// Exige mensajes validos, basis standard en ambos y MISMO TOV (coherencia
+// de instante del par). Rellena g1/g2 (GridData 45x46 + timestamp + valid)
+// o devuelve false sin tocar nada (fallo del par = capas ausentes, Q2).
+// Puro (sin I/O): testeable en CI. Lo usa App para B0xB1.
+bool evalPairGrids(const irtamcoeff::Message& m1, const irtamcoeff::Message& m2,
+                   double decimalYear, float hourUt, float tov, GridData& g1,
+                   GridData& g2);
 
 }  // namespace irtameval

@@ -63,6 +63,13 @@ struct ScanResult {
     int dropped = 0;  // corruptos borrados (self-heal)
 };
 
+// F2-B0B1-R1 Q2 (gate por parejas, aditivo; existente intacto): TOV comun
+// mas fresco presente en AMBOS params (comparacion exacta de tovEpoch,
+// misma convencion que el gate foF2xhmF2). -1 si no hay interseccion.
+// Puro (sin I/O): testeable en CI.
+double commonTovEpoch(const std::vector<Bucket>& buckets,
+                      const std::string& paramA, const std::string& paramB);
+
 // Barrido completo: crea dir si falta, carga validos, borra corruptos, poda
 // a cap por parametro. Solo toca irtamc_*.txt(.meta). Nunca lanza.
 ScanResult loadCached(const std::string& dir);

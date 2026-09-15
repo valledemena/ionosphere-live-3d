@@ -261,7 +261,7 @@ add_test(NAME irtam_adapter COMMAND test_irtam_adapter)
 # M-IRTAM-F2 (P1b): evaluacion Jones-Gallet — llama a PRODUCCION
 # (namespace irtameval en src/Data/IrtamGridEval), no replica.
 add_executable(test_irtam_grid_eval tests/test_irtam_grid_eval.cpp src/Data/IrtamGridEval.cpp src/Data/IrtamCoeffParse.cpp)
-target_include_directories(test_irtam_grid_eval PRIVATE src)
+target_include_directories(test_irtam_grid_eval PRIVATE src libs/glad/include)  # GridData via GridLayer.h (patron kc2g_parse)
 add_test(NAME irtam_grid_eval COMMAND test_irtam_grid_eval)
 # M-IRTAM-F2 (P5): estados honestos + replay — llama a PRODUCCION
 # (namespace irtamstate en src/Data/IrtamState), no replica.

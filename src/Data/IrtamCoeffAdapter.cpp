@@ -51,7 +51,7 @@ double dataAgeMin(double dataEpoch, double nowUtc) {
 
 std::vector<FetchTarget> planMissing(const CacheHave& have, double windowEnd) {
     std::vector<FetchTarget> out;
-    for (int pi = 0; pi < 2; pi++) {
+    for (int pi = 0; pi < 4; pi++) {  // F2-B0B1-R1: 4 params param-major
         const std::string param(kParams[pi]);
         const std::vector<double>* present = nullptr;
         const auto it = have.epochs.find(param);
@@ -116,7 +116,9 @@ CacheHave IrtamCoeffAdapter::scan() {
         std::string disp = b.param;
         if (disp == "fof2") disp = "foF2";
         else if (disp == "hmf2") disp = "hmF2";
-        else continue;  // B0/B1 u otros: fuera del scope P4
+        else if (disp == "b0") disp = "B0";  // F2-B0B1-R1
+        else if (disp == "b1") disp = "B1";  // F2-B0B1-R1
+        else continue;  // otros: fuera de scope
         have.epochs[disp].push_back(b.epoch);
         if (b.tovEpoch > have.freshestTov) have.freshestTov = b.tovEpoch;
     }

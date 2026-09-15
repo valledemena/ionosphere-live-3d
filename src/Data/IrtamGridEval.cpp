@@ -291,4 +291,30 @@ bool evalGrid(const std::vector<double>& coeffs1064, double decimalYear,
     return true;
 }
 
+bool evalPairGrids(const irtamcoeff::Message& m1, const irtamcoeff::Message& m2,
+                   double decimalYear, float hourUt, float tov, GridData& g1,
+                   GridData& g2) {
+    if (!m1.valid || !m2.valid) return false;
+    if (!irtamcoeff::isStandardBasis(m1.header) ||
+        !irtamcoeff::isStandardBasis(m2.header))
+        return false;
+    if (m1.header.tovEpoch <= 0.0 ||
+        m1.header.tovEpoch != m2.header.tovEpoch)
+        return false;
+    std::vector<float> v1, v2;
+    if (!evalGrid(m1.coeffs, decimalYear, hourUt, tov, v1)) return false;
+    if (!evalGrid(m2.coeffs, decimalYear, hourUt, tov, v2)) return false;
+    g1.width = kGridW;
+    g1.height = kGridH;
+    g1.values = std::move(v1);
+    g1.timestamp = m1.header.tovEpoch;
+    g1.valid = true;
+    g2.width = kGridW;
+    g2.height = kGridH;
+    g2.values = std::move(v2);
+    g2.timestamp = m2.header.tovEpoch;
+    g2.valid = true;
+    return true;
+}
+
 }  // namespace irtameval
