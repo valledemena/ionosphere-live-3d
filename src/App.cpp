@@ -54,6 +54,7 @@
 #include "Data/IrtamCoeffCache.h"  // M-IRTAM-F2 (P1b): flip aditivo (buckets)
 #include "Data/IrtamCoeffParse.h"  // M-IRTAM-F2 (P1b): flip aditivo (parse)
 #include "Data/IrtamGridEval.h"    // M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45
+#include "Data/IrtamState.h"       // M-IRTAM-F2 (P5): estados honestos + replay
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
@@ -1681,6 +1682,11 @@ void App::update(float dt) {
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
         // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
+        // P5 (C9/G9): IRTAM NO participa del muestreo temporal del replay.
+        // Aritmetica: la ventana de replay es ~24 h (tecHist cap 72,
+        // tecCacheMaxAgeH 24.0) y el dato IRTAM disponible empieza en T-72 h
+        // (lag 3 dias, kGambitLagSec): CERO solape. Se muestra el bucket mas
+        // reciente tal cual (congelado DECLARADO con nota en el badge).
         auto ib = impl->getIrtam();
         if (ib && ib->valid)
             updateMainGrid(impl->mapVariable == 8 ? ib->foF2 : ib->hmF2);
@@ -3009,24 +3015,28 @@ void App::render() {
         applyColorLayer();
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC: electron content (TECU, NOAA GloTEC).\nfoF2: F2-layer critical frequency (MHz, GIRO).\nMUF: max usable at 3000 km (MHz, GIRO).\nhmF2: F2 peak height (km, GIRO).\nNmF2: F2 peak density (e/m3, from foF2).\nLUF: lowest usable (MHz, ITU-style derived).\nFOT: optimum working = 0.85*MUF (MHz).\nSpread-F: % spread-echo occurrence (diverging).\nIRTAM foF2/hmF2: retrospective IRTAM grids (MHz/km, gambit-coeffs, lag ~3 d).");
-    // M-IRTAM-F2 (P4, F2-R2 cond. 3): badge DATA-age desde el cache P2.
+    // M-IRTAM-F2 (P4 cond. 3 + P5): badge DATA-age desde el cache P2.
     // Fuente = TOV del bucket (red line); visibilidad = solo con capa IRTAM.
     // Edad andante: se calcula AL PINTAR con el reloj de lectura (E10).
+    // P5: estado textual honesto via irtamstate (motivo en linea, no solo
+    // tooltip) + nota frozen-declarada en replay (C9).
     if (impl->mapVariable == 8 || impl->mapVariable == 9) {
         const char* ipName = (impl->mapVariable == 8) ? "foF2" : "hmF2";
         auto ib = impl->getIrtam();
         const double nowUtc = (double)std::time(nullptr);
         const double ageMin = (ib && ib->dataEpoch > 0.0)
             ? (nowUtc - ib->dataEpoch) / 60.0 : -1.0;
-        if (ageMin < 0.0) {
-            ImGui::TextDisabled("IRTAM %s: sin datos (backfill en curso)", ipName);
-            if (ib && !ib->error.empty() && ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("IRTAM: %s", ib->error.c_str());
+        const bool bValid = (ib && ib->valid);
+        const std::string bErr = ib ? ib->error : "";
+        const std::string line = irtamstate::badgeLine(
+            ipName, bValid, ib ? ib->dataEpoch : 0.0, bErr, ageMin,
+            impl->replayMode);
+        if (!bValid || ageMin < 0.0) {
+            ImGui::TextDisabled("%s", line.c_str());
         } else {
-            ImGui::Text("IRTAM %s | retrospectivo (lag ~3d) | %.0f min",
-                ipName, ageMin);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DATA-age del bucket gambit-coeffs (TOV del mensaje, no del fetch). Malla pendiente de P1b: la capa no se dibuja hasta el flip.");
+            ImGui::Text("%s", line.c_str());
         }
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DATA-age del bucket gambit-coeffs (TOV del mensaje, no del fetch). Malla 46x45 evaluada en P1b.");
     }
     bool showTEC = impl->tecVisible;
     if (ImGui::Checkbox("Color Layer", &showTEC)) {

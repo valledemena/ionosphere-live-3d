@@ -74,6 +74,7 @@ set(SOURCES
     src/Data/LgdcPacing.cpp  # M-IRTAM-F2 (P3): gate lgdc compartido (puro, sin curl/GL)
     src/Data/IrtamCoeffAdapter.cpp  # M-IRTAM-F2 (P4): adaptador gambit (curl/gate; URL vive aqui)
     src/Data/IrtamGridEval.cpp  # M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45 (puro, sin curl/GL)
+    src/Data/IrtamState.cpp  # M-IRTAM-F2 (P5): estados honestos + replay (puro, sin curl/GL)
     src/Data/SdoImageAdapter.cpp  # M11: imagenes SDO (stb decode en worker)
     src/UI/SidePanel.cpp
     src/UI/TimelineBar.cpp
@@ -261,3 +262,8 @@ add_test(NAME irtam_adapter COMMAND test_irtam_adapter)
 add_executable(test_irtam_grid_eval tests/test_irtam_grid_eval.cpp src/Data/IrtamGridEval.cpp src/Data/IrtamCoeffParse.cpp)
 target_include_directories(test_irtam_grid_eval PRIVATE src)
 add_test(NAME irtam_grid_eval COMMAND test_irtam_grid_eval)
+# M-IRTAM-F2 (P5): estados honestos + replay — llama a PRODUCCION
+# (namespace irtamstate en src/Data/IrtamState), no replica.
+add_executable(test_irtam_state tests/test_irtam_state.cpp src/Data/IrtamState.cpp)
+target_include_directories(test_irtam_state PRIVATE src)
+add_test(NAME irtam_state COMMAND test_irtam_state)

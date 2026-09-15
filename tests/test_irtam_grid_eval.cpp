@@ -47,6 +47,8 @@ int main(int argc, char** argv) {
         "C:\\Users\\unknown\\AppData\\Local\\Temp\\opencode\\p1b_audit\\"
         "IrtamReader";
     if (argc > 1) ascDir = argv[1];
+    // Carry-along P5 (veredicto 007 §6, test-only): join portable — '/' vale
+    // en Windows y POSIX (antes '\\' solo-Windows, GLM adapto con symlinks).
 
     std::printf("--- P1b: malla oficial ---\n");
     check_bool("lat(0)=-90 SUR", latForRow(0) == -90.0);
@@ -80,8 +82,8 @@ int main(int argc, char** argv) {
     }
 
     std::printf("--- P1b: oraculos ASC (extra-repo) ---\n");
-    const std::string pF = ascDir + "\\IRTAM_foF2_COEFFS_20160523_1200.ASC";
-    const std::string pH = ascDir + "\\IRTAM_hmF2_COEFFS_20160523_1200.ASC";
+    const std::string pF = ascDir + "/IRTAM_foF2_COEFFS_20160523_1200.ASC";
+    const std::string pH = ascDir + "/IRTAM_hmF2_COEFFS_20160523_1200.ASC";
     std::string tf, th;
     if (readFile(pF.c_str(), tf) && readFile(pH.c_str(), th)) {
         irtamcoeff::Message mf, mh;
