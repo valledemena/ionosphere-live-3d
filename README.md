@@ -5,7 +5,11 @@ A textured Earth with day/night terminator, city lights and animated clouds,
 wrapped in live data shells: TEC, GIRO ionosondes, HF propagation, solar wind,
 auroral oval and more — all switchable, with a time-travel replay mode.
 
-![Screenshot](screenshot.png)
+![Screenshot](screenshot-globe.png)
+
+| ![UI + IRTAM](screenshot-irtam.png) | ![Sun + limb](screenshot-sun.png) |
+|---|---|
+| Full UI with honest-state badge | SDO Sun panel + limb zoom |
 
 ## Features
 
