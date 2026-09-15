@@ -22,11 +22,17 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 - Reference altitude rings E/F1/F2 (E fixed, F1/F2 follow measured hmF2).
   Cinema mode (auto-rotate, `C`) and full UI hide (`H`).
 
-**Ionosphere layers** (spherical color shell, 8 variables)
+**Ionosphere layers** (spherical color shell, 12 variables)
 - **TEC** (TECU, NOAA GloTEC, 10-min cadence) with session replay + history preload.
 - **foF2 / MUF / hmF2 / NmF2** interpolated (IDW) from ~129 GIRO stations,
   with median background (no ocean cliffs).
 - **LUF / FOT / Spread-F** derived per ITU practice.
+- **IRTAM foF2 / hmF2 / B0 / B1** (retrospective, UML LGDC gambit-coeffs,
+  ~3-day lag by design): data-assimilated 46×45 grids evaluated from
+  Jones-Gallet coefficients (no resampling). Honest states — no data shows
+  the reason (`backfill…` / `429… passive retry`), never silence; in replay
+  the layer freezes with a declared out-of-window note. Badge shows walking
+  DATA-age from the message TOV.
 - Per-variable colormaps (viridis/inferno/plasma/turbo) + manual override,
   altitude/opacity sliders, live legend with units, range and data timestamp.
 - **Volumetric density**: real raymarched Ne(lat, lon, h) rebuilt from station
@@ -63,6 +69,7 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 | foF2/MUF/hmF2/… | GIRO DIDBase `scaled.php` (129 stations) | 5 min |
 | foF2/MUF/hmF2/… (failover) | prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds) | on GIRO failure only, 1 req/10 min |
 | EB040 profile | Ebre Observatory FTP (`EB040_*.SAO`) | 5 min, background |
+| IRTAM foF2/hmF2/B0/B1 | UML LGDC `gambit-coeffs` (Jones-Gallet coeffs, 46×45 evaluated) | 15-min slots, ~3 d lag; cold backfill 96/param, steady ≤4/cycle, 1 req/15 s shared LGDC gate |
 | Kp/Dst/F10.7/Ap/SSN | NOAA SWPC JSON | 5 min |
 | Solar wind | NOAA RTSW 1-min | 5 min |
 | Aurora | NOAA Ovation | 5 min |
@@ -76,6 +83,8 @@ observatory (GIRO), Earth, Planets and Space, 63, 377-381,
 doi:10.5047/eps.2011.03.001, 2011 — SPASE: http://spase.info/SMWG/Observatory/GIRO.
 Access policy: polite cadence and mirrors lower the risk; they don't remove
 it — we have measured 429/504 under load, which is why the kc2g failover exists.
+LGDC traffic (catalog/getbest/gambit) shares one 15 s pacing gate with
+timestamped `stderr` trace lines (`[LGDC …] launch / gate-consult / result`).
 
 ## Controls
 
