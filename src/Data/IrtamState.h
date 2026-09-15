@@ -20,6 +20,7 @@
 // construccion — cero primitivas de pacing nuevas aqui).
 // =============================================================================
 #include <string>
+#include <vector>
 
 namespace irtamstate {
 
@@ -33,5 +34,42 @@ inline constexpr double kGambitLagSec = 259200.0;     // 3 d (E11)
 // nota frozen-declarada. Nunca devuelve vacio (P5: jamas silencio).
 std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
                       const std::string& error, double ageMin, bool inReplay);
+
+// M-irtam-replay-A (ruling R1, CICLO A): ventana IRTAM 96 h sobre el cache
+// cap-96 intacto ([72,96] h de edad, probado en vivo). kReplayWindowSec
+// (86400, TEC) queda intacta.
+inline constexpr double kIrtamReplayWindowSec = 345600.0;  // 96 h
+
+// Zonas de la ventana de union (ruling §5 CORRECCION 2): solo-IRTAM
+// [T-96,T-72] · MUERTO estructural (T-72,T-24) · solo-TEC [T-24,T].
+enum class ReplayZone { IrtamOnly, DeadGap, TecOnly };
+
+// Por edad del epoch (ageSec = now - epoch): [72h,96h] IrtamOnly;
+// (24h,72h) DeadGap; resto (incl. futuro) TecOnly. Puro.
+ReplayZone zoneForAge(double ageSec);
+const char* zoneName(ReplayZone z);
+
+// Bracket de TOVs ordenados asc para el epoch: vecinos que lo enmarcan +
+// factor lerp; clamp al borde con flag; empty si no hay TOVs. Puro.
+struct TovBracket {
+    std::size_t i0 = 0, i1 = 0;
+    double f = 0.0;
+    bool clamped = false;
+    bool empty = true;
+};
+TovBracket bracketTovs(const std::vector<double>& sortedTovs, double epoch);
+
+// Lerp celda a celda (mallas mismo tamano; si difieren, false). Puro.
+bool lerpValues(const std::vector<float>& a, const std::vector<float>& b,
+                double f, std::vector<float>& out);
+
+// "09-11 12:00 UTC" desde epoch. Puro.
+std::string formatTovShort(double tovEpoch);
+
+// Badge en replay al TOV MUESTREADO (ruling Q5.3): nombra SIEMPRE el TOV
+// mostrado + DATA-age a ese TOV; clamped anade "(borde de ventana)".
+// shownTov <= 0 = honesto sin-dato. Nunca devuelve vacio. Puro.
+std::string badgeSampled(const std::string& param, double shownTov,
+                         double nowUtc, bool clamped);
 
 }  // namespace irtamstate

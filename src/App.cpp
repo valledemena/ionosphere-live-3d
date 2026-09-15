@@ -252,6 +252,21 @@ struct App::Impl {
     bool replayPlaying = false;
     float replaySpeed = 2.0f;    // frames por segundo
     int preReplayVar = 0;
+    // M-irtam-replay-A (ruling R1): cursor primario = epoch continuo sobre
+    // la ventana de union (96 h IRTAM + 24 h TEC). replayPos se deriva del
+    // epoch para el lerp TEC interno (inversion mecanica).
+    double replayEpoch = -1.0;   // epoch continuo UTC (s)
+    // Muestra IRTAM cacheada por slot (patron P7): se re-evalua solo al
+    // mover el cursor de slot; pairKind 0 = F/H, 1 = B0B1.
+    struct IrtamReplaySample {
+        long long epochSlot = -1;
+        int pairKind = -1;
+        GridData gA, gB;
+        double tovShown = 0.0;
+        bool have = false;
+        bool clamped = false;
+    };
+    IrtamReplaySample irtamSample_;
     // Cache de muestras GIRO interpoladas al tiempo de replay (se reconstruye
     // cuando replayPos avanza; en live se usan las muestras directas).
     std::vector<StationSample> giroReplayCache;
@@ -680,6 +695,90 @@ static GridData blendGrids(const GridData& a, const GridData& b, double f) {
     g.timestamp = a.timestamp * (1.0 - f) + b.timestamp * f;
     g.valid = true;
     return g;
+}
+
+// M-irtam-replay-A (ruling R1 Q5): muestrea un par IRTAM al epoch sobre
+// TOVs comunes del par (bracket+lerp; clamp al borde; par ausente = false).
+// Lee del cache (solo-lectura), no toca el publish. pA/pB en minusculas
+// ("fof2"/"b0"...). Rellena gA/gB (GridData 45x46 + timestamp + valid),
+// tovShown (borde si clamped) y clamped. Nunca lanza.
+static bool sampleIrtamPairAt(const std::string& pA, const std::string& pB,
+                              double epoch, GridData& gA, GridData& gB,
+                              double& tovShown, bool& clamped) {
+    tovShown = 0.0;
+    clamped = false;
+    const irtamccache::ScanResult sc = irtamccache::loadCached("cache");
+    if (sc.buckets.empty()) return false;
+    std::vector<double> tovs;
+    for (const auto& bk : sc.buckets) {
+        if (bk.tovEpoch <= 0.0) continue;
+        const bool isA = (bk.param == pA);
+        const bool isB = (bk.param == pB);
+        if (!isA && !isB) continue;
+        const std::string& other = isA ? pB : pA;
+        bool mate = false;
+        for (const auto& o : sc.buckets) {
+            if (o.param == other && o.tovEpoch == bk.tovEpoch) {
+                mate = true;
+                break;
+            }
+        }
+        if (mate) tovs.push_back(bk.tovEpoch);
+    }
+    std::sort(tovs.begin(), tovs.end());
+    tovs.erase(std::unique(tovs.begin(), tovs.end()), tovs.end());
+    const irtamstate::TovBracket br = irtamstate::bracketTovs(tovs, epoch);
+    if (br.empty) return false;
+    clamped = br.clamped;
+    // Buckets de cada TOV del bracket (mismo param, mismo TOV).
+    auto findBucket = [&](const std::string& p,
+                          double tov) -> const irtamccache::Bucket* {
+        for (const auto& bk : sc.buckets) {
+            if (bk.param == p && bk.tovEpoch == tov) return &bk;
+        }
+        return nullptr;
+    };
+    const double t0 = tovs[br.i0], t1 = tovs[br.i1];
+    const irtamccache::Bucket* a0 = findBucket(pA, t0);
+    const irtamccache::Bucket* a1 = findBucket(pA, t1);
+    const irtamccache::Bucket* b0 = findBucket(pB, t0);
+    const irtamccache::Bucket* b1 = findBucket(pB, t1);
+    if (!a0 || !a1 || !b0 || !b1) return false;
+    irtamcoeff::Message mA0, mA1, mB0, mB1;
+    std::string err;
+    auto parse = [&](const irtamccache::Bucket* bk, irtamcoeff::Message& m) {
+        return irtamcoeff::parseMessage(
+                   std::string(bk->bytes.begin(), bk->bytes.end()), m, err) &&
+               irtamcoeff::isStandardBasis(m.header);
+    };
+    if (!parse(a0, mA0) || !parse(a1, mA1) || !parse(b0, mB0) ||
+        !parse(b1, mB1))
+        return false;
+    const double ryear =
+        irtameval::decimalYearForTov(br.clamped ? t0 : epoch);
+    auto hourOf = [](double e) {
+        const long long day = (long long)std::floor(e / 86400.0);
+        return (float)((e - (double)day * 86400.0) / 3600.0);
+    };
+    GridData gA0, gA1, gB0, gB1;
+    std::vector<float> vA0, vA1, vB0, vB1;
+    if (!irtameval::evalGrid(mA0.coeffs, ryear, hourOf(t0), hourOf(t0), vA0) ||
+        !irtameval::evalGrid(mA1.coeffs, ryear, hourOf(t1), hourOf(t1), vA1) ||
+        !irtameval::evalGrid(mB0.coeffs, ryear, hourOf(t0), hourOf(t0), vB0) ||
+        !irtameval::evalGrid(mB1.coeffs, ryear, hourOf(t1), hourOf(t1), vB1))
+        return false;
+    std::vector<float> vA, vB;
+    if (!irtamstate::lerpValues(vA0, vA1, br.f, vA) ||
+        !irtamstate::lerpValues(vB0, vB1, br.f, vB))
+        return false;
+    gA.width = gB.width = irtameval::kGridW;
+    gA.height = gB.height = irtameval::kGridH;
+    gA.values = std::move(vA);
+    gB.values = std::move(vB);
+    gA.timestamp = gB.timestamp = t0 * (1.0 - br.f) + t1 * br.f;
+    gA.valid = gB.valid = true;
+    tovShown = br.clamped ? t0 : epoch;
+    return true;
 }
 
 // M0.1: resize diferido. El callback solo encola el tamaño pedido (puede
@@ -1598,6 +1697,9 @@ void App::update(float dt) {
     // Replay temporal: TEC interpolado + red GIRO muestreada al mismo instante.
     // En replay, puntos, grids derivados (foF2/MUF/hmF2/NmF2/LUF/FOT/Spread-F)
     // y panel de estacion siguen al tiempo de replay, no al directo.
+    // M-irtam-replay-A (ruling R1 Q5): el cursor primario es el EPOCH
+    // continuo sobre la ventana de union (96 h); replayPos se DERIVA del
+    // epoch para el lerp TEC interno (inversion mecanica del bloque previo).
     double replayEpoch = -1.0;
     static bool kc2gReplayLogged = false;  // FASE B (P3): log una vez por entrada
     {
@@ -1606,16 +1708,43 @@ void App::update(float dt) {
         double f = 0.0;
         bool havePair = false;
         if (impl->replayMode) {
+            const double nowUtc = (double)std::time(nullptr);
+            const double winStart =
+                nowUtc - irtamstate::kIrtamReplayWindowSec;
+            if (impl->replayPlaying) {
+                if (impl->replayEpoch <= 0.0) impl->replayEpoch = winStart;
+                // 1x = 1 frame TEC equiv/s (1200 s); loop en ventana union.
+                impl->replayEpoch +=
+                    (double)dt * impl->replaySpeed * 1200.0;
+                if (impl->replayEpoch > nowUtc) impl->replayEpoch = winStart;
+            }
+            if (impl->replayEpoch <= 0.0) impl->replayEpoch = winStart;
+            if (impl->replayEpoch < winStart) impl->replayEpoch = winStart;
+            if (impl->replayEpoch > nowUtc) impl->replayEpoch = nowUtc;
+            replayEpoch = impl->replayEpoch;
             std::lock_guard<std::mutex> lk(impl->tecHistMutex);
             if (impl->tecHist.size() >= 2) {
-                if (impl->replayPlaying) {
-                    impl->replayPos += (double)dt * impl->replaySpeed;
-                    double maxPos = (double)impl->tecHist.size() - 1.0;
-                    if (impl->replayPos >= maxPos) impl->replayPos = 0.0;  // loop
+                double pos = 0.0;
+                if (replayEpoch <= impl->tecHist.front().timestamp) {
+                    pos = 0.0;
+                } else if (replayEpoch >= impl->tecHist.back().timestamp) {
+                    pos = (double)impl->tecHist.size() - 1.0;
+                } else {
+                    for (size_t k = 0; k + 1 < impl->tecHist.size(); k++) {
+                        const double t0 = impl->tecHist[k].timestamp;
+                        const double t1 = impl->tecHist[k + 1].timestamp;
+                        if (replayEpoch >= t0 && replayEpoch <= t1) {
+                            pos = (double)k +
+                                  (t1 > t0 ? (replayEpoch - t0) / (t1 - t0)
+                                           : 0.0);
+                            break;
+                        }
+                    }
                 }
-                size_t i0 = (size_t)impl->replayPos;
+                impl->replayPos = pos;
+                size_t i0 = (size_t)pos;
                 if (i0 >= impl->tecHist.size() - 1) i0 = impl->tecHist.size() - 2;
-                f = impl->replayPos - (double)i0;
+                f = pos - (double)i0;
                 fa = impl->tecHist[i0];
                 fb = impl->tecHist[i0 + 1];
                 havePair = true;
@@ -1707,6 +1836,34 @@ void App::update(float dt) {
     // cuando las muestras gyro hayan cambiado (streaming incremental).
     // Fase 5: variables 5-7 (LUF/FOT/Spread-F) via RadioPropagationAdapter.
     // En replay, los grids derivados tambien siguen al tiempo de replay (gsAct).
+    // M-irtam-replay-A (ruling R1 Q5/Q6): asegura la muestra del par al
+    // epoch (cache P7 por slot de 900 s = resolucion TOV; re-evalua solo al
+    // mover el cursor de slot). Devuelve true si hay muestra dibujable.
+    // Lee del cache (solo-lectura); no toca el publish.
+    auto ensureSample = [&](int pairKind) -> bool {
+        if (replayEpoch <= 0.0) return false;
+        const long long slot = (long long)std::floor(replayEpoch / 900.0);
+        auto& s = impl->irtamSample_;
+        if (s.have && s.pairKind == pairKind && s.epochSlot == slot)
+            return true;
+        s.have = false;
+        s.pairKind = pairKind;
+        s.epochSlot = slot;
+        const char* pA = (pairKind == 0) ? "fof2" : "b0";
+        const char* pB = (pairKind == 0) ? "hmf2" : "b1";
+        GridData gA, gB;
+        double tovShown = 0.0;
+        bool clamped = false;
+        if (!sampleIrtamPairAt(pA, pB, replayEpoch, gA, gB, tovShown,
+                               clamped))
+            return false;
+        s.gA = std::move(gA);
+        s.gB = std::move(gB);
+        s.tovShown = tovShown;
+        s.clamped = clamped;
+        s.have = true;
+        return true;
+    };
     if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
         bool centered = (impl->mapVariable == 3);  // hmF2: relieve de alturas reales
         impl->tecLayer.setDisplaceCentered(centered);
@@ -1723,17 +1880,42 @@ void App::update(float dt) {
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
         // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
-        // P5 (C9/G9): IRTAM NO participa del muestreo temporal del replay.
-        // Aritmetica: la ventana de replay es ~24 h (tecHist cap 72,
-        // tecCacheMaxAgeH 24.0) y el dato IRTAM disponible empieza en T-72 h
-        // (lag 3 dias, kGambitLagSec): CERO solape. Se muestra el bucket mas
-        // reciente tal cual (congelado DECLARADO con nota en el badge).
-        auto ib = impl->getIrtam();
-        if (ib && ib->valid)
-            updateMainGrid(impl->mapVariable == 8 ? ib->foF2 : ib->hmF2);
+        // M-irtam-replay-A (ruling R1 §5 + CORRECCION 2): la ventana de union
+        // (96 h) se descompone en [T-96,T-72] solo-IRTAM (muestreo lerp al
+        // epoch) · [T-72,T-24] MUERTO estructural 48 h (fisica E11: ninguna
+        // fuente lo cubre; clamp al borde con nota, no defecto) · [T-24,T]
+        // solo-TEC. Solape real = W − 72 h = 24 h (no "cero solape" P5: ese
+        // literal valia para la ventana TEC de 24 h). En live: bundle fresco.
+        // En replay: muestra cacheada al epoch (ensureSample P7).
+        if (impl->replayMode) {
+            if (ensureSample(0)) {
+                const auto& s = impl->irtamSample_;
+                updateMainGrid(impl->mapVariable == 8 ? s.gA : s.gB);
+            }
+        } else {
+            auto ib = impl->getIrtam();
+            if (ib && ib->valid)
+                updateMainGrid(impl->mapVariable == 8 ? ib->foF2 : ib->hmF2);
+        }
     } else if (impl->mapVariable == 10 || impl->mapVariable == 11) {
         // F2-B0B1-R1 Q3: streaming B0/B1 (misma honestidad; par ausente =
         // ausente). B0 con clamp-color via copia display-only.
+        // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
+        if (impl->replayMode) {
+            if (ensureSample(1)) {
+                const auto& s = impl->irtamSample_;
+                const GridData& src =
+                    (impl->mapVariable == 10) ? s.gA : s.gB;
+                if (impl->mapVariable == 10) {
+                    GridData g = src;
+                    for (float& v : g.values)
+                        if (v < 0.0f) v = 0.0f;
+                    updateMainGrid(g);
+                } else {
+                    updateMainGrid(src);
+                }
+            }
+        }
         auto ib = impl->getIrtam();
         if (ib && ib->valid) {
             const GridData& src =
@@ -2649,6 +2831,36 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // M-IRTAM-F2 (P4, F2-R2 cond. 1): el draw path EXIGE valid. P4 publica
         // valid=false siempre -> la capa esta AUSENTE (return sin dibujar).
         // P1b rellenara grids 46x45 + valid=true (flip aditivo).
+        // M-irtam-replay-A: en replay se dibuja la muestra al epoch (misma
+        // cache P7 que el streaming; el nucleo sampleIrtamPairAt es comun).
+        if (impl->replayMode && impl->replayEpoch > 0.0) {
+            const long long slot =
+                (long long)std::floor(impl->replayEpoch / 900.0);
+            auto& s = impl->irtamSample_;
+            if (!(s.have && s.pairKind == 0 && s.epochSlot == slot)) {
+                s.have = false;
+                s.pairKind = 0;
+                s.epochSlot = slot;
+                GridData gA, gB;
+                double tovShown = 0.0;
+                bool clamped = false;
+                if (sampleIrtamPairAt("fof2", "hmf2", impl->replayEpoch, gA,
+                                      gB, tovShown, clamped)) {
+                    s.gA = std::move(gA);
+                    s.gB = std::move(gB);
+                    s.tovShown = tovShown;
+                    s.clamped = clamped;
+                    s.have = true;
+                }
+            }
+            if (!s.have) return;
+            const bool centered = (impl->mapVariable == 9);
+            impl->tecLayer.setDisplaceCentered(centered);
+            impl->shellLayer.setDisplaceCentered(centered);
+            impl->tecLayer.clearRange();
+            updateMainGrid(impl->mapVariable == 8 ? s.gA : s.gB);
+            return;
+        }
         auto b = impl->getIrtam();
         if (!b || !b->valid) return;
         const bool centered = (impl->mapVariable == 9);  // IRTAM hmF2: relieve real
@@ -2660,6 +2872,43 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // F2-B0B1-R1 Q3: capas B0/B1 (valid lo gobierna F/H (Q1); el par
         // propio ausente = capa ausente, jamas ceros). B0: clamp a 0 SOLO
         // en color (dato crudo intacto; negativos = fisica real nocturna).
+        // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
+        if (impl->replayMode && impl->replayEpoch > 0.0) {
+            const long long slot =
+                (long long)std::floor(impl->replayEpoch / 900.0);
+            auto& s = impl->irtamSample_;
+            if (!(s.have && s.pairKind == 1 && s.epochSlot == slot)) {
+                s.have = false;
+                s.pairKind = 1;
+                s.epochSlot = slot;
+                GridData gA, gB;
+                double tovShown = 0.0;
+                bool clamped = false;
+                if (sampleIrtamPairAt("b0", "b1", impl->replayEpoch, gA, gB,
+                                      tovShown, clamped)) {
+                    s.gA = std::move(gA);
+                    s.gB = std::move(gB);
+                    s.tovShown = tovShown;
+                    s.clamped = clamped;
+                    s.have = true;
+                }
+            }
+            if (!s.have) return;
+            const GridData& src =
+                (impl->mapVariable == 10) ? s.gA : s.gB;
+            impl->tecLayer.setDisplaceCentered(false);
+            impl->shellLayer.setDisplaceCentered(false);
+            impl->tecLayer.clearRange();
+            if (impl->mapVariable == 10) {
+                GridData g = src;
+                for (float& v : g.values)
+                    if (v < 0.0f) v = 0.0f;
+                updateMainGrid(g);
+            } else {
+                updateMainGrid(src);
+            }
+            return;
+        }
         auto b = impl->getIrtam();
         if (!b || !b->valid) return;
         const GridData& src =
@@ -3101,6 +3350,8 @@ void App::render() {
     // tooltip) + nota frozen-declarada en replay (C9).
     // F2-B0B1-R1 Q3: badge para 8-11; B0/B1 exigen ademas su grid presente
     // (par ausente = ausente); DATA-age y valid los gobierna F/H (Q1).
+    // M-irtam-replay-A (ruling R1 Q5.3): en replay el badge nombra el TOV
+    // MUESTREADO (no el fresco) via badgeSampled.
     if ((impl->mapVariable >= 8 && impl->mapVariable <= 9) ||
         (impl->mapVariable >= 10 && impl->mapVariable <= 11)) {
         const char* ipName = (impl->mapVariable == 8)    ? "foF2"
@@ -3118,10 +3369,26 @@ void App::render() {
             if (src.values.empty() || !src.valid) bValid = false;
         }
         const std::string bErr = ib ? ib->error : "";
-        const std::string line = irtamstate::badgeLine(
-            ipName, bValid, ib ? ib->dataEpoch : 0.0, bErr, ageMin,
-            impl->replayMode);
-        if (!bValid || ageMin < 0.0) {
+        std::string line;
+        bool dimmed = !bValid || ageMin < 0.0;
+        if (impl->replayMode && impl->replayEpoch > 0.0) {
+            const auto& s = impl->irtamSample_;
+            const int wantPair =
+                (impl->mapVariable == 10 || impl->mapVariable == 11) ? 1 : 0;
+            if (s.have && s.pairKind == wantPair) {
+                line = irtamstate::badgeSampled(ipName, s.tovShown, nowUtc,
+                                                s.clamped);
+                dimmed = false;
+            } else {
+                line = irtamstate::badgeSampled(ipName, 0.0, nowUtc, false);
+                dimmed = true;
+            }
+        } else {
+            line = irtamstate::badgeLine(ipName, bValid,
+                                         ib ? ib->dataEpoch : 0.0, bErr,
+                                         ageMin, impl->replayMode);
+        }
+        if (dimmed) {
             ImGui::TextDisabled("%s", line.c_str());
         } else {
             ImGui::Text("%s", line.c_str());
@@ -4180,8 +4447,17 @@ void App::render() {
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
                     impl->replayMode = true;
-                    impl->replayPos = 0.0;
                     impl->replayPlaying = true;
+                    // M-irtam-replay-A: el cursor nace en el frame TEC mas
+                    // viejo (equivale al antiguo replayPos = 0).
+                    const double nowUtc0 = (double)std::time(nullptr);
+                    impl->replayEpoch = nowUtc0 - 345600.0;
+                    {
+                        std::lock_guard<std::mutex> tlk(impl->tecHistMutex);
+                        if (!impl->tecHist.empty())
+                            impl->replayEpoch =
+                                impl->tecHist.front().timestamp;
+                    }
                 }
                 if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Enter replay: animates the stored TEC frames and the GIRO station history at the same time. Works with any Variable.");
             } else {
@@ -4203,17 +4479,29 @@ void App::render() {
             ImGui::SetNextItemWidth(90.0f);
             ImGui::SliderFloat("speed", &impl->replaySpeed, 0.5f, 8.0f, "%.1f fps");
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Replay speed in frames per second.");
-            int cur = (int)impl->replayPos;
-            if (ImGui::SliderInt("Frame", &cur, 0, nfr - 1)) {
-                impl->replayPos = (double)cur;
+            // M-irtam-replay-A (ruling R1 Q6): slider de TIEMPO sobre la
+            // ventana de union (96 h); scrubbing-pauses y Play/speed se
+            // conservan. Etiqueta = epoch UTC + zona declarada.
+            const double nowUtcR = (double)std::time(nullptr);
+            const double winStartR =
+                nowUtcR - irtamstate::kIrtamReplayWindowSec;
+            if (impl->replayEpoch <= 0.0) impl->replayEpoch = winStartR;
+            float hoursBack =
+                (float)((nowUtcR - impl->replayEpoch) / 3600.0);
+            if (ImGui::SliderFloat("hours back", &hoursBack, 0.0f, 96.0f,
+                                   "%.1f h")) {
+                impl->replayEpoch = nowUtcR - (double)hoursBack * 3600.0;
                 impl->replayPlaying = false;  // scrubbing pauses
             }
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Scrub through stored frames (pauses playback).");
+            if (ImGui::IsItemHovered())
+                ImGui::SetItemTooltip("Scrub time over the 96 h union window "
+                                      "(pauses playback). TEC covers [T-24,T], "
+                                      "IRTAM [T-96,T-72]; [T-72,T-24] is a "
+                                      "structural gap (3-day lag physics).");
             ImGui::SameLine();
-            size_t i0 = (size_t)glm::clamp(cur, 0, nfr - 1);
             char tbuf[32] = "--:--";
             {
-                std::time_t tt = (std::time_t)impl->tecHist[i0].timestamp;
+                std::time_t tt = (std::time_t)impl->replayEpoch;
                 std::tm g;
 #ifdef _WIN32
                 gmtime_s(&g, &tt);
@@ -4223,7 +4511,13 @@ void App::render() {
                 strftime(tbuf, sizeof(tbuf), "%H:%M UTC", &g);
             }
             ImGui::TextUnformatted(tbuf);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frame time (UTC) of the stored TEC grid.");
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Replay epoch (UTC).");
+            // Zonas declaradas (ruling CORRECCION 2: el TimeBar lo declara).
+            const irtamstate::ReplayZone rz = irtamstate::zoneForAge(
+                nowUtcR - impl->replayEpoch);
+            ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
+            if (ImGui::IsItemHovered())
+                ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T-24] structural gap (edges clamp with note) · [T-24,T] TEC/GIRO-only.");
         }
         // M4 (P5a): linea de estado GIRO en ambos modos — rango real de replay
         // de estaciones y aviso de cortesia (rate-limit con reintento).
