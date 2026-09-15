@@ -1,5 +1,6 @@
 #include "GiroAdapter.h"
 #include "Data/LgdcPacing.h"  // M-IRTAM-F2 (P3, C1): registra lanzamientos; pacing M4 intacto
+#include "Data/LgdcTrace.h"  // Ciclo traza: log stderr con timestamp (solo-log)
 #include <curl/curl.h>
 #include <cstdio>
 #include <cmath>
@@ -110,8 +111,11 @@ bool GiroAdapter::fetchCatalog() {
     std::string html;
     const bool catalogOk = fetchURL(GIRO_CATALOG_URL, html);
     // P3 C1: registra el lanzamiento en el gate (exito o fallo: hubo trafico).
-    lgdcpacing::recordLaunch(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
+    // Ciclo traza (solo-log): mismo instante para gate y traza.
+    const long long catMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    lgdcpacing::recordLaunch(catMs);
+    lgdctrace::trace("launch", "catalog");
     if (!catalogOk) {
         fprintf(stderr, "[GiroAdapter] No se pudo obtener el catalogo de estaciones\n");
         return false;
@@ -341,7 +345,10 @@ int GiroAdapter::pollRound(double nowUtc) {
                 if (now - last >= gapMs && lastLaunchMs.compare_exchange_weak(last, now)) {
                     // M-IRTAM-F2 (P3, C1): instrumenta el lanzamiento getbest
                     // en el gate lgdc. El pacing M4 no cambia (mismo CAS).
+                    // Ciclo traza (solo-log): mismo `now` para gate y traza.
                     lgdcpacing::recordLaunch(now);
+                    lgdctrace::trace("launch",
+                                     "getbest " + todo[(size_t)i].code);
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));

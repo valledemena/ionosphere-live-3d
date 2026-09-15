@@ -72,6 +72,7 @@ set(SOURCES
     src/Data/IrtamCoeffParse.cpp  # M-IRTAM-F2 (P1a): parse gambit-coeffs (puro, sin curl/GL)
     src/Data/IrtamCoeffCache.cpp  # M-IRTAM-F2 (P2): cache numerica (puro, sin curl/GL)
     src/Data/LgdcPacing.cpp  # M-IRTAM-F2 (P3): gate lgdc compartido (puro, sin curl/GL)
+    src/Data/LgdcTrace.cpp  # Ciclo traza: log stderr con timestamp (solo-log, sin curl/GL)
     src/Data/IrtamCoeffAdapter.cpp  # M-IRTAM-F2 (P4): adaptador gambit (curl/gate; URL vive aqui)
     src/Data/IrtamGridEval.cpp  # M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45 (puro, sin curl/GL)
     src/Data/IrtamState.cpp  # M-IRTAM-F2 (P5): estados honestos + replay (puro, sin curl/GL)
@@ -141,7 +142,7 @@ enable_testing()
 # (GiroAdapter::parseGetbest real sobre fixture real), no replica.
 add_executable(test_getbest_parse tests/test_getbest_parse.cpp)
 target_include_directories(test_getbest_parse PRIVATE src)
-target_sources(test_getbest_parse PRIVATE src/Data/GiroAdapter.cpp src/Data/LgdcPacing.cpp)  # M-IRTAM-F2 (P3): GiroAdapter registra en el gate
+target_sources(test_getbest_parse PRIVATE src/Data/GiroAdapter.cpp src/Data/LgdcPacing.cpp src/Data/LgdcTrace.cpp)  # M-IRTAM-F2 (P3): GiroAdapter registra en el gate (+ traza solo-log)
 target_link_libraries(test_getbest_parse PRIVATE CURL::libcurl)
 if(NOT WIN32)
     # Linux: GiroAdapter.cpp usa std::thread -> pthread. En MSYS2 (winpthreads)
@@ -250,7 +251,7 @@ add_test(NAME irtamc_gate COMMAND test_irtamc_gate)
 # M-IRTAM-F2 (P4): planificacion del backfill — llama a PRODUCCION
 # (namespace irtamfetch en src/Data/IrtamCoeffAdapter), no replica.
 # El adapter usa curl (twin getbest_parse): enlaza CURL::libcurl.
-add_executable(test_irtam_adapter tests/test_irtam_adapter.cpp src/Data/IrtamCoeffAdapter.cpp src/Data/IrtamCoeffCache.cpp src/Data/IrtamCoeffParse.cpp src/Data/LgdcPacing.cpp)
+add_executable(test_irtam_adapter tests/test_irtam_adapter.cpp src/Data/IrtamCoeffAdapter.cpp src/Data/IrtamCoeffCache.cpp src/Data/IrtamCoeffParse.cpp src/Data/LgdcPacing.cpp src/Data/LgdcTrace.cpp)
 target_include_directories(test_irtam_adapter PRIVATE src libs/glad/include)  # GridData via GridLayer.h: glad solo cabeceras (patron kc2g_parse)
 target_link_libraries(test_irtam_adapter PRIVATE CURL::libcurl)
 if(NOT WIN32)
@@ -267,3 +268,7 @@ add_test(NAME irtam_grid_eval COMMAND test_irtam_grid_eval)
 add_executable(test_irtam_state tests/test_irtam_state.cpp src/Data/IrtamState.cpp)
 target_include_directories(test_irtam_state PRIVATE src)
 add_test(NAME irtam_state COMMAND test_irtam_state)
+# Ciclo traza: formato + sumidero — llama a PRODUCCION (lgdctrace), no replica.
+add_executable(test_lgdc_trace tests/test_lgdc_trace.cpp src/Data/LgdcTrace.cpp)
+target_include_directories(test_lgdc_trace PRIVATE src)
+add_test(NAME lgdc_trace COMMAND test_lgdc_trace)

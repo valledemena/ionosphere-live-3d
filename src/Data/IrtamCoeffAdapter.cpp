@@ -4,6 +4,7 @@
 #include "Data/IrtamCoeffCache.h"  // P2: persistencia familia irtamc_
 #include "Data/IrtamCoeffParse.h"  // P1a: validacion estructural
 #include "Data/LgdcPacing.h"       // P3: gate lgdc compartido (C1)
+#include "Data/LgdcTrace.h"        // Ciclo traza: log stderr con timestamp (solo-log)
 
 #include <curl/curl.h>
 
@@ -130,13 +131,23 @@ std::vector<FetchTarget> IrtamCoeffAdapter::planBackfill(double nowUtc) {
 bool IrtamCoeffAdapter::fetchOnce(const FetchTarget& t) {
     // P3 gate: CONSULTA antes de lanzar (C1). Sin espera activa aqui: el
     // hilo de backfill reintenta en su siguiente iteracion.
+    // Ciclo traza (solo-log): la decision ya esta tomada; la lectura del
+    // gate aqui es solo display (no cambia comportamiento).
     if (!lgdcpacing::canLaunchGambit(wallMs())) {
         error_ = "gate: <15 s desde request lgdc previo (reintento proximo ciclo)";
+        lgdctrace::trace(
+            "gate-consult",
+            "deny gambit " + t.param + " " + formatGambitTime(t.epoch) +
+                " ms-since-last=" +
+                std::to_string(lgdcpacing::msSinceLastLaunch(wallMs())));
         return false;
     }
     std::string body;
     if (!fetchURL(urlFor(t.param, t.epoch), body)) {
         error_ = "http/curl o pre-gate de tamano";
+        lgdctrace::trace("result", "fail gambit " + t.param + " " +
+                                        formatGambitTime(t.epoch) +
+                                        " red/pre-gate");
         printf("[Irtam] fetch %s %s: fallo red/pre-gate\n",
                t.param.c_str(), formatGambitTime(t.epoch).c_str());
         return false;
@@ -145,6 +156,9 @@ bool IrtamCoeffAdapter::fetchOnce(const FetchTarget& t) {
     std::string perr;
     if (!irtamcoeff::parseMessage(body, m, perr)) {
         error_ = "no-estructural: " + perr;
+        lgdctrace::trace("result", "fail gambit " + t.param + " " +
+                                        formatGambitTime(t.epoch) +
+                                        " estructural");
         printf("[Irtam] fetch %s %s: rechazo estructural (%s)\n",
                t.param.c_str(), formatGambitTime(t.epoch).c_str(), perr.c_str());
         return false;  // fail-soft: el cache se conserva, sin re-burst (C1)
@@ -159,6 +173,12 @@ bool IrtamCoeffAdapter::fetchOnce(const FetchTarget& t) {
     }
     if (m.header.tovEpoch > freshestTov_) freshestTov_ = m.header.tovEpoch;
     error_.clear();
+    // Ciclo traza (solo-log): instante de REGISTRO leido del gate (el
+    // record ocurrio dentro de fetchURL, mismo tick en la practica).
+    lgdctrace::trace("launch", "gambit " + t.param + " " +
+                                    formatGambitTime(t.epoch));
+    lgdctrace::trace("result", "ok gambit " + t.param + " " +
+                                   formatGambitTime(t.epoch));
     printf("[Irtam] bucket %s %s OK (TOV %.0f)\n",
            t.param.c_str(), formatGambitTime(t.epoch).c_str(),
            m.header.tovEpoch);
