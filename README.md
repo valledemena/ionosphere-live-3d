@@ -10,6 +10,8 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 | ![UI + IRTAM](screenshot-irtam.png) | ![Sun + limb](screenshot-sun.png) |
 |---|---|
 | Full UI with honest-state badge | SDO Sun panel + limb zoom |
+| ![Replay + shells](screenshot-replay.png) | ![Night close-up](screenshot-night.png) |
+| Timeline replay with E/F1/F2 reference shells | Black Marble HiRes city lights, close-up |
 
 ## Features
 
