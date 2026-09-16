@@ -1841,8 +1841,12 @@ void App::update(float dt) {
     // mover el cursor de slot). Devuelve true si hay muestra dibujable.
     // Lee del cache (solo-lectura); no toca el publish.
     auto ensureSample = [&](int pairKind) -> bool {
-        if (replayEpoch <= 0.0) return false;
-        const long long slot = (long long)std::floor(replayEpoch / 900.0);
+        // D1 (veredicto 018): lee impl->replayEpoch (cursor primario), NO el
+        // local reasignado por el lerp TEC — si no, IRTAM congelado en zona
+        // solo-IRTAM con >=2 frames TEC.
+        if (impl->replayEpoch <= 0.0) return false;
+        const long long slot =
+            (long long)std::floor(impl->replayEpoch / 900.0);
         auto& s = impl->irtamSample_;
         if (s.have && s.pairKind == pairKind && s.epochSlot == slot)
             return true;
@@ -1854,7 +1858,7 @@ void App::update(float dt) {
         GridData gA, gB;
         double tovShown = 0.0;
         bool clamped = false;
-        if (!sampleIrtamPairAt(pA, pB, replayEpoch, gA, gB, tovShown,
+        if (!sampleIrtamPairAt(pA, pB, impl->replayEpoch, gA, gB, tovShown,
                                clamped))
             return false;
         s.gA = std::move(gA);
@@ -1901,6 +1905,8 @@ void App::update(float dt) {
         // F2-B0B1-R1 Q3: streaming B0/B1 (misma honestidad; par ausente =
         // ausente). B0 con clamp-color via copia display-only.
         // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
+        // D2 (veredicto 018): else espejo de 8/9 — sin el, el bundle fresco
+        // pisaria la muestra cada frame.
         if (impl->replayMode) {
             if (ensureSample(1)) {
                 const auto& s = impl->irtamSample_;
@@ -1915,19 +1921,20 @@ void App::update(float dt) {
                     updateMainGrid(src);
                 }
             }
-        }
-        auto ib = impl->getIrtam();
-        if (ib && ib->valid) {
-            const GridData& src =
-                (impl->mapVariable == 10) ? ib->b0 : ib->b1;
-            if (!src.values.empty() && src.valid) {
-                if (impl->mapVariable == 10) {
-                    GridData g = src;
-                    for (float& v : g.values)
-                        if (v < 0.0f) v = 0.0f;
-                    updateMainGrid(g);
-                } else {
-                    updateMainGrid(src);
+        } else {
+            auto ib = impl->getIrtam();
+            if (ib && ib->valid) {
+                const GridData& src =
+                    (impl->mapVariable == 10) ? ib->b0 : ib->b1;
+                if (!src.values.empty() && src.valid) {
+                    if (impl->mapVariable == 10) {
+                        GridData g = src;
+                        for (float& v : g.values)
+                            if (v < 0.0f) v = 0.0f;
+                        updateMainGrid(g);
+                    } else {
+                        updateMainGrid(src);
+                    }
                 }
             }
         }
