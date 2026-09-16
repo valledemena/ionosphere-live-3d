@@ -267,6 +267,20 @@ struct App::Impl {
         bool clamped = false;
     };
     IrtamReplaySample irtamSample_;
+    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueño del
+    // muestreo; el render solo consume la ultima muestra lista (handoff
+    // corto). Peticion idempotente {par, slot, epoch}; en miss se sigue
+    // pintando la muestra anterior (stale autodeclarado por el badge).
+    std::thread irtamSampleThread;  // joinable, M0.2 (join en shutdown)
+    std::mutex irtamSampleMutex;    // handoff corto muestra+peticion
+    struct IrtamSampleRequest {
+        int pairKind = -1;
+        long long epochSlot = -1;
+        double epoch = 0.0;
+        bool pending = false;
+    };
+    IrtamSampleRequest irtamSampleReq_;
+    std::atomic<bool> irtamSampleBusy{false};
     // Cache de muestras GIRO interpoladas al tiempo de replay (se reconstruye
     // cuando replayPos avanza; en live se usan las muestras directas).
     std::vector<StationSample> giroReplayCache;
@@ -779,6 +793,30 @@ static bool sampleIrtamPairAt(const std::string& pA, const std::string& pB,
     gA.valid = gB.valid = true;
     tovShown = br.clamped ? t0 : epoch;
     return true;
+}
+
+// M-irtam-replay-024 (ruling R2 PERF): consumo render-path (wait-free salvo
+// handoff corto). Postea peticion idempotente si el slot no esta listo.
+bool App::consumeIrtamSample(int pairKind, GridData& dA, GridData& dB) {
+    if (!impl->replayMode || impl->replayEpoch <= 0.0) return false;
+    const long long slot = (long long)std::floor(impl->replayEpoch / 900.0);
+    std::lock_guard<std::mutex> lk(impl->irtamSampleMutex);
+    auto& s = impl->irtamSample_;
+    auto& q = impl->irtamSampleReq_;
+    if (!(s.have && s.pairKind == pairKind && s.epochSlot == slot)) {
+        if (!q.pending || q.pairKind != pairKind || q.epochSlot != slot) {
+            q.pairKind = pairKind;
+            q.epochSlot = slot;
+            q.epoch = impl->replayEpoch;
+            q.pending = true;
+        }
+    }
+    if (s.have && s.pairKind == pairKind) {
+        dA = s.gA;
+        dB = s.gB;
+        return true;
+    }
+    return false;
 }
 
 // M0.1: resize diferido. El callback solo encola el tamaño pedido (puede
@@ -1387,6 +1425,61 @@ bool App::init(int width, int height, const char* title) {
             }
         });
     }
+    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueño del
+    // muestreo IRTAM al epoch (precedentes irtamBackfillThread P4 / sdoKick
+    // M11). El render NUNCA muestrea: postea peticion idempotente y consume
+    // la ultima muestra lista (handoff corto). En miss se pinta lo anterior.
+    {
+        App* self = this;
+        impl->irtamSampleThread = std::thread([self]() {
+            for (;;) {
+                int pk = -1;
+                long long slot = -1;
+                double epoch = 0.0;
+                {
+                    std::lock_guard<std::mutex> lk(self->impl->irtamSampleMutex);
+                    if (self->impl->shutdownRequested.load()) break;
+                    if (!self->impl->irtamSampleReq_.pending) {
+                        self->impl->irtamSampleBusy.store(false);
+                    } else {
+                        pk = self->impl->irtamSampleReq_.pairKind;
+                        slot = self->impl->irtamSampleReq_.epochSlot;
+                        epoch = self->impl->irtamSampleReq_.epoch;
+                        self->impl->irtamSampleReq_.pending = false;
+                        self->impl->irtamSampleBusy.store(true);
+                    }
+                }
+                if (pk < 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(50));
+                    continue;
+                }
+                GridData gA, gB;
+                double tovShown = 0.0;
+                bool clamped = false;
+                const char* pA = (pk == 0) ? "fof2" : "b0";
+                const char* pB = (pk == 0) ? "hmf2" : "b1";
+                if (sampleIrtamPairAt(pA, pB, epoch, gA, gB, tovShown,
+                                      clamped)) {
+                    std::lock_guard<std::mutex> lk(self->impl->irtamSampleMutex);
+                    auto& s = self->impl->irtamSample_;
+                    s.pairKind = pk;
+                    s.epochSlot = slot;
+                    s.gA = std::move(gA);
+                    s.gB = std::move(gB);
+                    s.tovShown = tovShown;
+                    s.clamped = clamped;
+                    s.have = true;
+                    self->impl->irtamSampleBusy.store(false);
+                } else {
+                    // Fallo del par: se conserva la muestra anterior
+                    // (ausente honesto, heredado Q2-B0B1).
+                    std::lock_guard<std::mutex> lk(self->impl->irtamSampleMutex);
+                    self->impl->irtamSampleBusy.store(false);
+                }
+            }
+        });
+    }
     impl->dias.init();
     impl->dias.fetchAsync((double)std::time(nullptr));  // complemento EU en background
     impl->kc2g.init();   // M4R-A: failover (solo curl_global_init + printf)
@@ -1714,8 +1807,12 @@ void App::update(float dt) {
             if (impl->replayPlaying) {
                 if (impl->replayEpoch <= 0.0) impl->replayEpoch = winStart;
                 // 1x = 1 frame TEC equiv/s (1200 s); loop en ventana union.
+                // M-irtam-replay-024 (ruling R2 PERF): dt acotado a <=100 ms
+                // SOLO para este avance (rompe la amplificacion miss->dt
+                // gigante->salto multi-slot->miss); el dt global intacto.
+                const double advDt = dt > 0.1 ? 0.1 : (double)dt;
                 impl->replayEpoch +=
-                    (double)dt * impl->replaySpeed * 1200.0;
+                    advDt * impl->replaySpeed * 1200.0;
                 if (impl->replayEpoch > nowUtc) impl->replayEpoch = winStart;
             }
             if (impl->replayEpoch <= 0.0) impl->replayEpoch = winStart;
@@ -1836,38 +1933,8 @@ void App::update(float dt) {
     // cuando las muestras gyro hayan cambiado (streaming incremental).
     // Fase 5: variables 5-7 (LUF/FOT/Spread-F) via RadioPropagationAdapter.
     // En replay, los grids derivados tambien siguen al tiempo de replay (gsAct).
-    // M-irtam-replay-A (ruling R1 Q5/Q6): asegura la muestra del par al
-    // epoch (cache P7 por slot de 900 s = resolucion TOV; re-evalua solo al
-    // mover el cursor de slot). Devuelve true si hay muestra dibujable.
-    // Lee del cache (solo-lectura); no toca el publish.
-    auto ensureSample = [&](int pairKind) -> bool {
-        // D1 (veredicto 018): lee impl->replayEpoch (cursor primario), NO el
-        // local reasignado por el lerp TEC — si no, IRTAM congelado en zona
-        // solo-IRTAM con >=2 frames TEC.
-        if (impl->replayEpoch <= 0.0) return false;
-        const long long slot =
-            (long long)std::floor(impl->replayEpoch / 900.0);
-        auto& s = impl->irtamSample_;
-        if (s.have && s.pairKind == pairKind && s.epochSlot == slot)
-            return true;
-        s.have = false;
-        s.pairKind = pairKind;
-        s.epochSlot = slot;
-        const char* pA = (pairKind == 0) ? "fof2" : "b0";
-        const char* pB = (pairKind == 0) ? "hmf2" : "b1";
-        GridData gA, gB;
-        double tovShown = 0.0;
-        bool clamped = false;
-        if (!sampleIrtamPairAt(pA, pB, impl->replayEpoch, gA, gB, tovShown,
-                               clamped))
-            return false;
-        s.gA = std::move(gA);
-        s.gB = std::move(gB);
-        s.tovShown = tovShown;
-        s.clamped = clamped;
-        s.have = true;
-        return true;
-    };
+    // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea en
+    // caliente — consumeIrtamSample postea al worker y pinta lo listo.
     if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
         bool centered = (impl->mapVariable == 3);  // hmF2: relieve de alturas reales
         impl->tecLayer.setDisplaceCentered(centered);
@@ -1890,11 +1957,11 @@ void App::update(float dt) {
         // fuente lo cubre; clamp al borde con nota, no defecto) · [T-24,T]
         // solo-TEC. Solape real = W − 72 h = 24 h (no "cero solape" P5: ese
         // literal valia para la ventana TEC de 24 h). En live: bundle fresco.
-        // En replay: muestra cacheada al epoch (ensureSample P7).
+        // En replay: ultima muestra lista del worker (024: jamas en caliente).
         if (impl->replayMode) {
-            if (ensureSample(0)) {
-                const auto& s = impl->irtamSample_;
-                updateMainGrid(impl->mapVariable == 8 ? s.gA : s.gB);
+            GridData dA, dB;
+            if (consumeIrtamSample(0, dA, dB)) {
+                updateMainGrid(impl->mapVariable == 8 ? dA : dB);
             }
         } else {
             auto ib = impl->getIrtam();
@@ -1907,11 +1974,12 @@ void App::update(float dt) {
         // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
         // D2 (veredicto 018): else espejo de 8/9 — sin el, el bundle fresco
         // pisaria la muestra cada frame.
+        // M-irtam-replay-024: consume del worker (jamas en caliente).
         if (impl->replayMode) {
-            if (ensureSample(1)) {
-                const auto& s = impl->irtamSample_;
+            GridData dA, dB;
+            if (consumeIrtamSample(1, dA, dB)) {
                 const GridData& src =
-                    (impl->mapVariable == 10) ? s.gA : s.gB;
+                    (impl->mapVariable == 10) ? dA : dB;
                 if (impl->mapVariable == 10) {
                     GridData g = src;
                     for (float& v : g.values)
@@ -2838,34 +2906,17 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // M-IRTAM-F2 (P4, F2-R2 cond. 1): el draw path EXIGE valid. P4 publica
         // valid=false siempre -> la capa esta AUSENTE (return sin dibujar).
         // P1b rellenara grids 46x45 + valid=true (flip aditivo).
-        // M-irtam-replay-A: en replay se dibuja la muestra al epoch (misma
-        // cache P7 que el streaming; el nucleo sampleIrtamPairAt es comun).
+        // M-irtam-replay-A: en replay se dibuja la muestra al epoch.
+        // M-irtam-replay-024 (ruling R2 PERF): consume del worker, jamas
+        // muestrea en caliente (render-path wait-free).
         if (impl->replayMode && impl->replayEpoch > 0.0) {
-            const long long slot =
-                (long long)std::floor(impl->replayEpoch / 900.0);
-            auto& s = impl->irtamSample_;
-            if (!(s.have && s.pairKind == 0 && s.epochSlot == slot)) {
-                s.have = false;
-                s.pairKind = 0;
-                s.epochSlot = slot;
-                GridData gA, gB;
-                double tovShown = 0.0;
-                bool clamped = false;
-                if (sampleIrtamPairAt("fof2", "hmf2", impl->replayEpoch, gA,
-                                      gB, tovShown, clamped)) {
-                    s.gA = std::move(gA);
-                    s.gB = std::move(gB);
-                    s.tovShown = tovShown;
-                    s.clamped = clamped;
-                    s.have = true;
-                }
-            }
-            if (!s.have) return;
+            GridData dA, dB;
+            if (!consumeIrtamSample(0, dA, dB)) return;
             const bool centered = (impl->mapVariable == 9);
             impl->tecLayer.setDisplaceCentered(centered);
             impl->shellLayer.setDisplaceCentered(centered);
             impl->tecLayer.clearRange();
-            updateMainGrid(impl->mapVariable == 8 ? s.gA : s.gB);
+            updateMainGrid(impl->mapVariable == 8 ? dA : dB);
             return;
         }
         auto b = impl->getIrtam();
@@ -2879,30 +2930,14 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // F2-B0B1-R1 Q3: capas B0/B1 (valid lo gobierna F/H (Q1); el par
         // propio ausente = capa ausente, jamas ceros). B0: clamp a 0 SOLO
         // en color (dato crudo intacto; negativos = fisica real nocturna).
-        // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
+        // M-irtam-replay-A: en replay, muestra al epoch.
+        // M-irtam-replay-024 (ruling R2 PERF): consume del worker, jamas
+        // muestrea en caliente (render-path wait-free).
         if (impl->replayMode && impl->replayEpoch > 0.0) {
-            const long long slot =
-                (long long)std::floor(impl->replayEpoch / 900.0);
-            auto& s = impl->irtamSample_;
-            if (!(s.have && s.pairKind == 1 && s.epochSlot == slot)) {
-                s.have = false;
-                s.pairKind = 1;
-                s.epochSlot = slot;
-                GridData gA, gB;
-                double tovShown = 0.0;
-                bool clamped = false;
-                if (sampleIrtamPairAt("b0", "b1", impl->replayEpoch, gA, gB,
-                                      tovShown, clamped)) {
-                    s.gA = std::move(gA);
-                    s.gB = std::move(gB);
-                    s.tovShown = tovShown;
-                    s.clamped = clamped;
-                    s.have = true;
-                }
-            }
-            if (!s.have) return;
+            GridData dA, dB;
+            if (!consumeIrtamSample(1, dA, dB)) return;
             const GridData& src =
-                (impl->mapVariable == 10) ? s.gA : s.gB;
+                (impl->mapVariable == 10) ? dA : dB;
             impl->tecLayer.setDisplaceCentered(false);
             impl->shellLayer.setDisplaceCentered(false);
             impl->tecLayer.clearRange();
@@ -3379,12 +3414,25 @@ void App::render() {
         std::string line;
         bool dimmed = !bValid || ageMin < 0.0;
         if (impl->replayMode && impl->replayEpoch > 0.0) {
-            const auto& s = impl->irtamSample_;
-            const int wantPair =
-                (impl->mapVariable == 10 || impl->mapVariable == 11) ? 1 : 0;
-            if (s.have && s.pairKind == wantPair) {
-                line = irtamstate::badgeSampled(ipName, s.tovShown, nowUtc,
-                                                s.clamped);
+            // M-irtam-replay-024: lectura bajo handoff corto (el worker
+            // escribe la muestra; solo escalares, sin espera).
+            double sTov = 0.0;
+            bool sCl = false, sHave = false;
+            {
+                std::lock_guard<std::mutex> lk(impl->irtamSampleMutex);
+                const auto& s = impl->irtamSample_;
+                const int wantPair =
+                    (impl->mapVariable == 10 || impl->mapVariable == 11)
+                        ? 1
+                        : 0;
+                if (s.have && s.pairKind == wantPair) {
+                    sTov = s.tovShown;
+                    sCl = s.clamped;
+                    sHave = true;
+                }
+            }
+            if (sHave) {
+                line = irtamstate::badgeSampled(ipName, sTov, nowUtc, sCl);
                 dimmed = false;
             } else {
                 line = irtamstate::badgeSampled(ipName, 0.0, nowUtc, false);
@@ -4623,6 +4671,7 @@ void App::shutdown() {
     if (impl->histPreloadThread.joinable()) impl->histPreloadThread.join();
     if (impl->catalogPreloadThread.joinable()) impl->catalogPreloadThread.join();
     if (impl->irtamBackfillThread.joinable()) impl->irtamBackfillThread.join();  // M-IRTAM-F2 (P4)
+    if (impl->irtamSampleThread.joinable()) impl->irtamSampleThread.join();  // M-irtam-replay-024 (M0.2)
     impl->tecLayer.destroy();
     impl->volumeLayer.destroy();
     impl->peakShell.destroy();

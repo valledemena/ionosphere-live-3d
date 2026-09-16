@@ -33,6 +33,10 @@ private:
     void loadSettings();      // settings.cfg -> GUI (si existe)
     void fetchWorker();       // hilo background: red+parse, publica bundles
     void consumeBundles();    // hilo principal: aplica bundles frescos a capas/UI
+    // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea — postea
+    // peticion idempotente al worker y consume la ultima muestra lista
+    // (handoff corto). En miss pinta lo anterior. Render-path wait-free.
+    bool consumeIrtamSample(int pairKind, GridData& dA, GridData& dB);
     void rebuildSlice(bool force);  // cortina A=pinned B=hover desde lastVolume
     float currentKp() const;  // Kp del ultimo bundle (2.0 si no hay)
 
