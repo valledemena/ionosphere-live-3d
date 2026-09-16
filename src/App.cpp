@@ -1900,7 +1900,12 @@ void App::update(float dt) {
     // frame y un ease dejaria el terminador incoherente con el grid durante la
     // transicion (enmienda MUSE al sello del scope: coherencia > suavidad).
     // El wrap del loop de replay tambien hace snap (el dato salta ahi igual).
-    double effEpoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+    // M-irtam-replay-027 (opcion A del veredicto 026): el sol sigue al CURSOR
+    // (impl->replayEpoch), no al local TEC-clamped — si no, queda clavado en
+    // T-24h el 75% del bucle de 96 h. En live, wall-clock como siempre.
+    double effEpoch = (impl->replayMode && impl->replayEpoch > 0.0)
+                          ? impl->replayEpoch
+                          : (double)std::time(nullptr);
     impl->updateSunDirection(effEpoch);
     impl->terminator.update(impl->sunDirection);  // anillo dia/noche real (~1 KB/frame)
 
