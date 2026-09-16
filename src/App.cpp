@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <memory>
@@ -256,13 +258,13 @@ struct App::Impl {
     // la ventana de union (96 h IRTAM + 24 h TEC). replayPos se deriva del
     // epoch para el lerp TEC interno (inversion mecanica).
     double replayEpoch = -1.0;   // epoch continuo UTC (s)
-    // Muestra IRTAM cacheada por slot (patron P7): se re-evalua solo al
-    // mover el cursor de slot; pairKind 0 = F/H, 1 = B0B1.
+    // Muestra IRTAM = BRACKET entregado por el worker (M-irtam-replay-028):
+    // endpoints para lerp en render por cursor; pairKind 0 = F/H, 1 = B0B1.
     struct IrtamReplaySample {
         long long epochSlot = -1;
         int pairKind = -1;
-        GridData gA, gB;
-        double tovShown = 0.0;
+        GridData gA0, gA1, gB0, gB1;
+        double t0 = 0.0, t1 = 0.0;
         bool have = false;
         bool clamped = false;
     };
@@ -281,6 +283,42 @@ struct App::Impl {
     };
     IrtamSampleRequest irtamSampleReq_;
     std::atomic<bool> irtamSampleBusy{false};
+    // M-irtam-replay-028: memos App-level SOLO-worker (el render no los toca;
+    // sin locks). IrtamCoeffCache INTOCABLE: el memo invalida por mtime y ante
+    // cualquier duda corre loadCached completo (heal/prune preservados).
+    struct IrtamScanMemo {
+        std::filesystem::file_time_type dirMtime{};
+        bool valid = false;
+        struct Entry {
+            std::string param;
+            double tovEpoch = 0.0;
+            std::string path;
+        };
+        std::vector<Entry> entries;
+    };
+    IrtamScanMemo irtamScanMemo_;
+    // Rejillas por TOV (param,tov) para endpoints compartidos entre brackets
+    // consecutivos (FIFO cap 16 ~ 132 KB). Solo-worker.
+    struct IrtamTovGridMemo {
+        std::map<std::pair<std::string, double>, std::vector<float>> grids;
+        std::vector<std::pair<std::string, double>> order;
+        static constexpr std::size_t kCap = 16;
+        const std::vector<float>* find(const std::string& p, double tov) const {
+            auto it = grids.find({p, tov});
+            return it == grids.end() ? nullptr : &it->second;
+        }
+        void store(const std::string& p, double tov, std::vector<float>&& v) {
+            const auto k = std::make_pair(p, tov);
+            if (grids.find(k) != grids.end()) return;
+            if (order.size() >= kCap) {
+                grids.erase(order.front());
+                order.erase(order.begin());
+            }
+            grids[k] = std::move(v);
+            order.push_back(k);
+        }
+    };
+    IrtamTovGridMemo irtamTovMemo_;
     // Cache de muestras GIRO interpoladas al tiempo de replay (se reconstruye
     // cuando replayPos avanza; en live se usan las muestras directas).
     std::vector<StationSample> giroReplayCache;
@@ -711,93 +749,115 @@ static GridData blendGrids(const GridData& a, const GridData& b, double f) {
     return g;
 }
 
-// M-irtam-replay-A (ruling R1 Q5): muestrea un par IRTAM al epoch sobre
-// TOVs comunes del par (bracket+lerp; clamp al borde; par ausente = false).
-// Lee del cache (solo-lectura), no toca el publish. pA/pB en minusculas
-// ("fof2"/"b0"...). Rellena gA/gB (GridData 45x46 + timestamp + valid),
-// tovShown (borde si clamped) y clamped. Nunca lanza.
-static bool sampleIrtamPairAt(const std::string& pA, const std::string& pB,
-                              double epoch, GridData& gA, GridData& gB,
-                              double& tovShown, bool& clamped) {
-    tovShown = 0.0;
-    clamped = false;
-    const irtamccache::ScanResult sc = irtamccache::loadCached("cache");
-    if (sc.buckets.empty()) return false;
-    std::vector<double> tovs;
-    for (const auto& bk : sc.buckets) {
-        if (bk.tovEpoch <= 0.0) continue;
-        const bool isA = (bk.param == pA);
-        const bool isB = (bk.param == pB);
-        if (!isA && !isB) continue;
-        const std::string& other = isA ? pB : pA;
-        bool mate = false;
-        for (const auto& o : sc.buckets) {
-            if (o.param == other && o.tovEpoch == bk.tovEpoch) {
-                mate = true;
+// M-irtam-replay-028: entrega del BRACKET del par (endpoints para lerp en
+// render por cursor — simetria TEC). Lee del cache (solo-lectura), no toca
+// el publish. pA/pB en minusculas ("fof2"/"b0"...). Rellena el bracket
+// (GridData 45x46 + timestamp + valid en cada endpoint) + t0/t1/clamped.
+// Nunca lanza. Hilo: SOLO worker (ver sampleIrtamBracketWorker).
+static bool evalTovGrid(double tov, const std::string& path, double ryear,
+                        std::vector<float>& out) {
+    irtamccache::Bucket bk;
+    if (!irtamccache::loadBucket(path, bk)) return false;
+    irtamcoeff::Message m;
+    std::string err;
+    if (!irtamcoeff::parseMessage(
+            std::string(bk.bytes.begin(), bk.bytes.end()), m, err) ||
+        !irtamcoeff::isStandardBasis(m.header))
+        return false;
+    const long long day = (long long)std::floor(tov / 86400.0);
+    const float h = (float)((tov - (double)day * 86400.0) / 3600.0);
+    return irtameval::evalGrid(m.coeffs, ryear, h, h, out);
+}
+
+// M-irtam-replay-028: cuerpo del worker (HILO SAMPLER, nunca render).
+// Resuelve el bracket sobre el indice memoizado (mtime; ante cualquier duda
+// full loadCached con heal/prune) y evalua endpoints con memo de TOV.
+// Guarda el bracket bajo lock; a fallo conserva la muestra anterior.
+bool App::sampleIrtamBracketWorker(int pairKind, double epoch,
+                                   long long slot) {
+    const char* pA = (pairKind == 0) ? "fof2" : "b0";
+    const char* pB = (pairKind == 0) ? "hmf2" : "b1";
+    auto& memo = impl->irtamScanMemo_;
+    auto& tmemo = impl->irtamTovMemo_;
+    // 1. Indice (param, tovEpoch, path): memo por mtime o full scan.
+    std::error_code ec;
+    const auto curMtime =
+        std::filesystem::last_write_time("cache", ec);
+    bool useMemo = false;
+    if (!ec && memo.valid && curMtime == memo.dirMtime &&
+        !memo.entries.empty()) {
+        useMemo = true;
+    }
+    if (!useMemo) {
+        const irtamccache::ScanResult sc = irtamccache::loadCached("cache");
+        if (sc.buckets.empty()) return false;
+        memo.entries.clear();
+        for (const auto& bk : sc.buckets) {
+            if (bk.tovEpoch <= 0.0) continue;
+            memo.entries.push_back({bk.param, bk.tovEpoch, bk.path});
+        }
+        std::error_code ec2;
+        memo.dirMtime = std::filesystem::last_write_time("cache", ec2);
+        memo.valid = !ec2 && !memo.entries.empty();
+        if (!memo.valid) return false;
+    }
+    std::vector<irtamstate::TovEntry> idx;
+    idx.reserve(memo.entries.size());
+    for (const auto& e : memo.entries) idx.push_back({e.param, e.tovEpoch});
+    const irtamstate::PairBracket pb =
+        irtamstate::pairBracketTovs(idx, pA, pB, epoch);
+    if (pb.empty) return false;
+    // 2. Endpoints (memo TOV o load+parse+eval). t0==t1: un solo juego.
+    auto gridFor = [&](const std::string& p,
+                       double tov) -> const std::vector<float>* {
+        if (const auto* hit = tmemo.find(p, tov)) return hit;
+        std::string path;
+        for (const auto& e : memo.entries) {
+            if (e.param == p && e.tovEpoch == tov) {
+                path = e.path;
                 break;
             }
         }
-        if (mate) tovs.push_back(bk.tovEpoch);
-    }
-    std::sort(tovs.begin(), tovs.end());
-    tovs.erase(std::unique(tovs.begin(), tovs.end()), tovs.end());
-    const irtamstate::TovBracket br = irtamstate::bracketTovs(tovs, epoch);
-    if (br.empty) return false;
-    clamped = br.clamped;
-    // Buckets de cada TOV del bracket (mismo param, mismo TOV).
-    auto findBucket = [&](const std::string& p,
-                          double tov) -> const irtamccache::Bucket* {
-        for (const auto& bk : sc.buckets) {
-            if (bk.param == p && bk.tovEpoch == tov) return &bk;
-        }
-        return nullptr;
+        if (path.empty()) return nullptr;
+        std::vector<float> v;
+        const double ryear = irtameval::decimalYearForTov(
+            pb.clamped ? pb.t0 : epoch);
+        if (!evalTovGrid(tov, path, ryear, v)) return nullptr;
+        tmemo.store(p, tov, std::move(v));
+        return tmemo.find(p, tov);
     };
-    const double t0 = tovs[br.i0], t1 = tovs[br.i1];
-    const irtamccache::Bucket* a0 = findBucket(pA, t0);
-    const irtamccache::Bucket* a1 = findBucket(pA, t1);
-    const irtamccache::Bucket* b0 = findBucket(pB, t0);
-    const irtamccache::Bucket* b1 = findBucket(pB, t1);
+    const std::vector<float>* a0 = gridFor(pA, pb.t0);
+    const std::vector<float>* a1 = gridFor(pA, pb.t1);
+    const std::vector<float>* b0 = gridFor(pB, pb.t0);
+    const std::vector<float>* b1 = gridFor(pB, pb.t1);
     if (!a0 || !a1 || !b0 || !b1) return false;
-    irtamcoeff::Message mA0, mA1, mB0, mB1;
-    std::string err;
-    auto parse = [&](const irtamccache::Bucket* bk, irtamcoeff::Message& m) {
-        return irtamcoeff::parseMessage(
-                   std::string(bk->bytes.begin(), bk->bytes.end()), m, err) &&
-               irtamcoeff::isStandardBasis(m.header);
+    // 3. Handoff corto.
+    std::lock_guard<std::mutex> lk(impl->irtamSampleMutex);
+    auto& s = impl->irtamSample_;
+    auto fill = [](GridData& g, const std::vector<float>& v, double tov) {
+        g.width = irtameval::kGridW;
+        g.height = irtameval::kGridH;
+        g.values = v;
+        g.timestamp = tov;
+        g.valid = true;
     };
-    if (!parse(a0, mA0) || !parse(a1, mA1) || !parse(b0, mB0) ||
-        !parse(b1, mB1))
-        return false;
-    const double ryear =
-        irtameval::decimalYearForTov(br.clamped ? t0 : epoch);
-    auto hourOf = [](double e) {
-        const long long day = (long long)std::floor(e / 86400.0);
-        return (float)((e - (double)day * 86400.0) / 3600.0);
-    };
-    GridData gA0, gA1, gB0, gB1;
-    std::vector<float> vA0, vA1, vB0, vB1;
-    if (!irtameval::evalGrid(mA0.coeffs, ryear, hourOf(t0), hourOf(t0), vA0) ||
-        !irtameval::evalGrid(mA1.coeffs, ryear, hourOf(t1), hourOf(t1), vA1) ||
-        !irtameval::evalGrid(mB0.coeffs, ryear, hourOf(t0), hourOf(t0), vB0) ||
-        !irtameval::evalGrid(mB1.coeffs, ryear, hourOf(t1), hourOf(t1), vB1))
-        return false;
-    std::vector<float> vA, vB;
-    if (!irtamstate::lerpValues(vA0, vA1, br.f, vA) ||
-        !irtamstate::lerpValues(vB0, vB1, br.f, vB))
-        return false;
-    gA.width = gB.width = irtameval::kGridW;
-    gA.height = gB.height = irtameval::kGridH;
-    gA.values = std::move(vA);
-    gB.values = std::move(vB);
-    gA.timestamp = gB.timestamp = t0 * (1.0 - br.f) + t1 * br.f;
-    gA.valid = gB.valid = true;
-    tovShown = br.clamped ? t0 : epoch;
+    fill(s.gA0, *a0, pb.t0);
+    fill(s.gA1, *a1, pb.t1);
+    fill(s.gB0, *b0, pb.t0);
+    fill(s.gB1, *b1, pb.t1);
+    s.t0 = pb.t0;
+    s.t1 = pb.t1;
+    s.pairKind = pairKind;
+    s.epochSlot = slot;
+    s.clamped = pb.clamped;
+    s.have = true;
     return true;
 }
 
-// M-irtam-replay-024 (ruling R2 PERF): consumo render-path (wait-free salvo
-// handoff corto). Postea peticion idempotente si el slot no esta listo.
-bool App::consumeIrtamSample(int pairKind, GridData& dA, GridData& dB) {
+// M-irtam-replay-028: consumo render-path (wait-free salvo handoff corto).
+// Postea peticion idempotente si el slot no esta listo; copia el BRACKET
+// (el render interpola por cursor cada frame — simetria TEC).
+bool App::consumeIrtamBracket(int pairKind, IrtamBracketView& out) {
     if (!impl->replayMode || impl->replayEpoch <= 0.0) return false;
     const long long slot = (long long)std::floor(impl->replayEpoch / 900.0);
     std::lock_guard<std::mutex> lk(impl->irtamSampleMutex);
@@ -812,11 +872,35 @@ bool App::consumeIrtamSample(int pairKind, GridData& dA, GridData& dB) {
         }
     }
     if (s.have && s.pairKind == pairKind) {
-        dA = s.gA;
-        dB = s.gB;
+        out.a0 = s.gA0.values;
+        out.a1 = s.gA1.values;
+        out.b0 = s.gB0.values;
+        out.b1 = s.gB1.values;
+        out.t0 = s.t0;
+        out.t1 = s.t1;
+        out.have = true;
+        out.clamped = s.clamped;
         return true;
     }
     return false;
+}
+
+// M-irtam-replay-028: lerp en render por cursor sobre el bracket entregado
+// (simetria TEC; microsegundos, wait-free). f clampado a [0,1]; a fallo
+// devuelve grid invalido (ausente honesto).
+static GridData lerpBracketGrid(const std::vector<float>& v0,
+                                const std::vector<float>& v1, double t0,
+                                double t1, double epoch) {
+    GridData g;
+    double f = (t1 > t0) ? (epoch - t0) / (t1 - t0) : 0.0;
+    if (f < 0.0) f = 0.0;
+    if (f > 1.0) f = 1.0;
+    if (!irtamstate::lerpValues(v0, v1, f, g.values)) return GridData{};
+    g.width = irtameval::kGridW;
+    g.height = irtameval::kGridH;
+    g.timestamp = epoch;
+    g.valid = true;
+    return g;
 }
 
 // M0.1: resize diferido. El callback solo encola el tamaño pedido (puede
@@ -1454,22 +1538,10 @@ bool App::init(int width, int height, const char* title) {
                         std::chrono::milliseconds(50));
                     continue;
                 }
-                GridData gA, gB;
-                double tovShown = 0.0;
-                bool clamped = false;
-                const char* pA = (pk == 0) ? "fof2" : "b0";
-                const char* pB = (pk == 0) ? "hmf2" : "b1";
-                if (sampleIrtamPairAt(pA, pB, epoch, gA, gB, tovShown,
-                                      clamped)) {
+                // M-irtam-replay-028: el worker entrega el BRACKET (endpoints);
+                // el render interpola por cursor (simetria TEC).
+                if (self->sampleIrtamBracketWorker(pk, epoch, slot)) {
                     std::lock_guard<std::mutex> lk(self->impl->irtamSampleMutex);
-                    auto& s = self->impl->irtamSample_;
-                    s.pairKind = pk;
-                    s.epochSlot = slot;
-                    s.gA = std::move(gA);
-                    s.gB = std::move(gB);
-                    s.tovShown = tovShown;
-                    s.clamped = clamped;
-                    s.have = true;
                     self->impl->irtamSampleBusy.store(false);
                 } else {
                     // Fallo del par: se conserva la muestra anterior
@@ -1939,7 +2011,7 @@ void App::update(float dt) {
     // Fase 5: variables 5-7 (LUF/FOT/Spread-F) via RadioPropagationAdapter.
     // En replay, los grids derivados tambien siguen al tiempo de replay (gsAct).
     // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea en
-    // caliente — consumeIrtamSample postea al worker y pinta lo listo.
+    // caliente — consumeIrtamBracket postea al worker y pinta lo listo.
     if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
         bool centered = (impl->mapVariable == 3);  // hmF2: relieve de alturas reales
         impl->tecLayer.setDisplaceCentered(centered);
@@ -1963,10 +2035,17 @@ void App::update(float dt) {
         // solo-TEC. Solape real = W − 72 h = 24 h (no "cero solape" P5: ese
         // literal valia para la ventana TEC de 24 h). En live: bundle fresco.
         // En replay: ultima muestra lista del worker (024: jamas en caliente).
+        // M-irtam-replay-028: lerp por cursor sobre el bracket (simetria TEC).
         if (impl->replayMode) {
-            GridData dA, dB;
-            if (consumeIrtamSample(0, dA, dB)) {
-                updateMainGrid(impl->mapVariable == 8 ? dA : dB);
+            IrtamBracketView v;
+            if (consumeIrtamBracket(0, v)) {
+                const std::vector<float>& v0 =
+                    (impl->mapVariable == 8) ? v.a0 : v.b0;
+                const std::vector<float>& v1 =
+                    (impl->mapVariable == 8) ? v.a1 : v.b1;
+                GridData g = lerpBracketGrid(v0, v1, v.t0, v.t1,
+                                             impl->replayEpoch);
+                if (g.valid) updateMainGrid(g);
             }
         } else {
             auto ib = impl->getIrtam();
@@ -1980,18 +2059,22 @@ void App::update(float dt) {
         // D2 (veredicto 018): else espejo de 8/9 — sin el, el bundle fresco
         // pisaria la muestra cada frame.
         // M-irtam-replay-024: consume del worker (jamas en caliente).
+        // M-irtam-replay-028: lerp por cursor sobre el bracket (simetria TEC).
         if (impl->replayMode) {
-            GridData dA, dB;
-            if (consumeIrtamSample(1, dA, dB)) {
-                const GridData& src =
-                    (impl->mapVariable == 10) ? dA : dB;
-                if (impl->mapVariable == 10) {
-                    GridData g = src;
-                    for (float& v : g.values)
-                        if (v < 0.0f) v = 0.0f;
+            IrtamBracketView v;
+            if (consumeIrtamBracket(1, v)) {
+                const std::vector<float>& v0 =
+                    (impl->mapVariable == 10) ? v.a0 : v.b0;
+                const std::vector<float>& v1 =
+                    (impl->mapVariable == 10) ? v.a1 : v.b1;
+                GridData g = lerpBracketGrid(v0, v1, v.t0, v.t1,
+                                             impl->replayEpoch);
+                if (g.valid) {
+                    if (impl->mapVariable == 10) {
+                        for (float& vv : g.values)
+                            if (vv < 0.0f) vv = 0.0f;
+                    }
                     updateMainGrid(g);
-                } else {
-                    updateMainGrid(src);
                 }
             }
         } else {
@@ -2915,13 +2998,20 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // M-irtam-replay-024 (ruling R2 PERF): consume del worker, jamas
         // muestrea en caliente (render-path wait-free).
         if (impl->replayMode && impl->replayEpoch > 0.0) {
-            GridData dA, dB;
-            if (!consumeIrtamSample(0, dA, dB)) return;
+            IrtamBracketView v;
+            if (!consumeIrtamBracket(0, v)) return;
+            const std::vector<float>& v0 =
+                (impl->mapVariable == 8) ? v.a0 : v.b0;
+            const std::vector<float>& v1 =
+                (impl->mapVariable == 8) ? v.a1 : v.b1;
+            GridData g = lerpBracketGrid(v0, v1, v.t0, v.t1,
+                                         impl->replayEpoch);
+            if (!g.valid) return;
             const bool centered = (impl->mapVariable == 9);
             impl->tecLayer.setDisplaceCentered(centered);
             impl->shellLayer.setDisplaceCentered(centered);
             impl->tecLayer.clearRange();
-            updateMainGrid(impl->mapVariable == 8 ? dA : dB);
+            updateMainGrid(g);
             return;
         }
         auto b = impl->getIrtam();
@@ -2939,21 +3029,23 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         // M-irtam-replay-024 (ruling R2 PERF): consume del worker, jamas
         // muestrea en caliente (render-path wait-free).
         if (impl->replayMode && impl->replayEpoch > 0.0) {
-            GridData dA, dB;
-            if (!consumeIrtamSample(1, dA, dB)) return;
-            const GridData& src =
-                (impl->mapVariable == 10) ? dA : dB;
+            IrtamBracketView v;
+            if (!consumeIrtamBracket(1, v)) return;
+            const std::vector<float>& v0 =
+                (impl->mapVariable == 10) ? v.a0 : v.b0;
+            const std::vector<float>& v1 =
+                (impl->mapVariable == 10) ? v.a1 : v.b1;
+            GridData g = lerpBracketGrid(v0, v1, v.t0, v.t1,
+                                         impl->replayEpoch);
+            if (!g.valid) return;
             impl->tecLayer.setDisplaceCentered(false);
             impl->shellLayer.setDisplaceCentered(false);
             impl->tecLayer.clearRange();
             if (impl->mapVariable == 10) {
-                GridData g = src;
-                for (float& v : g.values)
-                    if (v < 0.0f) v = 0.0f;
-                updateMainGrid(g);
-            } else {
-                updateMainGrid(src);
+                for (float& vv : g.values)
+                    if (vv < 0.0f) vv = 0.0f;
             }
+            updateMainGrid(g);
             return;
         }
         auto b = impl->getIrtam();
@@ -3421,6 +3513,8 @@ void App::render() {
         if (impl->replayMode && impl->replayEpoch > 0.0) {
             // M-irtam-replay-024: lectura bajo handoff corto (el worker
             // escribe la muestra; solo escalares, sin espera).
+            // M-irtam-replay-028: el badge nombra el TOV del bracket MAS
+            // CERCANO al cursor (la imagen es el lerp ahi).
             double sTov = 0.0;
             bool sCl = false, sHave = false;
             {
@@ -3430,8 +3524,9 @@ void App::render() {
                     (impl->mapVariable == 10 || impl->mapVariable == 11)
                         ? 1
                         : 0;
-                if (s.have && s.pairKind == wantPair) {
-                    sTov = s.tovShown;
+                if (s.have && s.pairKind == wantPair && s.t1 > s.t0) {
+                    const double e = impl->replayEpoch;
+                    sTov = (e - s.t0 < s.t1 - e) ? s.t0 : s.t1;
                     sCl = s.clamped;
                     sHave = true;
                 }

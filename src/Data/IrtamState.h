@@ -91,4 +91,22 @@ struct LayerDataTime {
 LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
                             const LayerRanges& r, bool samplerBusy);
 
+// M-irtam-replay-028: bracket de un PAR sobre TOVs comunes (puro, testeable).
+// entries = {(param minusculas, tovEpoch)} del indice (memo o scan); exige
+// el TOV en AMBOS params (mate-check, misma convencion que commonTovEpoch).
+// Devuelve el bracket para lerp en render (el worker entrega endpoints, el
+// render interpola por cursor cada frame — simetria TEC).
+struct PairBracket {
+    double t0 = 0.0, t1 = 0.0, f = 0.0;
+    bool clamped = false;
+    bool empty = true;
+};
+struct TovEntry {
+    std::string param;
+    double tovEpoch = 0.0;
+};
+PairBracket pairBracketTovs(const std::vector<TovEntry>& entries,
+                            const std::string& pA, const std::string& pB,
+                            double epoch);
+
 }  // namespace irtamstate

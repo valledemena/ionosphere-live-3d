@@ -1,6 +1,7 @@
 // M-IRTAM-F2 (P5): estados honestos (ver IrtamState.h).
 #include "Data/IrtamState.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -176,6 +177,38 @@ LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
     LayerDataTime none;
     none.stale = true;
     return none;
+}
+
+PairBracket pairBracketTovs(const std::vector<TovEntry>& entries,
+                            const std::string& pA, const std::string& pB,
+                            double epoch) {
+    PairBracket r;
+    std::vector<double> tovs;
+    for (const auto& e : entries) {
+        if (e.tovEpoch <= 0.0) continue;
+        const bool isA = (e.param == pA);
+        const bool isB = (e.param == pB);
+        if (!isA && !isB) continue;
+        const std::string& other = isA ? pB : pA;
+        bool mate = false;
+        for (const auto& o : entries) {
+            if (o.param == other && o.tovEpoch == e.tovEpoch) {
+                mate = true;
+                break;
+            }
+        }
+        if (mate) tovs.push_back(e.tovEpoch);
+    }
+    std::sort(tovs.begin(), tovs.end());
+    tovs.erase(std::unique(tovs.begin(), tovs.end()), tovs.end());
+    const TovBracket br = bracketTovs(tovs, epoch);
+    if (br.empty) return r;
+    r.t0 = tovs[br.i0];
+    r.t1 = tovs[br.i1];
+    r.f = br.f;
+    r.clamped = br.clamped;
+    r.empty = false;
+    return r;
 }
 
 }  // namespace irtamstate

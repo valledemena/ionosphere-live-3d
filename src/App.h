@@ -4,6 +4,9 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
+#include <string>
+#include <vector>
+
 struct GridData;   // Ionosphere/GridLayer.h (solo referencia en la interfaz)
 #include "Data/SdoImageAdapter.h"  // M11: SdoImage (std-only, seguro en header)
 
@@ -36,7 +39,17 @@ private:
     // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea — postea
     // peticion idempotente al worker y consume la ultima muestra lista
     // (handoff corto). En miss pinta lo anterior. Render-path wait-free.
-    bool consumeIrtamSample(int pairKind, GridData& dA, GridData& dB);
+    // M-irtam-replay-028: el worker entrega el BRACKET (endpoints) y el
+    // render interpola por cursor cada frame (simetria TEC).
+    struct IrtamBracketView {
+        std::vector<float> a0, a1, b0, b1;  // mallas 45x46 row-major E2
+        double t0 = 0.0, t1 = 0.0;          // TOVs del bracket
+        bool have = false, clamped = false;
+    };
+    bool consumeIrtamBracket(int pairKind, IrtamBracketView& out);
+    // M-irtam-replay-028: cuerpo del worker (HILO SAMPLER, nunca render).
+    bool sampleIrtamBracketWorker(int pairKind, double epoch,
+                                  long long slot);
     void rebuildSlice(bool force);  // cortina A=pinned B=hover desde lastVolume
     float currentKp() const;  // Kp del ultimo bundle (2.0 si no hay)
 

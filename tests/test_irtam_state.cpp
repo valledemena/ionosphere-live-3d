@@ -201,6 +201,36 @@ int main() {
                    u.dataEpoch < 0.0 && u.stale);
     }
 
+    std::printf("--- M-irtam-replay-028: bracket de par (testeable) ---\n");
+    {
+        // TOVs comunes foF2xhmF2 en {1000, 1900, 2800}; B0 huerfano en 1500.
+        const std::vector<TovEntry> v = {
+            {"fof2", 1000.0}, {"hmf2", 1000.0}, {"fof2", 1900.0},
+            {"hmf2", 1900.0}, {"fof2", 2800.0}, {"hmf2", 2800.0},
+            {"b0", 1500.0},
+        };
+        PairBracket b = pairBracketTovs(v, "fof2", "hmf2", 1450.0);
+        check_bool("bracket medio f=0.5",
+                   !b.empty && !b.clamped && b.t0 == 1000.0 &&
+                       b.t1 == 1900.0 && std::fabs(b.f - 0.5) < 1e-12);
+        PairBracket c = pairBracketTovs(v, "fof2", "hmf2", 50.0);
+        check_bool("bajo rango: clamp t0",
+                   !c.empty && c.clamped && c.t0 == 1000.0 && c.t1 == 1000.0);
+        PairBracket h = pairBracketTovs(v, "fof2", "hmf2", 9999.0);
+        check_bool("sobre rango: clamp t1",
+                   !h.empty && h.clamped && h.t0 == 2800.0 && h.t1 == 2800.0);
+        // Par B0xB1 sin interseccion (b1 ausente): vacio -> ausente honesto.
+        PairBracket e = pairBracketTovs(v, "b0", "b1", 1500.0);
+        check_bool("sin par comun: empty", e.empty);
+        // Huerfanos no contaminan (b0@1500 sin mate no entra).
+        PairBracket m = pairBracketTovs(v, "fof2", "hmf2", 1500.0);
+        check_bool("huerfano ignorado: tramo [1000,1900]",
+                   !m.empty && m.t0 == 1000.0 && m.t1 == 1900.0);
+        std::vector<TovEntry> nov;
+        check_bool("vacio: empty",
+                   pairBracketTovs(nov, "fof2", "hmf2", 1500.0).empty);
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
