@@ -131,4 +131,51 @@ std::string badgeSampled(const std::string& param, double shownTov,
     return std::string(buf);
 }
 
+namespace {
+
+LayerDataTime clampToRange(double epoch, double oldest, double newest) {
+    LayerDataTime r;
+    if (oldest < 0.0 || newest < 0.0 || newest < oldest) {
+        r.dataEpoch = -1.0;
+        r.stale = true;
+        return r;
+    }
+    if (epoch <= oldest) {
+        r.dataEpoch = oldest;
+        r.stale = epoch < oldest;
+        r.clamped = epoch < oldest;
+        return r;
+    }
+    if (epoch >= newest) {
+        r.dataEpoch = newest;
+        r.stale = epoch > newest;
+        r.clamped = epoch > newest;
+        return r;
+    }
+    r.dataEpoch = epoch;
+    return r;
+}
+
+}  // namespace
+
+LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
+                            const LayerRanges& r, bool samplerBusy) {
+    if (mapVariable >= 8 && mapVariable <= 11) {
+        // IRTAM: ventana [now-96h, now-72h]; stale = clamp o worker ocupado.
+        LayerDataTime out =
+            clampToRange(replayEpoch, nowUtc - 345600.0, nowUtc - 259200.0);
+        if (samplerBusy) out.stale = true;
+        return out;
+    }
+    if (mapVariable >= 1 && mapVariable <= 7) {
+        return clampToRange(replayEpoch, r.giroOldest, r.giroNewest);
+    }
+    if (mapVariable == 0) {
+        return clampToRange(replayEpoch, r.tecOldest, r.tecNewest);
+    }
+    LayerDataTime none;
+    none.stale = true;
+    return none;
+}
+
 }  // namespace irtamstate

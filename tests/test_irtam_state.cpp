@@ -152,6 +152,55 @@ int main() {
         check_bool("sin TOV: honesto", n.find("sin datos") != std::string::npos);
     }
 
+    std::printf("--- M-irtam-replay-025: hora-dato por capa (rangos runtime) ---\n");
+    {
+        LayerRanges r;
+        r.tecOldest = 1000.0;
+        r.tecNewest = 2000.0;
+        r.giroOldest = 1500.0;
+        r.giroNewest = 2500.0;
+        const double now = 100000.0;
+        LayerDataTime t = layerDataTime(0, 1500.0, now, r, false);
+        check_bool("TEC dentro: hora-dato = epoch, fresco",
+                   t.dataEpoch == 1500.0 && !t.stale && !t.clamped);
+        LayerDataTime tc = layerDataTime(0, 500.0, now, r, false);
+        check_bool("TEC bajo rango: clamp al borde + stale",
+                   tc.dataEpoch == 1000.0 && tc.stale && tc.clamped);
+        LayerDataTime tc2 = layerDataTime(0, 9999.0, now, r, false);
+        check_bool("TEC sobre rango: clamp al borde + stale",
+                   tc2.dataEpoch == 2000.0 && tc2.stale && tc2.clamped);
+        LayerDataTime g = layerDataTime(3, 2000.0, now, r, false);
+        check_bool("GIRO dentro: usa rango GIRO, no TEC",
+                   g.dataEpoch == 2000.0 && !g.stale);
+        LayerDataTime g2 = layerDataTime(6, 100.0, now, r, false);
+        check_bool("GIRO fuera: clamp GIRO",
+                   g2.dataEpoch == 1500.0 && g2.stale);
+        LayerRanges empty;
+        LayerDataTime e = layerDataTime(0, 1500.0, now, empty, false);
+        check_bool("TEC sin historia: sin dato + stale",
+                   e.dataEpoch < 0.0 && e.stale);
+        // IRTAM: ventana [now-96h, now-72h], sin hardcode en el llamador
+        // (now realista para epochs positivos).
+        const double nowR = 1789500000.0;
+        LayerDataTime i =
+            layerDataTime(8, nowR - 80.0 * 3600.0, nowR, r, false);
+        check_bool("IRTAM en zona: fresco",
+                   !i.stale && !i.clamped &&
+                       i.dataEpoch == nowR - 80.0 * 3600.0);
+        LayerDataTime ib =
+            layerDataTime(10, nowR - 10.0 * 3600.0, nowR, r, false);
+        check_bool("IRTAM en zona TEC: clamp al borde fresco + stale",
+                   ib.clamped && ib.stale &&
+                       ib.dataEpoch == nowR - 72.0 * 3600.0);
+        LayerDataTime iw =
+            layerDataTime(9, nowR - 80.0 * 3600.0, nowR, r, true);
+        check_bool("IRTAM worker ocupado: stale (O2 veredicto 024)",
+                   iw.stale);
+        LayerDataTime u = layerDataTime(99, 1500.0, now, r, false);
+        check_bool("variable desconocida: sin dato",
+                   u.dataEpoch < 0.0 && u.stale);
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

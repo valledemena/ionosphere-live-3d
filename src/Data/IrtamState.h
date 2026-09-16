@@ -72,4 +72,23 @@ std::string formatTovShort(double tovEpoch);
 std::string badgeSampled(const std::string& param, double shownTov,
                          double nowUtc, bool clamped);
 
+// M-irtam-replay-025 (ruling R2 RELOJ): hora-dato por capa con rangos
+// REALES leidos en runtime (sin hardcodear 24 h/12 h). El llamador aporta
+// los rangos (TEC de tecHist bajo lock, GIRO de historyStats/histHours);
+// IRTAM usa las zonas R1. Puro, testeable en CI.
+struct LayerRanges {
+    double tecOldest = -1.0, tecNewest = -1.0;    // <0 = historial vacio
+    double giroOldest = -1.0, giroNewest = -1.0;  // <0 = historial vacio
+};
+struct LayerDataTime {
+    double dataEpoch = -1.0;  // hora-dato de la capa (<0 = sin dato)
+    bool stale = false;       // clampeada o worker ocupado (ver nota)
+    bool clamped = false;
+};
+// samplerBusy = worker IRTAM con peticion en curso (O2 del veredicto 024:
+// el flag solo-escritura ahora se lee): en IRTAM, ocupado => stale (la
+// muestra visible va por detras del cursor). En TEC/GIRO se ignora.
+LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
+                            const LayerRanges& r, bool samplerBusy);
+
 }  // namespace irtamstate

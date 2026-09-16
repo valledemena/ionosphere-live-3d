@@ -4573,6 +4573,43 @@ void App::render() {
             ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T-24] structural gap (edges clamp with note) · [T-24,T] TEC/GIRO-only.");
+            // M-irtam-replay-025 (ruling R2 RELOJ): hora-dato de la capa
+            // ACTIVA con rangos reales (TEC de tecHist, GIRO de histHours;
+            // IRTAM por zonas) + flag stale/clamp cuando difiera del epoch.
+            {
+                irtamstate::LayerRanges lr;
+                {
+                    std::lock_guard<std::mutex> tlk(impl->tecHistMutex);
+                    if (!impl->tecHist.empty()) {
+                        lr.tecOldest = impl->tecHist.front().timestamp;
+                        lr.tecNewest = impl->tecHist.back().timestamp;
+                    }
+                }
+                if (gs.histHours > 0.0) {
+                    lr.giroNewest = nowUtcR;
+                    lr.giroOldest = nowUtcR - gs.histHours * 3600.0;
+                }
+                const bool busy = impl->irtamSampleBusy.load();
+                const irtamstate::LayerDataTime ldt =
+                    irtamstate::layerDataTime(impl->mapVariable,
+                                             impl->replayEpoch, nowUtcR, lr,
+                                             busy);
+                if (ldt.dataEpoch > 0.0) {
+                    if (ldt.stale) {
+                        ImGui::TextDisabled(
+                            "DATA %s (stale)",
+                            irtamstate::formatTovShort(ldt.dataEpoch).c_str());
+                    } else {
+                        ImGui::Text(
+                            "DATA %s",
+                            irtamstate::formatTovShort(ldt.dataEpoch).c_str());
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetItemTooltip("Hora-dato real de la capa activa (stale = clampeada al borde de su historia o worker en curso).");
+                } else {
+                    ImGui::TextDisabled("DATA sin dato en capa");
+                }
+            }
         }
         // M4 (P5a): linea de estado GIRO en ambos modos — rango real de replay
         // de estaciones y aviso de cortesia (rate-limit con reintento).
