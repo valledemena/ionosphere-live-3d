@@ -109,4 +109,15 @@ PairBracket pairBracketTovs(const std::vector<TovEntry>& entries,
                             const std::string& pA, const std::string& pB,
                             double epoch);
 
+// M-irtam-replay-031 (ruling toggle, misma particion de variables que
+// layerDataTime): rango con dato de la capa para el bucle por capa.
+// var 0 -> TEC real; vars 1-7 -> GIRO histHours; vars 8-11 -> estructural
+// [nowUtc-345600, nowUtc-259200] (literales de layerDataTime); otra -> invalid.
+struct LayerLoopRange {
+    double oldest = -1.0, newest = -1.0;  // rango con dato de la capa
+    bool valid = false;                   // oldest > 0 && newest > oldest
+};
+LayerLoopRange layerLoopRange(int mapVariable, double nowUtc,
+                              const LayerRanges& r);
+
 }  // namespace irtamstate

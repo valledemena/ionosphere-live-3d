@@ -211,4 +211,28 @@ PairBracket pairBracketTovs(const std::vector<TovEntry>& entries,
     return r;
 }
 
+LayerLoopRange layerLoopRange(int mapVariable, double nowUtc,
+                              const LayerRanges& r) {
+    LayerLoopRange out;
+    double oldest = -1.0, newest = -1.0;
+    if (mapVariable == 0) {
+        oldest = r.tecOldest;
+        newest = r.tecNewest;
+    } else if (mapVariable >= 1 && mapVariable <= 7) {
+        oldest = r.giroOldest;
+        newest = r.giroNewest;
+    } else if (mapVariable >= 8 && mapVariable <= 11) {
+        oldest = nowUtc - 345600.0;
+        newest = nowUtc - 259200.0;
+    } else {
+        return out;
+    }
+    if (oldest > 0.0 && newest > oldest) {
+        out.oldest = oldest;
+        out.newest = newest;
+        out.valid = true;
+    }
+    return out;
+}
+
 }  // namespace irtamstate

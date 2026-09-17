@@ -231,6 +231,41 @@ int main() {
                    pairBracketTovs(nov, "fof2", "hmf2", 1500.0).empty);
     }
 
+    std::printf("--- M-irtam-replay-031: rango del bucle por capa ---\n");
+    {
+        LayerRanges r;
+        r.tecOldest = 1000.0;
+        r.tecNewest = 2000.0;
+        r.giroOldest = 1500.0;
+        r.giroNewest = 2500.0;
+        const double now = 100000.0;
+        LayerLoopRange t = layerLoopRange(0, now, r);
+        check_bool("TEC valida",
+                   t.valid && t.oldest == 1000.0 && t.newest == 2000.0);
+        LayerRanges e;
+        check_bool("TEC vacia: invalid",
+                   !layerLoopRange(0, now, e).valid);
+        LayerRanges one;
+        one.tecOldest = 1000.0;
+        one.tecNewest = 1000.0;
+        check_bool("TEC un frame (oldest==newest): invalid",
+                   !layerLoopRange(0, now, one).valid);
+        LayerLoopRange g = layerLoopRange(3, now, r);
+        check_bool("GIRO valida",
+                   g.valid && g.oldest == 1500.0 && g.newest == 2500.0);
+        LayerRanges g0;
+        g0.tecOldest = 1000.0;
+        g0.tecNewest = 2000.0;
+        check_bool("GIRO histHours=0: invalid",
+                   !layerLoopRange(3, now, g0).valid);
+        LayerLoopRange i = layerLoopRange(8, 1789500000.0, r);
+        check_bool("IRTAM estructural exacto [now-345600,now-259200]",
+                   i.valid && i.oldest == 1789500000.0 - 345600.0 &&
+                       i.newest == 1789500000.0 - 259200.0);
+        check_bool("var desconocida: invalid",
+                   !layerLoopRange(99, now, r).valid);
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
