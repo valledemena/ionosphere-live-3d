@@ -2049,7 +2049,9 @@ void App::update(float dt) {
         updateMainGrid(giroInterpGrid(gsAct, impl->mapVariable - 1, 72, 72));
     } else if (impl->mapVariable >= 5 && impl->mapVariable <= 7) {
         float kpProxy = currentKp();
-        double epoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        double epoch = (impl->replayMode && impl->replayEpoch > 0.0) ? impl->replayEpoch
+                       : (replayEpoch > 0.0)                         ? replayEpoch
+                                                                     : (double)std::time(nullptr);
         // M7 (plan 10): flujo X-ray del ultimo bundle para el termino SID
         // del LUF en la rejilla (mismo guard que el flare del volumen).
         float xrFlux = (impl->lastXray && impl->lastXray->latest.valid)
@@ -2141,7 +2143,9 @@ void App::update(float dt) {
     if (impl->hfTraceVisible || impl->hfPanelOpen) {
         static double lastHfGrid = -1.0;
         static double lastHfEpoch = -1.0;
-        const double hfEpoch = (replayEpoch > 0.0) ? replayEpoch : (double)std::time(nullptr);
+        const double hfEpoch = (impl->replayMode && impl->replayEpoch > 0.0) ? impl->replayEpoch
+                               : (replayEpoch > 0.0)                         ? replayEpoch
+                                                                             : (double)std::time(nullptr);
         const bool hfEpochJump = (lastHfEpoch < 0.0) || std::fabs(hfEpoch - lastHfEpoch) > 30.0;
         if (lastHfGrid < 0.0 || (now - lastHfGrid) > 1.0 || hfEpochJump || impl->hfCircuitDirty) {
             lastHfGrid = now;
@@ -3009,7 +3013,8 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
         impl->tecLayer.setDisplaceCentered(false);
         impl->shellLayer.setDisplaceCentered(false);
         float kpProxy = currentKp();
-        double epoch = (double)std::time(nullptr);  // derive*() espera Unix UTC
+        double epoch = (impl->replayMode && impl->replayEpoch > 0.0) ? impl->replayEpoch
+                       : (double)std::time(nullptr);  // derive*() espera Unix UTC
         int var = impl->mapVariable - 5;   // 0=LUF,1=FOT,2=Spread-F
         // M7 (plan 10): flujo X-ray del ultimo bundle para el termino SID.
         float xrFlux = (impl->lastXray && impl->lastXray->latest.valid)
