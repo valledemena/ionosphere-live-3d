@@ -150,4 +150,25 @@ std::vector<double> missingSince(const std::vector<double>& cachedEpochs,
     return out;
 }
 
+std::vector<std::size_t> missingInWindow(
+    const std::vector<double>& cachedEpochs,
+    const std::vector<double>& indexEpochs, double nowUtc, std::size_t cap) {
+    const double oldest = nowUtc - kHistWindowSec;
+    std::vector<std::size_t> out;
+    for (std::size_t i = 0; i < indexEpochs.size(); i++) {
+        const double e = indexEpochs[i];
+        if (e < oldest) continue;  // fuera de ventana: ni se pide
+        bool found = false;
+        for (double c : cachedEpochs) {
+            if (c == e) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) out.push_back(i);
+    }
+    if (out.size() > cap) out.erase(out.begin(), out.end() - cap);
+    return out;
+}
+
 }  // namespace teccache

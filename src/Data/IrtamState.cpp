@@ -41,16 +41,13 @@ std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
 
 ReplayZone zoneForAge(double ageSec) {
     if (ageSec >= 259200.0 && ageSec <= 345600.0) return ReplayZone::IrtamOnly;
-    if (ageSec > 86400.0 && ageSec < 259200.0) return ReplayZone::DeadGap;
     return ReplayZone::TecOnly;
 }
 
 const char* zoneName(ReplayZone z) {
     switch (z) {
         case ReplayZone::IrtamOnly: return "solo-IRTAM [T-96,T-72]";
-        case ReplayZone::DeadGap:
-            return "hueco estructural [T-72,T-24] (lag E11)";
-        default: return "solo-TEC [T-24,T]";
+        default: return "solo-TEC [T-72,T]";
     }
 }
 

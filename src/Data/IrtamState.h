@@ -6,12 +6,10 @@
 // Testeable en CI (tests/test_irtam_state.cpp).
 //
 // C9 (aritmetica G9, comentario exigido — ver update() en App.cpp):
-//   ventana de replay ~= 24 h (tecHist cap 72, tecCacheMaxAgeH 24.0) y el dato
-//   IRTAM disponible empieza en T-72 h (lag 3 dias, kGambitLagSec): CERO
-//   solape. IRTAM NO participa del muestreo temporal del replay: durante
-//   replay se muestra el bucket mas reciente con nota honesta
-//   "(retrospectivo, fuera de ventana de replay)" — congelado DECLARADO,
-//   no silencioso.
+//   ventana de replay ~= 72 h (tecHist cap 432, tecCacheMaxAgeH 72.0) y el dato
+//   IRTAM disponible empieza en T-72 h (lag 3 dias, kGambitLagSec): solape en
+//   el borde T-72. IRTAM participa del muestreo temporal del replay (bracket
+//   + lerp al epoch) con nota honesta al TOV mostrado.
 //
 // Reglas P5: sin dato valido (429/504/parse-fail/ventana/TOV-no-comun) la
 // capa NO se dibuja (valid=false, precedente cartoon-out) + estado textual
@@ -40,12 +38,12 @@ std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
 // (86400, TEC) queda intacta.
 inline constexpr double kIrtamReplayWindowSec = 345600.0;  // 96 h
 
-// Zonas de la ventana de union (ruling §5 CORRECCION 2): solo-IRTAM
-// [T-96,T-72] · MUERTO estructural (T-72,T-24) · solo-TEC [T-24,T].
-enum class ReplayZone { IrtamOnly, DeadGap, TecOnly };
+// Zonas de la ventana de union (TEC-ext 034): solo-IRTAM [T-96,T-72] ·
+// solo-TEC [T-72,T] (el hueco estructural murio al extender TEC).
+enum class ReplayZone { IrtamOnly, TecOnly };
 
 // Por edad del epoch (ageSec = now - epoch): [72h,96h] IrtamOnly;
-// (24h,72h) DeadGap; resto (incl. futuro) TecOnly. Puro.
+// resto (incl. futuro) TecOnly. Puro.
 ReplayZone zoneForAge(double ageSec);
 const char* zoneName(ReplayZone z);
 

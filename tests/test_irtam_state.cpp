@@ -79,10 +79,10 @@ int main() {
                    zoneForAge(288000.0) == ReplayZone::IrtamOnly);
         check_bool("96h borde -> IrtamOnly",
                    zoneForAge(345600.0) == ReplayZone::IrtamOnly);
-        check_bool("48h -> DeadGap",
-                   zoneForAge(172800.0) == ReplayZone::DeadGap);
-        check_bool("24h+1s -> DeadGap",
-                   zoneForAge(86401.0) == ReplayZone::DeadGap);
+        check_bool("48h -> TecOnly (hueco muerto TEC-ext 034)",
+                   zoneForAge(172800.0) == ReplayZone::TecOnly);
+        check_bool("24h+1s -> TecOnly",
+                   zoneForAge(86401.0) == ReplayZone::TecOnly);
         check_bool("24h -> TecOnly",
                    zoneForAge(86400.0) == ReplayZone::TecOnly);
         check_bool("1h -> TecOnly", zoneForAge(3600.0) == ReplayZone::TecOnly);
@@ -90,7 +90,6 @@ int main() {
                    zoneForAge(-100.0) == ReplayZone::TecOnly);
         check_bool("nombres no vacios",
                    std::string(zoneName(ReplayZone::IrtamOnly)).size() > 0 &&
-                       std::string(zoneName(ReplayZone::DeadGap)).size() > 0 &&
                        std::string(zoneName(ReplayZone::TecOnly)).size() > 0);
     }
 

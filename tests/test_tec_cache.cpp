@@ -97,15 +97,15 @@ int main() {
         check_bool("truncado -> false", !loadFrame(d + "/tec_2.bin", g));
     }
 
-    std::printf("--- M10a: cap 72 + heal + orden ---\n");
+    std::printf("--- M10a: cap 432 + heal + orden ---\n");
     {
         std::string d = freshDir("cap");
-        for (int i = 0; i < 75; i++) saveFrame(d, makeFrame(1000000.0 + i * 300.0, 2, 2));
+        for (int i = 0; i < 435; i++) saveFrame(d, makeFrame(1000000.0 + i * 300.0, 2, 2));
         FILE* f = std::fopen((d + "/tec_9.bin").c_str(), "wb");
         std::fputs("GARBAGE", f);
         std::fclose(f);
         ScanResult r = loadCached(d);
-        check_bool("72 kept", (int)r.frames.size() == 72);
+        check_bool("432 kept", (int)r.frames.size() == 432);
         check_bool("3 podados", r.pruned == 3);
         check_bool("1 corrupto dropeado", r.dropped == 1);
         check_bool("corrupto borrado del disco",
@@ -136,6 +136,54 @@ int main() {
         check_bool("reciente es current-eligible", isFresh(now - 3600.0, now, 24.0));
         check_bool("viejo solo replay", !isFresh(now - 25.0 * 3600.0, now, 24.0));
         check_bool("futuro leve es fresh", isFresh(now + 60.0, now, 24.0));
+    }
+
+    std::printf("--- TEC-ext 034: ventana (missingInWindow) ---\n");
+    {
+        // Ventana 72 h = 259200 s; indice 100..1000 paso 100.
+        std::vector<double> index;
+        for (int e = 100; e <= 1000; e += 100) index.push_back((double)e);
+        const double now = 2000.0;  // ventana [-257200, 2000]: todo dentro
+        check_bool("cache vacio -> ventana completa cap-bound",
+                   missingInWindow({}, index, now, 432).size() == 10);
+        // (1) filtra viejos fuera de ventana.
+        {
+            const double n2 = 300000.0;  // ventana [40800, 300000]
+            std::vector<double> idx2;
+            for (int e = 0; e <= 300000; e += 30000) idx2.push_back((double)e);
+            auto got = missingInWindow({}, idx2, n2, 432);
+            check_bool("filtra viejos fuera de ventana",
+                       !got.empty() &&
+                           idx2[got.front()] >= n2 - 259200.0);
+        }
+        // (2) dedup exacto contra cached.
+        {
+            std::vector<double> cached = {400.0, 600.0, 800.0};
+            auto got = missingInWindow(cached, index, now, 432);
+            bool ok = true;
+            for (std::size_t i : got) {
+                if (index[i] == 400.0 || index[i] == 600.0 ||
+                    index[i] == 800.0)
+                    ok = false;
+            }
+            check_bool("dedup exacto contra cached",
+                       ok && got.size() == 10 - 3);
+        }
+        // (3) orden asc.
+        {
+            auto got = missingInWindow({}, index, now, 432);
+            bool sorted = true;
+            for (std::size_t i = 1; i < got.size(); i++)
+                if (got[i] < got[i - 1]) sorted = false;
+            check_bool("orden asc", sorted && !got.empty());
+        }
+        // (4) cap conserva los mas nuevos cuando faltan > cap.
+        {
+            auto got = missingInWindow({}, index, now, 4);
+            check_bool("cap conserva los 4 mas nuevos",
+                       got.size() == 4 && index[got.back()] == 1000.0 &&
+                           index[got.front()] == 700.0);
+        }
     }
 
     std::printf("\n[test_tec_cache] %d OK, %d FAIL\n", g_ok, g_fail);

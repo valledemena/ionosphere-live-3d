@@ -22,7 +22,9 @@ struct Frame {
 
 inline constexpr uint32_t kMagic = 0x54434331u;  // "TCC1"
 inline constexpr uint32_t kVersion = 1u;
-inline constexpr int kCapFrames = 72;            // mismo cap que tecHist (M4/P3)
+inline constexpr int kCapFrames = 432;           // mismo cap que tecHist (TEC-ext 034)
+inline constexpr double kHistWindowSec = 259200.0;
+    // 72 h — 432 x 10 min (sondeo Q-TEC-1, 0D632DA2)
 
 // Gate de escritura (twin-testeable): simulated JAMAS en cache.
 bool shouldCacheFrame(bool valid, bool simulated, bool enabled);
@@ -49,5 +51,14 @@ ScanResult loadCached(const std::string& dir);
 // Cache vacio -> todo el indice.
 std::vector<double> missingSince(const std::vector<double>& cachedEpochs,
                                  const std::vector<double>& indexEpochs);
+
+// Delta de precarga por VENTANA (TEC-ext 034): entradas del indice con
+// epoch >= nowUtc - kHistWindowSec ausentes en cachedEpochs (dedup exacto:
+// ambas poblaciones derivan del mismo time_tag). Orden ASC (fetch
+// oldest-first); si faltan > cap se conservan los cap MAS NUEVOS (el anillo
+// borra los viejos — no se pide lo que se pierde). Puro.
+std::vector<std::size_t> missingInWindow(const std::vector<double>& cachedEpochs,
+                                         const std::vector<double>& indexEpochs,
+                                         double nowUtc, std::size_t cap);
 
 }  // namespace teccache

@@ -29,7 +29,7 @@ private:
     void updateMainGrid(const GridData& grid);  // TEC + outer shell a la vez
     void pushHistoryFrame(const GridData& grid, double ts, bool simulated = false);
     void uploadSunTexture(const SdoImage& im);  // M11: subida GL (render thread)
-    void drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)  // anillo ordenado, dedup, cap 72 + write-through M10
+    void drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)  // anillo ordenado, dedup, cap 432 + write-through M10
     void restoreTecCache();  // M10: anillo + bundle desde cache/ (init)
     void restoreKc2gCache();  // FASE B (P2): historia kc2g desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)

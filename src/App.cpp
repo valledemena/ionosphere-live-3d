@@ -255,7 +255,7 @@ struct App::Impl {
     float replaySpeed = 2.0f;    // frames por segundo
     int preReplayVar = 0;
     // M-irtam-replay-A (ruling R1): cursor primario = epoch continuo sobre
-    // la ventana de union (96 h IRTAM + 24 h TEC). replayPos se deriva del
+    // la ventana de union (96 h IRTAM + 72 h TEC). replayPos se deriva del
     // epoch para el lerp TEC interno (inversion mecanica).
     double replayEpoch = -1.0;   // epoch continuo UTC (s)
     // M-irtam-replay-031 (ruling toggle): bucle por capa (false = union
@@ -374,7 +374,7 @@ struct App::Impl {
     std::atomic<bool> liveTecArrived{false};
     // M10 (cache TEC en disco): settings + estado de restore.
     bool tecCacheEnabled = true;
-    double tecCacheMaxAgeH = 24.0;   // >maxAge puebla replay, no current
+    double tecCacheMaxAgeH = 72.0;   // >maxAge puebla replay, no current
     std::atomic<bool> cacheLoaded{false};     // init-read con frames reales
     std::atomic<double> cacheNewestEpoch{-1.0};
     std::atomic<int> cacheRestored{0};
@@ -1302,9 +1302,8 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setVisible(true);           // sincronizar el toggle con el checkbox inicial (App.cpp L524)
     impl->tecLayer.setAltitude(300.0f / 6371.0f);  // arrancar a 300 km (radio ~1.047), no pegado a 1.02
     applyRelief();
-    // Precarga del historico GloTEC (indice recuperado): ultimos 72 frames
-    // (~6 h o mas; M4/P3) en background para que el replay tenga pasado real
-    // al instante.
+    // Precarga del historico GloTEC (indice recuperado): ventana 72 h en
+    // background para que el replay tenga pasado real al instante.
     {
         App* self = this;
         // M0.2: hilo joinable (shutdown lo espera) + chequeos contra
@@ -1322,25 +1321,33 @@ bool App::init(int width, int height, const char* title) {
             loader.setGridSize(72, 72);
             std::vector<GloTecFrame> idx;
             if (loader.fetchIndex(idx)) {
-                // M10: delta — lo ya cacheado no se descarga (lower_bound por epoch).
-                size_t first = 0;
-                int nCached = 0;
-                if (self->impl->tecCacheEnabled && self->impl->cacheLoaded.load()) {
-                    const double cut = self->impl->cacheNewestEpoch.load();
-                    while (first < idx.size() && idx[first].timeUtc <= cut) first++;
-                    nCached = self->impl->cacheRestored.load();
+                // TEC-ext 034: ventana [now-72 h, now] ausente en anillo/disco
+                // (el take clasico solo pedia mas-nuevo-que-cache: en cache
+                // calida no habria backfill de viejos).
+                std::vector<double> cachedEp;
+                {
+                    std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
+                    for (const auto& f : self->impl->tecHist)
+                        cachedEp.push_back(f.timestamp);
                 }
-                size_t avail = idx.size() > first ? idx.size() - first : 0;
-                size_t take = avail > 72 ? 72 : avail;   // M4/P3: ~6 h
-                self->impl->histTotal.store((int)take);
-                for (size_t k = idx.size() - take; k < idx.size(); k++) {
+                const int nCached = (int)cachedEp.size();
+                std::vector<double> idxEp;
+                idxEp.reserve(idx.size());
+                for (const auto& e : idx) idxEp.push_back(e.timeUtc);
+                const double nowPre =
+                    (double)std::time(nullptr);
+                const std::vector<std::size_t> want =
+                    teccache::missingInWindow(cachedEp, idxEp, nowPre,
+                                              (std::size_t)teccache::kCapFrames);
+                self->impl->histTotal.store((int)want.size());
+                for (std::size_t k : want) {
                     if (self->impl->shutdownRequested.load()) break;   // M0.2
                     GridData fr;
                     if (loader.fetchFrame(idx[k].url, idx[k].timeUtc, fr))
                         self->pushHistoryFrame(fr, idx[k].timeUtc, false);
                     self->impl->histDone.store(self->impl->histDone.load() + 1);
                 }
-                printf("[App] History preload: %d cached + %d fetched\n", nCached, (int)take);
+                printf("[App] History preload: %d cached + %d fetched\n", nCached, (int)want.size());
             }
             self->impl->histLoading.store(false);
         });
@@ -2060,12 +2067,10 @@ void App::update(float dt) {
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
         // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
-        // M-irtam-replay-A (ruling R1 §5 + CORRECCION 2): la ventana de union
-        // (96 h) se descompone en [T-96,T-72] solo-IRTAM (muestreo lerp al
-        // epoch) · [T-72,T-24] MUERTO estructural 48 h (fisica E11: ninguna
-        // fuente lo cubre; clamp al borde con nota, no defecto) · [T-24,T]
-        // solo-TEC. Solape real = W − 72 h = 24 h (no "cero solape" P5: ese
-        // literal valia para la ventana TEC de 24 h). En live: bundle fresco.
+        // M-irtam-replay-A + TEC-ext 034: ventana de union (96 h) =
+        // [T-96,T-72] solo-IRTAM (muestreo lerp al epoch) · [T-72,T]
+        // solo-TEC (TEC-ext 034: ventana 72 h con backfill de precarga) ·
+        // solape TEC-IRTAM = borde T-72. En live: bundle fresco.
         // En replay: ultima muestra lista del worker (024: jamas en caliente).
         // M-irtam-replay-028: lerp por cursor sobre el bracket (simetria TEC).
         if (impl->replayMode) {
@@ -2839,7 +2844,7 @@ void App::restoreTecCache() {
             g.valid = true;
             impl->tecHist.push_back(g);  // scan ordenado asc
         }
-        while (impl->tecHist.size() > 72) impl->tecHist.erase(impl->tecHist.begin());
+        while (impl->tecHist.size() > 432) impl->tecHist.erase(impl->tecHist.begin());   // TEC-ext 034: cap 432 = 72 h @ 10 min
     }
     const double newest = scan.frames.back().epoch;
     const double now = (double)std::time(nullptr);
@@ -2908,8 +2913,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
     size_t pos = 0;
     while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
     impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
-    impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
-    while (impl->tecHist.size() > 72) impl->tecHist.erase(impl->tecHist.begin());   // M4/P3: cap 72 (~6 h)
+    while (impl->tecHist.size() > 432) impl->tecHist.erase(impl->tecHist.begin());   // TEC-ext 034: cap 432 = 72 h @ 10 min
     // M10: todo frame real que entra al anillo persiste (simulated/ESA excluidos).
     if (teccache::shouldCacheFrame(grid.valid, simulated, impl->tecCacheEnabled)) {
         teccache::Frame f;
@@ -4633,7 +4637,7 @@ void App::render() {
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 72) feed the replay. GIRO station history: %.1f h.", gs.histHours);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 432) feed the replay. GIRO station history: %.1f h.", gs.histHours);
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
                     impl->replayMode = true;
@@ -4731,9 +4735,8 @@ void App::render() {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip("Scrub time over the active loop range "
-                                      "(pauses playback). TEC covers [T-24,T], "
-                                      "IRTAM [T-96,T-72]; [T-72,T-24] is a "
-                                      "structural gap (3-day lag physics).");
+                                      "(pauses playback). TEC covers [T-72,T], "
+                                      "IRTAM [T-96,T-72]; overlap at T-72.");
             ImGui::SameLine();
             char tbuf[32] = "--:--";
             {
@@ -4753,7 +4756,7 @@ void App::render() {
                 nowUtcR - impl->replayEpoch);
             ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
             if (ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T-24] structural gap (edges clamp with note) · [T-24,T] TEC/GIRO-only.");
+                ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T] TEC (+ GIRO 6 h).");
             // M-irtam-replay-025 (ruling R2 RELOJ): hora-dato de la capa
             // ACTIVA con rangos reales (reutiliza la recogida de arriba).
             {
