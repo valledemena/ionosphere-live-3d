@@ -51,6 +51,24 @@ const char* zoneName(ReplayZone z) {
     }
 }
 
+const char* perLayerZoneName(double replayEpoch, double nowUtc,
+                             const LayerRanges& r) {
+    const bool tec = (r.tecOldest > 0.0 && r.tecOldest <= replayEpoch &&
+                      replayEpoch <= r.tecNewest);
+    const bool giro = (r.giroOldest > 0.0 && r.giroOldest <= replayEpoch &&
+                       replayEpoch <= r.giroNewest);
+    const bool irtam = (nowUtc - 345600.0 <= replayEpoch &&
+                        replayEpoch <= nowUtc - 259200.0);
+    if (tec && giro && irtam) return "TEC+GIRO+IRTAM";
+    if (tec && giro) return "TEC+GIRO";
+    if (tec && irtam) return "TEC+IRTAM";
+    if (giro && irtam) return "GIRO+IRTAM";
+    if (tec) return "solo-TEC";
+    if (giro) return "solo-GIRO";
+    if (irtam) return "solo-IRTAM";
+    return "sin datos";
+}
+
 TovBracket bracketTovs(const std::vector<double>& sortedTovs, double epoch) {
     TovBracket r;
     if (sortedTovs.empty()) return r;

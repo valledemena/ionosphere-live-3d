@@ -89,6 +89,14 @@ struct LayerDataTime {
 LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
                             const LayerRanges& r, bool samplerBusy);
 
+// M-irtam-replay-038 (ruling coherencia Zone/DATA, familia 022): conjunto de
+// fuentes con dato REAL en el epoch del cursor (no la familia activa).
+// Orden canonico TEC+GIRO+IRTAM, prefijo "solo-" en singleton. TEC/GIRO por
+// rangos reales; IRTAM por banda estructural [now-345600,now-259200] (mismos
+// literales e inclusividad que layerLoopRange vars 8-11 y la via union). Puro.
+const char* perLayerZoneName(double replayEpoch, double nowUtc,
+                             const LayerRanges& r);
+
 // M-irtam-replay-028: bracket de un PAR sobre TOVs comunes (puro, testeable).
 // entries = {(param minusculas, tovEpoch)} del indice (memo o scan); exige
 // el TOV en AMBOS params (mate-check, misma convencion que commonTovEpoch).

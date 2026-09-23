@@ -200,6 +200,53 @@ int main() {
                    u.dataEpoch < 0.0 && u.stale);
     }
 
+    std::printf("--- M-irtam-replay-038: Zone por capa (perLayerZoneName) ---\n");
+    {
+        // Caso 037: TEC real [now-86.6h, now], cursor now-80h.
+        const double now = 1789500000.0;
+        LayerRanges r;
+        r.tecOldest = now - 86.6 * 3600.0;
+        r.tecNewest = now;
+        check_bool("1: TEC+IRTAM en cursor now-80h",
+                   std::string(perLayerZoneName(now - 80.0 * 3600.0, now,
+                                                r)) == "TEC+IRTAM");
+        check_bool("2: mismos rangos, cursor now-30h -> solo-TEC",
+                   std::string(perLayerZoneName(now - 30.0 * 3600.0, now,
+                                                r)) == "solo-TEC");
+        check_bool("3: cursor now-90h -> solo-IRTAM",
+                   std::string(perLayerZoneName(now - 90.0 * 3600.0, now,
+                                                r)) == "solo-IRTAM");
+        check_bool("4: borde T-72h inclusivo -> TEC+IRTAM",
+                   std::string(perLayerZoneName(now - 72.0 * 3600.0, now,
+                                                r)) == "TEC+IRTAM");
+        LayerRanges g;
+        g.giroOldest = now - 6.0 * 3600.0;
+        g.giroNewest = now;
+        check_bool("5: TEC vacio + GIRO -> solo-GIRO",
+                   std::string(perLayerZoneName(now - 3.0 * 3600.0, now,
+                                                g)) == "solo-GIRO");
+        LayerRanges tg;
+        tg.tecOldest = now - 24.0 * 3600.0;
+        tg.tecNewest = now;
+        tg.giroOldest = now - 6.0 * 3600.0;
+        tg.giroNewest = now;
+        check_bool("6: TEC+GIRO en now-3h",
+                   std::string(perLayerZoneName(now - 3.0 * 3600.0, now,
+                                                tg)) == "TEC+GIRO");
+        LayerRanges e;
+        check_bool("7: rangos vacios -> sin datos",
+                   std::string(perLayerZoneName(now - 3.0 * 3600.0, now,
+                                                e)) == "sin datos");
+        LayerRanges all;
+        all.tecOldest = now - 86.6 * 3600.0;
+        all.tecNewest = now;
+        all.giroOldest = now - 86.6 * 3600.0;
+        all.giroNewest = now;
+        check_bool("8: tres fuentes -> TEC+GIRO+IRTAM (orden canonico)",
+                   std::string(perLayerZoneName(now - 80.0 * 3600.0, now,
+                                                all)) == "TEC+GIRO+IRTAM");
+    }
+
     std::printf("--- M-irtam-replay-028: bracket de par (testeable) ---\n");
     {
         // TOVs comunes foF2xhmF2 en {1000, 1900, 2800}; B0 huerfano en 1500.

@@ -4736,7 +4736,10 @@ void App::render() {
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip("Scrub time over the active loop range "
                                       "(pauses playback). TEC covers [T-72,T], "
-                                      "IRTAM [T-96,T-72]; overlap at T-72.");
+                                      "IRTAM [T-96,T-72]; overlap at T-72. In "
+                                      "per-layer mode bounds follow the layer "
+                                      "real data (per-layer bounds may exceed "
+                                      "72 h with inherited frames).");
             ImGui::SameLine();
             char tbuf[32] = "--:--";
             {
@@ -4752,11 +4755,30 @@ void App::render() {
             ImGui::TextUnformatted(tbuf);
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Replay epoch (UTC).");
             // Zonas declaradas (ruling CORRECCION 2: el TimeBar lo declara).
-            const irtamstate::ReplayZone rz = irtamstate::zoneForAge(
-                nowUtcR - impl->replayEpoch);
-            ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
-            if (ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T] TEC (+ GIRO 6 h).");
+            // M-irtam-replay-038 (familia 022): en modo por capa la etiqueta
+            // Zone: deriva del mismo dato real (LayerRanges + banda IRTAM)
+            // que Loop/DATA; en union la via union queda byte-identica.
+            if (impl->replayLayerLoop) {
+                ImGui::TextDisabled(
+                    "Zone: %s",
+                    irtamstate::perLayerZoneName(impl->replayEpoch, nowUtcR,
+                                                lr));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetItemTooltip("Zone per-layer: sources with real "
+                                          "data at the cursor (TEC/GIRO real "
+                                          "ranges; IRTAM structural band "
+                                          "[T-96,T-72]). The real span floats "
+                                          "with cadence — 72 h is the nominal "
+                                          "download window; frames older "
+                                          "than T-72 h are inherited from "
+                                          "disk, not downloaded.");
+            } else {
+                const irtamstate::ReplayZone rz = irtamstate::zoneForAge(
+                    nowUtcR - impl->replayEpoch);
+                ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T] TEC (+ GIRO 6 h).");
+            }
             // M-irtam-replay-025 (ruling R2 RELOJ): hora-dato de la capa
             // ACTIVA con rangos reales (reutiliza la recogida de arriba).
             {
