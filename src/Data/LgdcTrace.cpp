@@ -38,7 +38,7 @@ std::string formatIsoMs(long long msSinceEpoch) {
 #else
     gmtime_r(&sec, &g);
 #endif
-    char buf[32];
+    char buf[64];
     std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
                   g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour,
                   g.tm_min, g.tm_sec, ms < 0 ? 0 : ms);

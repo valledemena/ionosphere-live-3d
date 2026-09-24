@@ -4739,7 +4739,9 @@ void App::render() {
                                       "IRTAM [T-96,T-72]; overlap at T-72. In "
                                       "per-layer mode bounds follow the layer "
                                       "real data (per-layer bounds may exceed "
-                                      "72 h with inherited frames).");
+                                      "72 h with inherited frames). Switching "
+                                      "Variable re-clamps the cursor into the "
+                                      "new bounds when needed (never jumps to live).");
             ImGui::SameLine();
             char tbuf[32] = "--:--";
             {
