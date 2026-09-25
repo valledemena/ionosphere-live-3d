@@ -57,6 +57,7 @@
 #include "Data/IrtamCoeffParse.h"  // M-IRTAM-F2 (P1b): flip aditivo (parse)
 #include "Data/IrtamGridEval.h"    // M-IRTAM-F2 (P1b): eval Jones-Gallet 46x45
 #include "Data/IrtamState.h"       // M-IRTAM-F2 (P5): estados honestos + replay
+#include "Data/ProviderStatus.h"  // M-prov-matrix (048): matriz de estado (puro)
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/VolumeRenderer.h"
@@ -102,6 +103,12 @@ struct App::Impl {
     std::shared_ptr<const XrayBundle> xray;
     std::shared_ptr<const SdoBundle> sdoB;  // M11
     std::shared_ptr<const irtamfetch::IrtamBundle> irtam;  // M-IRTAM-F2 (P4)
+    // M-prov-matrix (048): snapshots de estado por proveedor (solo lectura
+    // del estado ya computado; se escriben junto a cada publicacion de
+    // bundle y se leen en el gather del panel). provCopy = copia para
+    // construir filas fuera del lock.
+    provstatus::Snapshot provBoard[provstatus::PROV_COUNT];
+    provstatus::Snapshot provCopy[provstatus::PROV_COUNT];
     std::shared_ptr<const TecBundle> getTec() const { std::lock_guard<std::mutex> lk(bundleMutex); return tec; }
     std::shared_ptr<const IndicesBundle> getIndices() const { std::lock_guard<std::mutex> lk(bundleMutex); return indices; }
     std::shared_ptr<const WindBundle> getWind() const { std::lock_guard<std::mutex> lk(bundleMutex); return wind; }
@@ -1503,6 +1510,14 @@ bool App::init(int width, int height, const char* title) {
                     b->b1 = std::move(g1);
                 } while (false);
                 { std::lock_guard<std::mutex> lk(self->impl->bundleMutex); self->impl->irtam = b; }
+                // M-prov-matrix: fila IRTAM gambit (1 fila del hilo irtam).
+                provstatus::Snapshot sn;
+                sn.id = provstatus::PROV_IRTAM;
+                sn.hasData = b->valid;
+                sn.dataEpoch = b->dataEpoch;
+                sn.data = b->valid ? irtamstate::formatTovShort(b->dataEpoch) : "";
+                sn.error = b->error;
+                { std::lock_guard<std::mutex> lk(self->impl->bundleMutex); self->impl->provBoard[provstatus::PROV_IRTAM] = sn; }
             };
             auto sleepIntr = [&](int ms100) {
                 for (int i = 0; i < ms100 && !self->impl->shutdownRequested.load(); i++)
@@ -2534,12 +2549,20 @@ void App::fetchWorker() {
     if (sdo.restoreDisk()) {
         for (int p = 0; p < 2; p++) {
             const SdoImage& rim = sdo.getImage((SdoProduct)p);
-            if (rim.valid) {
-                sdoPubT[p] = rim.timeUtc;
-                auto rb = std::make_shared<Impl::SdoBundle>();
-                rb->img = rim;
-                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = rb; }
-            }
+                if (rim.valid) {
+                    sdoPubT[p] = rim.timeUtc;
+                    auto rb = std::make_shared<Impl::SdoBundle>();
+                    rb->img = rim;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = rb; }
+                    // M-prov-matrix: fila SDO (restore).
+                    provstatus::Snapshot ss;
+                    ss.id = provstatus::PROV_SDO;
+                    ss.hasData = rim.valid;
+                    ss.dataEpoch = rim.timeUtc;
+                    ss.data = SdoImageAdapter::nameFor((SdoProduct)p);
+                    ss.error = sdo.getErrorMessage();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_SDO] = ss; }
+                }
         }
     }
     bool firstPass = true;
@@ -2576,6 +2599,14 @@ void App::fetchWorker() {
                     auto b = std::make_shared<Impl::SdoBundle>();
                     b->img = im;
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->sdoB = b; }
+                    // M-prov-matrix: fila SDO (fetch).
+                    provstatus::Snapshot ss;
+                    ss.id = provstatus::PROV_SDO;
+                    ss.hasData = im.valid;
+                    ss.dataEpoch = im.timeUtc;
+                    ss.data = SdoImageAdapter::nameFor(seq[i]);
+                    ss.error = sdo.getErrorMessage();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_SDO] = ss; }
                 }
             }
         }
@@ -2603,6 +2634,13 @@ void App::fetchWorker() {
                     g.timestamp = epoch;
                     g.valid = esa.getData().valid;
                     sim = true;
+                    // M-prov-matrix: fila ESA (mock offline por diseno).
+                    provstatus::Snapshot se;
+                    se.id = provstatus::PROV_ESA;
+                    se.hasData = esa.getData().valid;
+                    se.dataEpoch = esa.getData().valid ? esa.getData().timestamp : 0.0;
+                    se.data = esa.getData().valid ? "disk cache" : "mock (offline)";
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_ESA] = se; }
                 }
                 if (g.valid) {
                     auto b = std::make_shared<Impl::TecBundle>();
@@ -2610,6 +2648,16 @@ void App::fetchWorker() {
                     b->grid.timestamp = epoch;
                     b->simulated = sim;
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
+                    // M-prov-matrix: fila GloTEC (solo lectura del fetch ya hecho).
+                    provstatus::Snapshot st;
+                    st.id = provstatus::PROV_TEC;
+                    st.hasData = g.valid && !sim;
+                    st.dataEpoch = epoch;
+                    char sdb[32];
+                    std::snprintf(sdb, sizeof(sdb), "%dx%d", g.width, g.height);
+                    st.data = sdb;
+                    st.error = glo.getErrorMessage();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_TEC] = st; }
                     haveTec = true;
                     if (!sim) impl->liveTecArrived.store(true);
                 }
@@ -2626,6 +2674,14 @@ void App::fetchWorker() {
                 b->ssn = sidx.getSsnHistory();
                 b->spots = sidx.getSunspots();  // M11: manchas viajan con los indices
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->indices = b; }
+                // M-prov-matrix: fila indices (Kp/Dst/F10.7/Ap/SSN).
+                provstatus::Snapshot si;
+                si.id = provstatus::PROV_INDICES;
+                si.hasData = b->snap.valid;
+                si.dataEpoch = b->snap.timeUtc;
+                si.data = b->snap.simulated ? ("mock: " + b->snap.error) : "5/5 real";
+                si.error = b->snap.error;
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_INDICES] = si; }
             }
             noteDone();
 
@@ -2637,6 +2693,14 @@ void App::fetchWorker() {
                 b->simulated = sw.isSimulated();
                 b->error = sw.getErrorMessage();
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->wind = b; }
+                // M-prov-matrix: fila viento solar.
+                provstatus::Snapshot sws;
+                sws.id = provstatus::PROV_WIND;
+                sws.hasData = b->latest.valid;
+                sws.dataEpoch = b->latest.timeUtc;
+                sws.data = b->simulated ? "simulated" : "live";
+                sws.error = b->error;
+                { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_WIND] = sws; }
             }
             noteDone();
 
@@ -2654,6 +2718,18 @@ void App::fetchWorker() {
                     b->grid = g;
                     b->error = err;
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->auroraB = b; }
+                    // M-prov-matrix: fila aurora Ovation.
+                    provstatus::Snapshot sa;
+                    sa.id = provstatus::PROV_AURORA;
+                    sa.hasData = g.valid;
+                    sa.dataEpoch = g.valid ? g.timestamp : 0.0;
+                    if (g.valid) {
+                        char sab[32];
+                        std::snprintf(sab, sizeof(sab), "%dx%d", g.width, g.height);
+                        sa.data = sab;
+                    }
+                    sa.error = err;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_AURORA] = sa; }
                 }
             }
             noteDone();
@@ -2680,6 +2756,14 @@ void App::fetchWorker() {
                     b->usedGiro = rp.usedGiroReal();
                     b->error = rp.getErrorMessage();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->radio = b; }
+                    // M-prov-matrix: fila Kp/HF.
+                    provstatus::Snapshot sr;
+                    sr.id = provstatus::PROV_KPHF;
+                    sr.hasData = b->latest.valid;
+                    sr.dataEpoch = b->latest.timeUtc;
+                    sr.data = b->usedGiro ? "GIRO real" : "model";
+                    sr.error = b->error;
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_KPHF] = sr; }
                 }
             }
             noteDone();
@@ -2691,6 +2775,14 @@ void App::fetchWorker() {
                     auto b = std::make_shared<Impl::XrayBundle>();
                     b->latest = xr.getLatest();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->xray = b; }
+                    // M-prov-matrix: fila GOES X-ray.
+                    provstatus::Snapshot sx;
+                    sx.id = provstatus::PROV_XRAY;
+                    sx.hasData = b->latest.valid;
+                    sx.dataEpoch = b->latest.timeUtc;
+                    sx.data = "GOES";
+                    sx.error = xr.getErrorMessage();
+                    { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_XRAY] = sx; }
                     haveXray = true;
                 }
             }
@@ -3477,6 +3569,89 @@ void App::render() {
         ImGui::TextWrapped("Failover: prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds). Also: eSWua/INGV, DIAS, NOAA SWPC (GloTEC, SDO/HMI, sunspots).");
         ImGui::TextWrapped("Access policy: polite cadence and mirrors lower the risk; they don't remove it - we have measured 429/504 under load, which is why the kc2g failover exists.");
         ImGui::TextWrapped("IRTAM/GAMBIT (UML): retrospective IRTAM coefficients via LGDC gambit-coeffs (same GIRO citation above; 1 req/15 s per client, last 3 days unavailable by design).");
+    }
+    // M-prov-matrix (048): seccion viva dentro de Data sources (thin glue).
+    if (ImGui::CollapsingHeader("Provider status (live)")) {
+        static double lastProvGate = -1.0;
+        const double nowUtcPS = (double)std::time(nullptr);
+        if (lastProvGate < 0.0 || nowUtcPS - lastProvGate >= 1.0) {
+            lastProvGate = nowUtcPS;
+            // 4 filas main-thread (accessors ya thread-safe) + copia.
+            GiroAdapter::GiroNetStatus gs = impl->giro.getNetStatus();
+            const int mode = impl->ionSourceMode.load();
+            provstatus::Snapshot s0;
+            s0.id = provstatus::PROV_GIRO;
+            s0.hasData = gs.withData > 0;
+            double latestT = 0.0;
+            for (const auto& sm : impl->giro.getSamples())
+                if (sm.valid && sm.timeUtc > latestT) latestT = sm.timeUtc;
+            s0.dataEpoch = latestT;
+            s0.fetching = impl->giro.isFetching();
+            s0.rateLimited = (mode == Impl::SRC_KC2G_FALLBACK) ||
+                             provstatus::hard429(gs.roundAttempts, gs.roundOk);
+            s0.retryInMin = gs.retryInMin;
+            s0.data = std::to_string(gs.withData) + "/" + std::to_string(gs.polled) + " st";
+            if (gs.histHours > 0.0) {
+                const int th = (int)(gs.histHours * 10.0);
+                char hb[32];
+                std::snprintf(hb, sizeof(hb), "%d.%d h", th / 10, th % 10);
+                s0.data += " · hist ";
+                s0.data += hb;
+            }
+            s0.error = gs.degraded > 0 ? ("backoff " + std::to_string(gs.degraded) + " st") : "";
+            Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
+            provstatus::Snapshot s1;
+            s1.id = provstatus::PROV_KC2G;
+            s1.hasData = ks.rows > 0;
+            s1.dataEpoch = ks.lastOkUtc;
+            s1.fetching = impl->kc2g.isFetching();
+            s1.data = std::to_string(ks.rows) + " rows";
+            const int nDias = impl->dias.getStationCount();
+            provstatus::Snapshot s2;
+            s2.id = provstatus::PROV_DIAS;
+            s2.hasData = nDias > 0;
+            s2.fetching = impl->dias.isFetching();
+            s2.data = std::to_string(nDias) + " st";
+            s2.error = impl->dias.getErrorMessage();
+            const EbroSample ebLatest = impl->ebro.getLatest();
+            provstatus::Snapshot s3;
+            s3.id = provstatus::PROV_EBRO;
+            s3.hasData = ebLatest.valid;
+            s3.dataEpoch = ebLatest.timeUtc;
+            s3.fetching = impl->ebro.isFetching();
+            s3.error = impl->ebro.getErrorMessage();
+            {
+                std::lock_guard<std::mutex> lk(impl->bundleMutex);
+                impl->provBoard[provstatus::PROV_GIRO] = s0;
+                impl->provBoard[provstatus::PROV_KC2G] = s1;
+                impl->provBoard[provstatus::PROV_DIAS] = s2;
+                impl->provBoard[provstatus::PROV_EBRO] = s3;
+                for (int i = 0; i < (int)provstatus::PROV_COUNT; i++)
+                    impl->provCopy[i] = impl->provBoard[i];
+            }
+        }
+        std::vector<provstatus::Row> prows = provstatus::buildRows(
+            impl->provCopy, (size_t)provstatus::PROV_COUNT, nowUtcPS);
+        if (ImGui::BeginTable("provstatus", 4,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Provider");
+            ImGui::TableSetupColumn("State");
+            ImGui::TableSetupColumn("Data");
+            ImGui::TableSetupColumn("Reason");
+            ImGui::TableHeadersRow();
+            for (size_t i = 0; i < prows.size(); i++) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(prows[i].provider.c_str());
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(prows[i].stateText.c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted(prows[i].data.c_str());
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextUnformatted(prows[i].reason.c_str());
+            }
+            ImGui::EndTable();
+        }
     }
     ImGui::End();
 
@@ -4777,7 +4952,12 @@ void App::render() {
                                           "with cadence — 72 h is the nominal "
                                           "download window; frames older "
                                           "than T-72 h are inherited from "
-                                          "disk, not downloaded.");
+                                          "disk, not downloaded. Titles "
+                                          "report data availability at the "
+                                          "cursor; HF route numbers (MUF/FOT/"
+                                          "LUF) are interpolated usability "
+                                          "(IDW + median floor + edge clamp), "
+                                          "so their edges may not match.");
             } else {
                 const irtamstate::ReplayZone rz = irtamstate::zoneForAge(
                     nowUtcR - impl->replayEpoch);
