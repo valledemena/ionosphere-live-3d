@@ -1227,19 +1227,15 @@ bool App::init(int width, int height, const char* title) {
             "  return c * smoothstep(u_threshold, u_threshold + 0.25, l);\n"
             "}\n"
             "void main(){\n"
-            "  float wfar[24] = float[](\n"
-            "    0.005501586, 0.01100317, 0.01650476, 0.02200634, 0.02750793, 0.03300952,\n"
-            "    0.03094642, 0.02888332, 0.02682023, 0.02475713, 0.02269404, 0.02063094,\n"
-            "    0.01872067, 0.0168104, 0.01490012, 0.01298985, 0.01107957, 0.0091693,\n"
-            "    0.008099543, 0.007029786, 0.005960028, 0.004890271, 0.003820514, 0.002750756);\n"
-            "  vec3 result = brightPass(texture(u_texture, vUV).rgb) * 0.227027;\n"
+            "  float weight[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);\n"
+            "  vec3 result = brightPass(texture(u_texture, vUV).rgb) * weight[0];\n"
             "  vec2 texel = u_direction / u_resolution;\n"
-            "  for(int k=1;k<=24;k++){\n"
-            "    result += brightPass(texture(u_texture, vUV + texel * float(k)).rgb) * wfar[k-1];\n"
-            "    result += brightPass(texture(u_texture, vUV - texel * float(k)).rgb) * wfar[k-1];\n"
+            "  for(int i=1;i<5;i++){\n"
+            "    result += brightPass(texture(u_texture, vUV + texel * float(i)).rgb) * weight[i];\n"
+            "    result += brightPass(texture(u_texture, vUV - texel * float(i)).rgb) * weight[i];\n"
             "  }\n"
-            "  vec2 nt1 = texel * 2.1;\n"
-            "  vec2 nt2 = texel * 4.2;\n"
+            "  vec2 nt1 = texel * 0.35;\n"
+            "  vec2 nt2 = texel * 0.70;\n"
             "  result += brightPass(texture(u_texture, vUV + nt1).rgb) * 0.10;\n"
             "  result += brightPass(texture(u_texture, vUV - nt1).rgb) * 0.10;\n"
             "  result += brightPass(texture(u_texture, vUV + nt2).rgb) * 0.06;\n"
@@ -3316,7 +3312,7 @@ void App::render() {
         impl->bloomFBO[0].bind();
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-            impl->bloomShader.setVec2("u_direction", glm::vec2(1.0f, 0.0f));
+            impl->bloomShader.setVec2("u_direction", glm::vec2(6.0f, 0.0f));
         impl->bloomShader.setVec2("u_resolution", glm::vec2((float)impl->bloomFBO[0].width, (float)impl->bloomFBO[0].height));
         impl->bloomShader.setFloat("u_threshold", impl->bloomThreshold);
         impl->bloomShader.setFloat("u_intensity", impl->bloomIntensity);
@@ -3332,7 +3328,7 @@ void App::render() {
         impl->bloomFBO[1].bind();
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-            impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 1.0f));
+            impl->bloomShader.setVec2("u_direction", glm::vec2(0.0f, 6.0f));
         impl->bloomShader.setInt("u_pass", 1);   // M1: pasada V (aplica intensity)
         impl->bloomShader.setFloat("u_threshold", hfc::bloomBypassThreshold());  // M9f: V en passthrough (la H umbraliza; smoothstep(-1,-0.75,l>=0)=1)
         glActiveTexture(GL_TEXTURE0);
