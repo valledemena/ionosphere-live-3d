@@ -51,3 +51,6 @@ imgui.ini
 /cache/
 /data/
 /settings.cfg
+# Logs de evidencia de sesiones (leccion 040): artefactos locales con timestamp.
+/ev*.log
+/ev*.png

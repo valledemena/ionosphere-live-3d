@@ -82,12 +82,22 @@ struct LayerDataTime {
     double dataEpoch = -1.0;  // hora-dato de la capa (<0 = sin dato)
     bool stale = false;       // clampeada o worker ocupado (ver nota)
     bool clamped = false;
+    double gapSec = 0.0;  // cursor - dataEpoch cuando stale (>=0; 0 si fresco)
 };
 // samplerBusy = worker IRTAM con peticion en curso (O2 del veredicto 024:
 // el flag solo-escritura ahora se lee): en IRTAM, ocupado => stale (la
 // muestra visible va por detras del cursor). En TEC/GIRO se ignora.
 LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
                             const LayerRanges& r, bool samplerBusy);
+
+// M-O3-053 (badge con magnitud): sufijo stale con la distancia cursor-dato.
+// staleGapText: gap>=3600 -> "+%.1f h"; 0<gap<3600 -> "+N min" (minimo 1,
+// sin wart 3599/3600); gap<=0 -> "". Separador coma (ASCII). Puro.
+std::string staleGapText(double gapSec);
+// staleSuffix: "" en fresco; "(stale)" / "(stale, +X)" / "(stale, worker)" /
+// "(stale, +X, worker)". El worker lo pasa el llamador ya acotado a capas
+// 8-11 (TEC/GIRO lo ignoran). Puro.
+std::string staleSuffix(const LayerDataTime& ldt, bool samplerBusy);
 
 // M-irtam-replay-038 (ruling coherencia Zone/DATA, familia 022): conjunto de
 // fuentes con dato REAL en el epoch del cursor (no la familia activa).

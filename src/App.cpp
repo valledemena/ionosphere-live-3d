@@ -4976,15 +4976,16 @@ void App::render() {
                 if (ldt.dataEpoch > 0.0) {
                     if (ldt.stale) {
                         ImGui::TextDisabled(
-                            "DATA %s (stale)",
-                            irtamstate::formatTovShort(ldt.dataEpoch).c_str());
+                            "DATA %s%s",
+                            irtamstate::formatTovShort(ldt.dataEpoch).c_str(),
+                            irtamstate::staleSuffix(ldt, busy && impl->mapVariable >= 8 && impl->mapVariable <= 11).c_str());
                     } else {
                         ImGui::Text(
                             "DATA %s",
                             irtamstate::formatTovShort(ldt.dataEpoch).c_str());
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetItemTooltip("Hora-dato real de la capa activa (stale = clampeada al borde de su historia o worker en curso).");
+                        ImGui::SetItemTooltip("Hora-dato real de la capa activa (stale = clampeada al borde de su historia o worker en curso). Muestra la distancia del cursor al dato; el aviso worker solo aplica a capas IRTAM.");
                 } else {
                     ImGui::TextDisabled("DATA sin dato en capa");
                 }

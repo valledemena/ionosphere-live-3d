@@ -160,12 +160,14 @@ LayerDataTime clampToRange(double epoch, double oldest, double newest) {
         r.dataEpoch = oldest;
         r.stale = epoch < oldest;
         r.clamped = epoch < oldest;
+        r.gapSec = 0.0;  // dato por delante del cursor: sin retraso
         return r;
     }
     if (epoch >= newest) {
         r.dataEpoch = newest;
         r.stale = epoch > newest;
         r.clamped = epoch > newest;
+        r.gapSec = r.stale ? (epoch - newest) : 0.0;
         return r;
     }
     r.dataEpoch = epoch;
@@ -173,6 +175,35 @@ LayerDataTime clampToRange(double epoch, double oldest, double newest) {
 }
 
 }  // namespace
+
+std::string staleGapText(double gapSec) {
+    if (gapSec <= 0.0) return "";
+    if (gapSec > 8640000.0) gapSec = 8640000.0;  // tope 100 d (anti-UB del cast)
+    if (gapSec >= 3600.0) {
+        const int t = (int)(gapSec / 360.0);  // decimas de hora (ints: sin %f)
+        char b[32];
+        std::snprintf(b, sizeof(b), "+%d.%d h", t / 10, t % 10);
+        return std::string(b);
+    }
+    int minutes = (int)(gapSec / 60.0);
+    if (minutes < 1) minutes = 1;
+    char b[32];
+    std::snprintf(b, sizeof(b), "+%d min", minutes);
+    return std::string(b);
+}
+
+std::string staleSuffix(const LayerDataTime& ldt, bool samplerBusy) {
+    if (!ldt.stale) return "";
+    std::string s = "(stale";
+    const std::string g = staleGapText(ldt.gapSec);
+    if (!g.empty()) {
+        s += ", ";
+        s += g;
+    }
+    if (samplerBusy) s += ", worker";
+    s += ")";
+    return s;
+}
 
 LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
                             const LayerRanges& r, bool samplerBusy) {

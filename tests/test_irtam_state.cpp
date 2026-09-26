@@ -312,6 +312,54 @@ int main() {
                    !layerLoopRange(99, now, r).valid);
     }
 
+    std::printf("--- M-O3-053: magnitud del retraso (staleSuffix) ---\n");
+    {
+        LayerDataTime fresh;
+        fresh.dataEpoch = 1789500000.0;
+        check_bool("1: fresco -> vacio",
+                   staleSuffix(fresh, false).empty());
+        LayerDataTime s0;
+        s0.dataEpoch = 1789500000.0;
+        s0.stale = true;
+        check_bool("2: stale sin gap -> (stale)",
+                   staleSuffix(s0, false) == "(stale)");
+        LayerDataTime s8;
+        s8.dataEpoch = 1789500000.0 - 8.0 * 3600.0;
+        s8.stale = true;
+        s8.gapSec = 8.0 * 3600.0;
+        check_bool("3: stale +8h",
+                   staleSuffix(s8, false) == "(stale, +8.0 h)");
+        LayerDataTime s90;
+        s90.dataEpoch = 1789500000.0 - 90.0 * 60.0;
+        s90.stale = true;
+        s90.gapSec = 90.0 * 60.0;
+        check_bool("4: stale 90 min -> +1.5 h (escala >=3600)",
+                   staleSuffix(s90, false) == "(stale, +1.5 h)");
+        LayerDataTime s45;
+        s45.dataEpoch = 1789500000.0 - 45.0 * 60.0;
+        s45.stale = true;
+        s45.gapSec = 45.0 * 60.0;
+        check_bool("4b: stale 45 min -> +45 min",
+                   staleSuffix(s45, false) == "(stale, +45 min)");
+        check_bool("5: stale + worker sin gap",
+                   staleSuffix(s0, true) == "(stale, worker)");
+        check_bool("6: stale 90 min + worker -> +1.5 h",
+                   staleSuffix(s90, true) == "(stale, +1.5 h, worker)");
+        check_bool("7: borde 3599 s -> +59 min",
+                   staleGapText(3599.0) == "+59 min");
+        check_bool("8: borde 3600 s -> +1.0 h",
+                   staleGapText(3600.0) == "+1.0 h");
+        check_bool("9: gap 0 -> vacio", staleGapText(0.0).empty());
+        LayerRanges rg;
+        rg.tecOldest = 1000.0;
+        rg.tecNewest = 2000.0;
+        LayerDataTime e2e = layerDataTime(0, 2000.0 + 8.0 * 3600.0, 99999.0,
+                                          rg, false);
+        check_bool("10: end-to-end TEC mas alla del borde -> gap 8h",
+                   e2e.stale && e2e.gapSec == 8.0 * 3600.0 &&
+                       staleSuffix(e2e, false) == "(stale, +8.0 h)");
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
