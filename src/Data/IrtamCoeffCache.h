@@ -9,7 +9,7 @@
 //
 // Familia DISTINTA de la GIF (C7): "cache/irtamc_<param>_<epoch>.txt" con los
 // BYTES CRUDOS del endpoint + sidecar "<...>.txt.meta" (lastmod/fetch, patron
-// F1). Cap kCapBuckets = 96 POR PARAMETRO (= 24 h a cadencia IRTAM 15 min).
+// F1). Cap kCapBuckets = 384 POR PARAMETRO (= 96 h a cadencia IRTAM 15 min).
 // Tamaño ~KBs por bucket → disco irrelevante (R4 de F2 cerrado).
 // =============================================================================
 #include <cstddef>
@@ -23,7 +23,7 @@ namespace irtamccache {
 // irtamccache::saveBucket, irtamccache::loadBucket, irtamccache::loadCached,
 // irtamccache::shouldCacheBucket, irtamccache::frameName.
 
-inline constexpr int kCapBuckets = 96;  // por parametro (foF2, hmF2, ...)
+inline constexpr int kCapBuckets = 384;  // por parametro (foF2, hmF2, ...)
 inline constexpr std::size_t kMinBucketBytes = 256u;
 inline constexpr std::size_t kMaxBucketBytes = 1024u * 1024u;
 

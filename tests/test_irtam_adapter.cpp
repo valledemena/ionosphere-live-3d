@@ -52,21 +52,21 @@ int main() {
     {
         CacheHave vacio;
         const std::vector<FetchTarget> p = planMissing(vacio, wend);
-        check_bool("cache vacio: 384 targets (96 x 4, F2-B0B1-R1)",
-                   p.size() == 384);
+        check_bool("cache vacio: 1536 targets (384 x 4, F2-B0B1-R1)",
+                   p.size() == 1536);
         check_bool("orden param-major: foF2, hmF2, B0, B1",
-                   p.front().param == "foF2" && p[96].param == "hmF2" &&
-                       p[192].param == "B0" && p[288].param == "B1");
+                   p.front().param == "foF2" && p[384].param == "hmF2" &&
+                       p[768].param == "B0" && p[1152].param == "B1");
         check_bool("oldest-first dentro de foF2",
-                   p[0].epoch == wend - 95.0 * 900.0 && p[95].epoch == wend);
+                   p[0].epoch == wend - 383.0 * 900.0 && p[383].epoch == wend);
         check_bool("oldest-first dentro de B1",
-                   p[288].epoch == wend - 95.0 * 900.0 &&
-                       p[383].epoch == wend);
+                   p[1152].epoch == wend - 383.0 * 900.0 &&
+                       p[1535].epoch == wend);
     }
     {
-        // Lleno: 96 slots x 4 params -> 0 faltantes (steady: nada que hacer).
+        // Lleno: 384 slots x 4 params -> 0 faltantes (steady: nada que hacer).
         CacheHave lleno;
-        for (int s = 0; s < 96; s++) {
+        for (int s = 0; s < 384; s++) {
             lleno.epochs["foF2"].push_back(wend - (double)s * 900.0);
             lleno.epochs["hmF2"].push_back(wend - (double)s * 900.0);
             lleno.epochs["B0"].push_back(wend - (double)s * 900.0);
@@ -79,7 +79,7 @@ int main() {
         // Parcial: solo faltan 3 (2 foF2 + 1 hmF2); el resto se respeta.
         // (par B0xB1 lleno: no interfiere con F/H.)
         CacheHave parcial;
-        for (int s = 0; s < 96; s++) {
+        for (int s = 0; s < 384; s++) {
             const double slot = wend - (double)s * 900.0;
             if (s != 3 && s != 40) parcial.epochs["foF2"].push_back(slot);
             if (s != 90) parcial.epochs["hmF2"].push_back(slot);

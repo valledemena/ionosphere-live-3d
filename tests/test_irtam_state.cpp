@@ -77,7 +77,11 @@ int main() {
                    zoneForAge(259200.0) == ReplayZone::IrtamOnly);
         check_bool("80h -> IrtamOnly",
                    zoneForAge(288000.0) == ReplayZone::IrtamOnly);
-        check_bool("96h borde -> IrtamOnly",
+        check_bool("168h borde -> IrtamOnly",
+                   zoneForAge(604800.0) == ReplayZone::IrtamOnly);
+        check_bool("168h+1s borde -> TecOnly",
+                   zoneForAge(604801.0) == ReplayZone::TecOnly);
+        check_bool("96h interior -> IrtamOnly (banda extendida)",
                    zoneForAge(345600.0) == ReplayZone::IrtamOnly);
         check_bool("48h -> TecOnly (hueco muerto TEC-ext 034)",
                    zoneForAge(172800.0) == ReplayZone::TecOnly);
@@ -305,8 +309,8 @@ int main() {
         check_bool("GIRO histHours=0: invalid",
                    !layerLoopRange(3, now, g0).valid);
         LayerLoopRange i = layerLoopRange(8, 1789500000.0, r);
-        check_bool("IRTAM estructural exacto [now-345600,now-259200]",
-                   i.valid && i.oldest == 1789500000.0 - 345600.0 &&
+        check_bool("IRTAM estructural exacto [now-604800,now-259200]",
+                   i.valid && i.oldest == 1789500000.0 - 604800.0 &&
                        i.newest == 1789500000.0 - 259200.0);
         check_bool("var desconocida: invalid",
                    !layerLoopRange(99, now, r).valid);

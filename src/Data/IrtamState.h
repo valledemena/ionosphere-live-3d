@@ -33,16 +33,17 @@ inline constexpr double kGambitLagSec = 259200.0;     // 3 d (E11)
 std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
                       const std::string& error, double ageMin, bool inReplay);
 
-// M-irtam-replay-A (ruling R1, CICLO A): ventana IRTAM 96 h sobre el cache
-// cap-96 intacto ([72,96] h de edad, probado en vivo). kReplayWindowSec
-// (86400, TEC) queda intacta.
-inline constexpr double kIrtamReplayWindowSec = 345600.0;  // 96 h
+// M-irtam-replay-A (ruling R1, CICLO A) + Opcion B (FASE 2): ventana IRTAM
+// 168 h sobre el cache cap-384 intacto ([72,168] h de edad, 4 ciclos
+// diurnos). kReplayWindowSec (86400, TEC) queda intacta.
+inline constexpr double kIrtamReplayWindowSec = 604800.0;  // 168 h
 
-// Zonas de la ventana de union (TEC-ext 034): solo-IRTAM [T-96,T-72] ·
-// solo-TEC [T-72,T] (el hueco estructural murio al extender TEC).
+// Zonas de la ventana de union (TEC-ext 034 + Opcion B): solo-IRTAM
+// [T-168,T-72] · solo-TEC [T-72,T] (el hueco estructural murio al
+// extender TEC).
 enum class ReplayZone { IrtamOnly, TecOnly };
 
-// Por edad del epoch (ageSec = now - epoch): [72h,96h] IrtamOnly;
+// Por edad del epoch (ageSec = now - epoch): [72h,168h] IrtamOnly;
 // resto (incl. futuro) TecOnly. Puro.
 ReplayZone zoneForAge(double ageSec);
 const char* zoneName(ReplayZone z);
@@ -102,7 +103,7 @@ std::string staleSuffix(const LayerDataTime& ldt, bool samplerBusy);
 // M-irtam-replay-038 (ruling coherencia Zone/DATA, familia 022): conjunto de
 // fuentes con dato REAL en el epoch del cursor (no la familia activa).
 // Orden canonico TEC+GIRO+IRTAM, prefijo "solo-" en singleton. TEC/GIRO por
-// rangos reales; IRTAM por banda estructural [now-345600,now-259200] (mismos
+// rangos reales; IRTAM por banda estructural [now-604800,now-259200] (mismos
 // literales e inclusividad que layerLoopRange vars 8-11 y la via union). Puro.
 const char* perLayerZoneName(double replayEpoch, double nowUtc,
                              const LayerRanges& r);
@@ -128,7 +129,7 @@ PairBracket pairBracketTovs(const std::vector<TovEntry>& entries,
 // M-irtam-replay-031 (ruling toggle, misma particion de variables que
 // layerDataTime): rango con dato de la capa para el bucle por capa.
 // var 0 -> TEC real; vars 1-7 -> GIRO histHours; vars 8-11 -> estructural
-// [nowUtc-345600, nowUtc-259200] (literales de layerDataTime); otra -> invalid.
+// [nowUtc-604800, nowUtc-259200] (literales de layerDataTime); otra -> invalid.
 struct LayerLoopRange {
     double oldest = -1.0, newest = -1.0;  // rango con dato de la capa
     bool valid = false;                   // oldest > 0 && newest > oldest

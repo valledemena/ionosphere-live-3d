@@ -6,7 +6,7 @@
 // Valida contenido via P1a (parseMessage) — produccion real, no stub.
 //
 // Cubre F2 G4/G5: gate de escritura, round-trip bytes+sidecar, rechazo de
-// contenido no-estructural, cap 96 POR PARAMETRO + self-heal + orden asc,
+// contenido no-estructural, cap 384 POR PARAMETRO + self-heal + orden asc,
 // coexistencia con tec_/kc2g_/irtam_. Patron test_kc2g_cache / test_irtam_cache.
 // =============================================================================
 #include "Data/IrtamCoeffCache.h"
@@ -107,11 +107,11 @@ int main() {
                    !saveBucket(d, "foF2", 1789000003.0, g.data(), g.size(), big));
     }
 
-    std::printf("--- F2 P2: cap 96/param + heal + orden + coexistencia ---\n");
+    std::printf("--- F2 P2: cap 384/param + heal + orden + coexistencia ---\n");
     {
         std::string d = freshDir("cap");
         std::vector<uint8_t> g = bytesOf(miniMsg());
-        for (int i = 0; i < 98; i++)
+        for (int i = 0; i < 386; i++)
             saveBucket(d, "foF2", 1000000.0 + i * 900.0, g.data(), g.size(),
                        "lm");
         for (int j = 0; j < 3; j++)
@@ -134,7 +134,7 @@ int main() {
         std::fputs("lastmod=x", fp);
         std::fclose(fp);
         ScanResult r = loadCached(d);
-        check_bool("96+3 kept", (int)r.buckets.size() == 99);
+        check_bool("384+3 kept", (int)r.buckets.size() == 387);
         check_bool("2 podados (fof2)", r.pruned == 2);
         check_bool("1 corrupto dropeado", r.dropped == 1);
         check_bool("corrupto borrado",

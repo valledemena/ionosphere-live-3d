@@ -40,13 +40,13 @@ std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
 }
 
 ReplayZone zoneForAge(double ageSec) {
-    if (ageSec >= 259200.0 && ageSec <= 345600.0) return ReplayZone::IrtamOnly;
+    if (ageSec >= 259200.0 && ageSec <= 604800.0) return ReplayZone::IrtamOnly;
     return ReplayZone::TecOnly;
 }
 
 const char* zoneName(ReplayZone z) {
     switch (z) {
-        case ReplayZone::IrtamOnly: return "solo-IRTAM [T-96,T-72]";
+        case ReplayZone::IrtamOnly: return "solo-IRTAM [T-168,T-72]";
         default: return "solo-TEC [T-72,T]";
     }
 }
@@ -57,7 +57,7 @@ const char* perLayerZoneName(double replayEpoch, double nowUtc,
                       replayEpoch <= r.tecNewest);
     const bool giro = (r.giroOldest > 0.0 && r.giroOldest <= replayEpoch &&
                        replayEpoch <= r.giroNewest);
-    const bool irtam = (nowUtc - 345600.0 <= replayEpoch &&
+    const bool irtam = (nowUtc - 604800.0 <= replayEpoch &&
                         replayEpoch <= nowUtc - 259200.0);
     if (tec && giro && irtam) return "TEC+GIRO+IRTAM";
     if (tec && giro) return "TEC+GIRO";
@@ -210,7 +210,7 @@ LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
     if (mapVariable >= 8 && mapVariable <= 11) {
         // IRTAM: ventana [now-96h, now-72h]; stale = clamp o worker ocupado.
         LayerDataTime out =
-            clampToRange(replayEpoch, nowUtc - 345600.0, nowUtc - 259200.0);
+            clampToRange(replayEpoch, nowUtc - 604800.0, nowUtc - 259200.0);
         if (samplerBusy) out.stale = true;
         return out;
     }
@@ -268,7 +268,7 @@ LayerLoopRange layerLoopRange(int mapVariable, double nowUtc,
         oldest = r.giroOldest;
         newest = r.giroNewest;
     } else if (mapVariable >= 8 && mapVariable <= 11) {
-        oldest = nowUtc - 345600.0;
+        oldest = nowUtc - 604800.0;
         newest = nowUtc - 259200.0;
     } else {
         return out;

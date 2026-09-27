@@ -261,12 +261,14 @@ struct App::Impl {
     bool replayPlaying = false;
     float replaySpeed = 2.0f;    // frames por segundo
     int preReplayVar = 0;
-    // M-irtam-replay-A (ruling R1): cursor primario = epoch continuo sobre
-    // la ventana de union (96 h IRTAM + 72 h TEC). replayPos se deriva del
-    // epoch para el lerp TEC interno (inversion mecanica).
+    // M-irtam-replay-A (ruling R1) + Opcion B: cursor primario = epoch
+    // continuo sobre la ventana de union (168 h IRTAM + 72 h TEC).
+    // replayPos se deriva del epoch para el lerp TEC interno (inversion
+    // mecanica).
     double replayEpoch = -1.0;   // epoch continuo UTC (s)
-    // M-irtam-replay-031 (ruling toggle): bucle por capa (false = union
-    // 96 h, defecto R2-023). NO se persiste en settings (lección partición).
+    // M-irtam-replay-031 (ruling toggle) + Opcion B: bucle por capa
+    // (false = union 168 h, defecto R2-023). NO se persiste en settings
+    // (lección partición).
     bool replayLayerLoop = false;
     // Muestra IRTAM = BRACKET entregado por el worker (M-irtam-replay-028):
     // endpoints para lerp en render por cursor; pairKind 0 = F/H, 1 = B0B1.
@@ -1892,7 +1894,7 @@ void App::update(float dt) {
     // En replay, puntos, grids derivados (foF2/MUF/hmF2/NmF2/LUF/FOT/Spread-F)
     // y panel de estacion siguen al tiempo de replay, no al directo.
     // M-irtam-replay-A (ruling R1 Q5): el cursor primario es el EPOCH
-    // continuo sobre la ventana de union (96 h); replayPos se DERIVA del
+    // continuo sobre la ventana de union (168 h); replayPos se DERIVA del
     // epoch para el lerp TEC interno (inversion mecanica del bloque previo).
     double replayEpoch = -1.0;
     static bool kc2gReplayLogged = false;  // FASE B (P3): log una vez por entrada
@@ -1934,7 +1936,7 @@ void App::update(float dt) {
             if (impl->replayPlaying) {
                 if (impl->replayEpoch <= 0.0) impl->replayEpoch = loBound;
                 // 1x = 1 frame TEC equiv/s (1200 s); loop en [loBound,hiBound]:
-                // union 96 h por defecto, rango con dato en modo por capa.
+                // union 168 h por defecto, rango con dato en modo por capa.
                 // M-irtam-replay-024 (ruling R2 PERF): dt acotado a <=100 ms
                 // SOLO para este avance (rompe la amplificacion miss->dt
                 // gigante->salto multi-slot->miss); el dt global intacto.
@@ -2030,7 +2032,7 @@ void App::update(float dt) {
     // El wrap del loop de replay tambien hace snap (el dato salta ahi igual).
     // M-irtam-replay-027 (opcion A del veredicto 026): el sol sigue al CURSOR
     // (impl->replayEpoch), no al local TEC-clamped — si no, queda clavado en
-    // T-24h el 75% del bucle de 96 h. En live, wall-clock como siempre.
+    // T-24h el 86% del bucle de 168 h. En live, wall-clock como siempre.
     double effEpoch = (impl->replayMode && impl->replayEpoch > 0.0)
                           ? impl->replayEpoch
                           : (double)std::time(nullptr);
@@ -2086,8 +2088,8 @@ void App::update(float dt) {
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
         // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
-        // M-irtam-replay-A + TEC-ext 034: ventana de union (96 h) =
-        // [T-96,T-72] solo-IRTAM (muestreo lerp al epoch) · [T-72,T]
+        // M-irtam-replay-A + TEC-ext 034: ventana de union (168 h) =
+        // [T-168,T-72] solo-IRTAM (muestreo lerp al epoch) · [T-72,T]
         // solo-TEC (TEC-ext 034: ventana 72 h con backfill de precarga) ·
         // solape TEC-IRTAM = borde T-72. En live: bundle fresco.
         // En replay: ultima muestra lista del worker (024: jamas en caliente).
@@ -4824,7 +4826,7 @@ void App::render() {
                     // M-irtam-replay-A: el cursor nace en el frame TEC mas
                     // viejo (equivale al antiguo replayPos = 0).
                     const double nowUtc0 = (double)std::time(nullptr);
-                    impl->replayEpoch = nowUtc0 - 345600.0;
+                    impl->replayEpoch = nowUtc0 - 604800.0;
                     {
                         std::lock_guard<std::mutex> tlk(impl->tecHistMutex);
                         if (!impl->tecHist.empty())
@@ -4852,15 +4854,16 @@ void App::render() {
             ImGui::SetNextItemWidth(90.0f);
             ImGui::SliderFloat("speed", &impl->replaySpeed, 0.5f, 8.0f, "%.1f fps");
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Replay speed in frames per second.");
-            // M-irtam-replay-031 (toggle): checkbox de modo (marcado = union
-            // 96 h, defecto R2) + recogida UNICA de rangos que alimenta
-            // slider, etiqueta de modo y DATA (misma cuenta de locks).
+            // M-irtam-replay-031 (toggle) + Opcion B: checkbox de modo
+            // (marcado = union 168 h, defecto R2) + recogida UNICA de rangos
+            // que alimenta slider, etiqueta de modo y DATA (misma cuenta
+            // de locks).
             bool fullWin = !impl->replayLayerLoop;
-            if (ImGui::Checkbox("Full 96 h window", &fullWin)) {
+            if (ImGui::Checkbox("Full 168 h window", &fullWin)) {
                 impl->replayLayerLoop = !fullWin;
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("Union 96 h loop (comparative scrub across zones) or per-layer loop (dense replay of the active layer only). Without layer history, always union.");
+                ImGui::SetItemTooltip("Union 168 h loop (comparative scrub across zones) or per-layer loop (dense replay of the active layer only). Without layer history, always union.");
             const double nowUtcR = (double)std::time(nullptr);
             irtamstate::LayerRanges lr;
             {
@@ -4877,7 +4880,7 @@ void App::render() {
             // Bounds por modo (union por defecto; capa con fallback).
             double sloB = nowUtcR - irtamstate::kIrtamReplayWindowSec;
             double shiB = nowUtcR;
-            std::string modeLabel("Window: union 96 h");
+            std::string modeLabel("Window: union 168 h");
             if (impl->replayLayerLoop) {
                 const irtamstate::LayerLoopRange llr =
                     irtamstate::layerLoopRange(impl->mapVariable, nowUtcR,

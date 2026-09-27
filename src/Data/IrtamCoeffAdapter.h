@@ -40,7 +40,7 @@ namespace irtamfetch {
 // irtamfetch::kGambitLagSec, irtamfetch::IrtamCoeffAdapter::fetchOnce,
 // irtamfetch::IrtamBundle.
 
-inline constexpr int kSlots = 96;               // 24 h a cadencia IRTAM 15 min
+inline constexpr int kSlots = 384;              // 96 h a cadencia IRTAM 15 min
 inline constexpr double kSlotSec = 900.0;       // 15 min
 inline constexpr double kGambitLagSec = 259200.0;  // 3 d: ultimos 3 dias NO disponibles (E11)
 inline constexpr const char* kParams[4] = {"foF2", "hmF2", "B0",
