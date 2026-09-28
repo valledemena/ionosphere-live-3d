@@ -206,6 +206,7 @@ struct App::Impl {
     // 5-7 derivados Radio, 8-9 IRTAM retrospectivo (M-IRTAM-F2 P4).
     // 5=LUF, 6=FOT, 7=Spread-F (5-7 derivados GIRO via RadioPropagationAdapter).
     int mapVariable = 0;
+    int sideTab = 1;  // M-UI-tabs: 0=Vista,1=Datos,2=Volumen,3=Estaciones,4=Viento (defecto Datos)
     // Colormap manual (override): si colormapOverride es true, el colormap elegido
     // en el desplegable "Colormap" (manualColormap 0..3) gana sobre el automatico
     // de la variable. Si es false, cada variable fija su colormap por defecto.
@@ -2398,6 +2399,7 @@ void App::saveSettings() {
     fprintf(f, "sunWinH %g\n", (double)impl->sunGeom.h);   // M11
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
+    fprintf(f, "sideTab %d\n", impl->sideTab);   // M-UI-tabs (defecto Datos)
     fclose(f);
 }
 
@@ -2499,6 +2501,7 @@ void App::loadSettings() {
         else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 20.0f);
         else if (k == "hfTraceVisible") impl->hfTraceVisible = clB(v);   // M8 (plan 11.4)
         else if (k == "hfFreqMHz") impl->hfFreqMHz = glm::clamp((float)v, 1.0f, 30.0f);
+        else if (k == "sideTab") impl->sideTab = glm::clamp((int)v, 0, 4);   // M-UI-tabs (ausente = defecto Datos del miembro)
     }
     if (legacyBloom) {
         // D1 (v2.1, correccion tras la auditoria M1 de MUSE): la intensidad
@@ -3657,10 +3660,110 @@ void App::render() {
     }
     ImGui::End();
 
-    // Layer panel
-    ImGui::SetNextWindowPos(ImVec2((float)winW - 220, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(210, 250), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Layers");
+    // Tooltip + hover/pin: nearest station under the cursor on the globe.
+    // Click (no drag) on a station pins it; click on empty space unpins.
+    // The Radio Propagation panel shows the pinned station, else the hovered one.
+    ImGuiIO& io2 = ImGui::GetIO();
+    int hitIdx = -1;
+    double curMX = 0.0, curMY = 0.0;
+    if (!io2.WantCaptureMouse && impl->ionosondeLayer.isVisible() && impl->ionosondeLayer.getStationCount() > 0) {
+        double mx, my;
+        glfwGetCursorPos(window, &mx, &my);
+        curMX = mx; curMY = my;
+        float ndcX = (float)(2.0 * mx / winW - 1.0);
+        float ndcY = (float)(1.0 - 2.0 * my / winH);
+        hitIdx = impl->ionosondeLayer.hitTest(ndcX, ndcY, view, proj, glm::radians(12.0f));
+        if (hitIdx >= 0) {
+            const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
+            if (sp) {
+                ImGui::BeginTooltip();
+                ImGui::Text("%s (%s)", sp->name.c_str(), sp->code.c_str());
+                ImGui::Text("lat %.2f  lon %.2f", sp->latDeg, sp->lonDeg);
+                ImGui::Text("foF2 %.2f MHz  MUF %.1f MHz", sp->foF2, sp->muf);
+                ImGui::Text("hmF2 %.0f km  NmF2 %.2e m^-3", sp->hmF2, sp->nmF2);
+                ImGui::Text("foE %s  foEs %s  fmin %s",
+                    giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
+                ImGui::Text("B0 %s km  B1 %s",
+                    giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
+                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
+                if (sp->stale && sp->valid)
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                        "stale row (>6 h; maps exclude it)");
+                // M4 (P4): fuera de la lista prioritaria -> catalogo visible
+                // sin polling (dropdown): avisarlo en el tooltip (en modo
+                // kc2g TODAS las filas mostradas traen dato del failover).
+                if (!impl->giro.isPolled(sp->code) &&
+                    impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
+                    ImGui::TextDisabled("not polled (catalog only)");
+                // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
+                // Busca en GIRO y DIAS.
+                {
+                    std::vector<float> fh;
+                    for (const auto& s : impl->giro.copySamples()) {
+                        if (s.code != sp->code) continue;
+                        for (const auto& h : s.history) fh.push_back(h.foF2);
+                        break;
+                    }
+                    if (fh.size() < 2) {
+                        for (const auto& s : impl->dias.copySamples()) {
+                            if (s.code != sp->code) continue;
+                            for (const auto& h : s.history) fh.push_back(h.foF2);
+                            break;
+                        }
+                    }
+                    if (fh.size() >= 2) {
+                        float mn = fh[0], mx = fh[0];
+                        for (float v : fh) { mn = fminf(mn, v); mx = fmaxf(mx, v); }
+                        if (mx - mn < 0.5f) { mx += 0.25f; mn -= 0.25f; }
+                        ImGui::Text("foF2 %.1fh", (fh.size() - 1) * 5.0f / 60.0f);
+                        ImGui::PlotLines("##fof2hist", fh.data(), (int)fh.size(), 0, nullptr, mn, mx, ImVec2(180, 36));
+                    }
+                }
+                ImGui::TextDisabled("Click to pin this station");
+                ImGui::EndTooltip();
+            } else {
+                hitIdx = -1;
+            }
+        }
+    }
+    impl->hoveredStation = hitIdx;
+    {
+        bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (leftDown && !impl->mouseLeftPrev) {
+            impl->mouseDownX = curMX; impl->mouseDownY = curMY;
+        }
+        if (!leftDown && impl->mouseLeftPrev && !io2.WantCaptureMouse) {
+            double dx = curMX - impl->mouseDownX, dy = curMY - impl->mouseDownY;
+            if (dx * dx + dy * dy < 36.0 && impl->ionosondeLayer.isVisible()) {
+                if (hitIdx >= 0) {
+                    const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
+                    if (impl->hfPickRx) {
+                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
+                        // circuito (consume el click, no toca el pin).
+                        if (sp) {
+                            impl->hfRxCode = sp->code;
+                            impl->hfCircuitDirty = true;
+                        }
+                        impl->hfPickRx = false;
+                    } else if (sp && sp->code == impl->pinnedCode) {
+                        impl->pinnedCode.clear();  // toggle off
+                    } else if (sp) {
+                        impl->pinnedCode = sp->code;
+                    }
+                } else if (impl->hfPickRx) {
+                    impl->hfPickRx = false;   // click al vacio: cancela el pick (pin intacto)
+                } else {
+                    impl->pinnedCode.clear();
+                }
+            }
+        }
+        impl->mouseLeftPrev = leftDown;
+    }
+
+
+    // M-UI-tabs (rail lateral fase 1): 5 lambdas de seccion.
+    // Solo mudanza: el texto movido es byte-identico al original.
+    auto tabVista = [&]() {
     ImGui::Checkbox("Earth", &impl->showEarth);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Earth globe with day/night texture driven by the solar position.");
     if (ImGui::SliderFloat("Night light", &impl->nightLevel, 0.05f, 1.0f)) {
@@ -3693,6 +3796,68 @@ void App::render() {
     if (impl->sunVisible && !sunWas) impl->sdoKick.store(true);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SDO solar disk (HMI/AIA-304) with active regions. Downloads only while open (1 JPG/15 min).");
     ImGui::Separator();
+    ImGui::Checkbox("Labels", &impl->labelsVisible);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Floating labels anchored in 3D (station F2 peak, aurora oval, TEC shell) with leader lines.");
+    if (ImGui::SliderFloat("Explode", &impl->explodeFactor, 1.0f, 5.0f)) {
+        impl->explodeFactor = glm::clamp(impl->explodeFactor, 1.0f, 5.0f);
+        applyAltitudes();
+        impl->volumeLayer.setExplode(impl->explodeFactor);
+        impl->refShells.setExplode(impl->explodeFactor);
+        impl->hfCircuitDirty = true;   // M9: rebuild del ribbon en el mismo frame (la altura lo sigue)
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale. The HF ray ribbon follows: apex height scales with this; width stays demo-constant (0.0075).");
+    // ---- Aurora oval (NOAA Ovation): green overlay, both hemispheres ----
+    ImGui::Separator();
+    bool showAur = impl->auroraVisible;
+    if (ImGui::Checkbox("Aurora oval", &showAur)) {
+        impl->auroraVisible = showAur;
+        impl->auroraLayer.setVisible(showAur);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("NOAA Ovation auroral oval forecast (~30-90 min ahead). Green shell at ~110 km over both poles. Brightens and expands toward the equator during storms (high AE/Kp).");
+    if (ImGui::SliderFloat("Aurora opacity", &impl->aurOpacity, 0.0f, 1.5f)) {
+        impl->aurOpacity = glm::clamp(impl->aurOpacity, 0.0f, 1.5f);
+        impl->auroraLayer.setOpacity(impl->aurOpacity);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the aurora overlay. Visual only.");
+    auto aurB = impl->getAurora();
+    if (aurB && aurB->grid.valid) {
+        float amn, amx;
+        impl->auroraLayer.getDisplayRange(amn, amx);
+        ImGui::Text("Ovation max: %.0f", amx);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Peak auroral intensity in the current Ovation forecast (arbitrary units, higher = brighter oval).");
+    } else if (aurB && !aurB->error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Aurora: %s", aurB->error.c_str());
+    } else {
+        ImGui::TextDisabled("Aurora: waiting for data...");
+    }
+
+    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
+    // el dato real vive en la ventana Sun M11.)
+
+    ImGui::Separator();
+    ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar direction (computed). Defines day/night and the terminator.");
+    {
+        // Reloj verificador dia/noche: UTC + punto subsolar en el marco del globo.
+        std::time_t nowT = std::time(nullptr);
+        std::tm g;
+#ifdef _WIN32
+        gmtime_s(&g, &nowT);
+#else
+        gmtime_r(&nowT, &g);
+#endif
+        char cbuf[32] = "--:--:--";
+        strftime(cbuf, sizeof(cbuf), "%H:%M:%S UTC", &g);
+        glm::vec3 sd = glm::normalize(impl->sunDirection);
+        float slat = glm::degrees(asinf(glm::clamp(sd.y, -1.0f, 1.0f)));
+        float slon = glm::degrees(atan2f(sd.z, -sd.x));
+        ImGui::Text("%s  sub %+.1f, %+.1f", cbuf, slat, slon);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("UTC clock and subsolar point (lat, lon). Sanity check: at 12:00 UTC lon ~0 (Greenwich noon), at 00:00 UTC lon ~180. If the terminator disagrees, the sun math is wrong.");
+    }
+    ImGui::Separator();
+    };
+
+    auto tabDatos = [&]() {
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
     // Variable de la capa de colores esferica (Seccion A + Fase 5 + M-IRTAM-F2 P4 + B0B1):
@@ -3837,6 +4002,50 @@ void App::render() {
         impl->tecColShell.setVisible(impl->tecColVisible);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TEC integrated from the volume (model, flat at 300 km). Compare against measured GloTEC: ocean/night bias reveals the median background fill.");
+    auto tecStatusB = impl->getTec();
+    if (tecStatusB && tecStatusB->grid.valid) {
+        if (tecStatusB->fromCache && !tecStatusB->simulated) {
+            char tcbuf[16] = "--:--";
+            {
+                std::time_t tt = (std::time_t)tecStatusB->grid.timestamp;
+                std::tm gg;
+#ifdef _WIN32
+                gmtime_s(&gg, &tt);
+#else
+                gmtime_r(&tt, &gg);
+#endif
+                strftime(tcbuf, sizeof(tcbuf), "%H:%M", &gg);
+            }
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "TEC: cache %s UTC (%dx%d)",
+                tcbuf, tecStatusB->grid.width, tecStatusB->grid.height);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Cached GloTEC grid from disk (M10): real data from a previous session. Live download replaces it automatically; frames older than tecCacheMaxAgeH feed replay only.");
+        } else if (tecStatusB->simulated) {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "TEC: %dx%d (MOCK offline)",
+                tecStatusB->grid.width, tecStatusB->grid.height);
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Simulated diurnal pattern (EsaAdapter): GloTEC unreachable. Switches to real data automatically when the download succeeds.");
+        } else {
+            char tgbuf[16] = "--:--";
+            {
+                std::time_t tt = (std::time_t)tecStatusB->grid.timestamp;
+                std::tm gg;
+#ifdef _WIN32
+                gmtime_s(&gg, &tt);
+#else
+                gmtime_r(&tt, &gg);
+#endif
+                strftime(tgbuf, sizeof(tgbuf), "%H:%M", &gg);
+            }
+            ImGui::Text("TEC: %dx%d GloTEC %s (+%.0fs)", tecStatusB->grid.width, tecStatusB->grid.height, tgbuf,
+                fmax(0.0, difftime(std::time(nullptr), (std::time_t)tecStatusB->grid.timestamp)));
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real GloTEC grid (NOAA SWPC) with its data time (UTC) and age ticking every second.");
+            ImGui::Text("Source: NOAA SWPC GloTEC");
+        }
+    } else {
+        ImGui::TextDisabled("TEC: waiting for data...");
+    }
+    };
+
+    auto tabVolumen = [&]() {
     if (ImGui::Checkbox("Volumetric density", &impl->volumeVisible)) {
         impl->volumeLayer.setVisible(impl->volumeVisible);
     }
@@ -3858,16 +4067,6 @@ void App::render() {
         impl->volumeLayer.setIsoBands(impl->isoBands);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Highlight shells at logNe 10.5/11/11.5 (white bands). Works in both volume modes.");
-    ImGui::Checkbox("Labels", &impl->labelsVisible);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Floating labels anchored in 3D (station F2 peak, aurora oval, TEC shell) with leader lines.");
-    if (ImGui::SliderFloat("Explode", &impl->explodeFactor, 1.0f, 5.0f)) {
-        impl->explodeFactor = glm::clamp(impl->explodeFactor, 1.0f, 5.0f);
-        applyAltitudes();
-        impl->volumeLayer.setExplode(impl->explodeFactor);
-        impl->refShells.setExplode(impl->explodeFactor);
-        impl->hfCircuitDirty = true;   // M9: rebuild del ribbon en el mismo frame (la altura lo sigue)
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Exploded view: separates shell altitudes to reveal stacking order. x1 = true scale. The HF ray ribbon follows: apex height scales with this; width stays demo-constant (0.0075).");
     if (ImGui::Checkbox("Path slice", &impl->sliceOn)) {
         impl->sliceLayer.setVisible(impl->sliceOn);
         if (!impl->sliceOn) { impl->sliceA.clear(); impl->sliceB.clear(); }
@@ -3900,6 +4099,9 @@ void App::render() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Reference altitude rings: E fixed at 110 km, F1/F2 follow the measured hmF2 median (dynamic). No data of their own, just height cues.");
 
+    };
+
+    auto tabEstaciones = [&]() {
     // ---- GIRO ionosondas (Fase 3) ----
     ImGui::Separator();
     // M4 (P4/P5): estado de red GIRO real (polled/withData/degraded/hist).
@@ -3972,106 +4174,9 @@ void App::render() {
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DIAS Ionostream (NOA Athens): full EU profiles over plain HTTPS (no FTP). Fills stations missing in GIRO; GIRO wins ties. EB040 does not flow here (verified).");
     }
 
-    // Tooltip + hover/pin: nearest station under the cursor on the globe.
-    // Click (no drag) on a station pins it; click on empty space unpins.
-    // The Radio Propagation panel shows the pinned station, else the hovered one.
-    ImGuiIO& io2 = ImGui::GetIO();
-    int hitIdx = -1;
-    double curMX = 0.0, curMY = 0.0;
-    if (!io2.WantCaptureMouse && impl->ionosondeLayer.isVisible() && impl->ionosondeLayer.getStationCount() > 0) {
-        double mx, my;
-        glfwGetCursorPos(window, &mx, &my);
-        curMX = mx; curMY = my;
-        float ndcX = (float)(2.0 * mx / winW - 1.0);
-        float ndcY = (float)(1.0 - 2.0 * my / winH);
-        hitIdx = impl->ionosondeLayer.hitTest(ndcX, ndcY, view, proj, glm::radians(12.0f));
-        if (hitIdx >= 0) {
-            const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
-            if (sp) {
-                ImGui::BeginTooltip();
-                ImGui::Text("%s (%s)", sp->name.c_str(), sp->code.c_str());
-                ImGui::Text("lat %.2f  lon %.2f", sp->latDeg, sp->lonDeg);
-                ImGui::Text("foF2 %.2f MHz  MUF %.1f MHz", sp->foF2, sp->muf);
-                ImGui::Text("hmF2 %.0f km  NmF2 %.2e m^-3", sp->hmF2, sp->nmF2);
-                ImGui::Text("foE %s  foEs %s  fmin %s",
-                    giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
-                ImGui::Text("B0 %s km  B1 %s",
-                    giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
-                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
-                if (sp->stale && sp->valid)
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                        "stale row (>6 h; maps exclude it)");
-                // M4 (P4): fuera de la lista prioritaria -> catalogo visible
-                // sin polling (dropdown): avisarlo en el tooltip (en modo
-                // kc2g TODAS las filas mostradas traen dato del failover).
-                if (!impl->giro.isPolled(sp->code) &&
-                    impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
-                    ImGui::TextDisabled("not polled (catalog only)");
-                // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
-                // Busca en GIRO y DIAS.
-                {
-                    std::vector<float> fh;
-                    for (const auto& s : impl->giro.copySamples()) {
-                        if (s.code != sp->code) continue;
-                        for (const auto& h : s.history) fh.push_back(h.foF2);
-                        break;
-                    }
-                    if (fh.size() < 2) {
-                        for (const auto& s : impl->dias.copySamples()) {
-                            if (s.code != sp->code) continue;
-                            for (const auto& h : s.history) fh.push_back(h.foF2);
-                            break;
-                        }
-                    }
-                    if (fh.size() >= 2) {
-                        float mn = fh[0], mx = fh[0];
-                        for (float v : fh) { mn = fminf(mn, v); mx = fmaxf(mx, v); }
-                        if (mx - mn < 0.5f) { mx += 0.25f; mn -= 0.25f; }
-                        ImGui::Text("foF2 %.1fh", (fh.size() - 1) * 5.0f / 60.0f);
-                        ImGui::PlotLines("##fof2hist", fh.data(), (int)fh.size(), 0, nullptr, mn, mx, ImVec2(180, 36));
-                    }
-                }
-                ImGui::TextDisabled("Click to pin this station");
-                ImGui::EndTooltip();
-            } else {
-                hitIdx = -1;
-            }
-        }
-    }
-    impl->hoveredStation = hitIdx;
-    {
-        bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (leftDown && !impl->mouseLeftPrev) {
-            impl->mouseDownX = curMX; impl->mouseDownY = curMY;
-        }
-        if (!leftDown && impl->mouseLeftPrev && !io2.WantCaptureMouse) {
-            double dx = curMX - impl->mouseDownX, dy = curMY - impl->mouseDownY;
-            if (dx * dx + dy * dy < 36.0 && impl->ionosondeLayer.isVisible()) {
-                if (hitIdx >= 0) {
-                    const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
-                    if (impl->hfPickRx) {
-                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
-                        // circuito (consume el click, no toca el pin).
-                        if (sp) {
-                            impl->hfRxCode = sp->code;
-                            impl->hfCircuitDirty = true;
-                        }
-                        impl->hfPickRx = false;
-                    } else if (sp && sp->code == impl->pinnedCode) {
-                        impl->pinnedCode.clear();  // toggle off
-                    } else if (sp) {
-                        impl->pinnedCode = sp->code;
-                    }
-                } else if (impl->hfPickRx) {
-                    impl->hfPickRx = false;   // click al vacio: cancela el pick (pin intacto)
-                } else {
-                    impl->pinnedCode.clear();
-                }
-            }
-        }
-        impl->mouseLeftPrev = leftDown;
-    }
+    };
 
+    auto tabViento = [&]() {
     // ---- Viento solar (Fase 4) ----
     ImGui::Separator();
     auto windB = impl->getWind();
@@ -4145,96 +4250,27 @@ void App::render() {
     ImGui::Text("Vectors: %d", impl->faradayLayer.getVectorCount());
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Number of vectors drawn (7x12 grid).");
 
-    // ---- Aurora oval (NOAA Ovation): green overlay, both hemispheres ----
-    ImGui::Separator();
-    bool showAur = impl->auroraVisible;
-    if (ImGui::Checkbox("Aurora oval", &showAur)) {
-        impl->auroraVisible = showAur;
-        impl->auroraLayer.setVisible(showAur);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("NOAA Ovation auroral oval forecast (~30-90 min ahead). Green shell at ~110 km over both poles. Brightens and expands toward the equator during storms (high AE/Kp).");
-    if (ImGui::SliderFloat("Aurora opacity", &impl->aurOpacity, 0.0f, 1.5f)) {
-        impl->aurOpacity = glm::clamp(impl->aurOpacity, 0.0f, 1.5f);
-        impl->auroraLayer.setOpacity(impl->aurOpacity);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the aurora overlay. Visual only.");
-    auto aurB = impl->getAurora();
-    if (aurB && aurB->grid.valid) {
-        float amn, amx;
-        impl->auroraLayer.getDisplayRange(amn, amx);
-        ImGui::Text("Ovation max: %.0f", amx);
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Peak auroral intensity in the current Ovation forecast (arbitrary units, higher = brighter oval).");
-    } else if (aurB && !aurB->error.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Aurora: %s", aurB->error.c_str());
-    } else {
-        ImGui::TextDisabled("Aurora: waiting for data...");
-    }
+    };
 
-    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
-    // el dato real vive en la ventana Sun M11.)
-
-    ImGui::Separator();
-    ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar direction (computed). Defines day/night and the terminator.");
-    {
-        // Reloj verificador dia/noche: UTC + punto subsolar en el marco del globo.
-        std::time_t nowT = std::time(nullptr);
-        std::tm g;
-#ifdef _WIN32
-        gmtime_s(&g, &nowT);
-#else
-        gmtime_r(&nowT, &g);
-#endif
-        char cbuf[32] = "--:--:--";
-        strftime(cbuf, sizeof(cbuf), "%H:%M:%S UTC", &g);
-        glm::vec3 sd = glm::normalize(impl->sunDirection);
-        float slat = glm::degrees(asinf(glm::clamp(sd.y, -1.0f, 1.0f)));
-        float slon = glm::degrees(atan2f(sd.z, -sd.x));
-        ImGui::Text("%s  sub %+.1f, %+.1f", cbuf, slat, slon);
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("UTC clock and subsolar point (lat, lon). Sanity check: at 12:00 UTC lon ~0 (Greenwich noon), at 00:00 UTC lon ~180. If the terminator disagrees, the sun math is wrong.");
+    // Layer panel
+    ImGui::SetNextWindowPos(ImVec2((float)winW - 220, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320, 500), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Layers");
+    static const char* kSideTabs[5] = {"Vista", "Datos", "Volumen", "Estaciones", "Viento"};
+    for (int t = 0; t < 5; t++) {
+        if (ImGui::Button(kSideTabs[t], ImVec2(72, 0))) impl->sideTab = t;
     }
-    ImGui::Separator();
-    auto tecStatusB = impl->getTec();
-    if (tecStatusB && tecStatusB->grid.valid) {
-        if (tecStatusB->fromCache && !tecStatusB->simulated) {
-            char tcbuf[16] = "--:--";
-            {
-                std::time_t tt = (std::time_t)tecStatusB->grid.timestamp;
-                std::tm gg;
-#ifdef _WIN32
-                gmtime_s(&gg, &tt);
-#else
-                gmtime_r(&tt, &gg);
-#endif
-                strftime(tcbuf, sizeof(tcbuf), "%H:%M", &gg);
-            }
-            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "TEC: cache %s UTC (%dx%d)",
-                tcbuf, tecStatusB->grid.width, tecStatusB->grid.height);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Cached GloTEC grid from disk (M10): real data from a previous session. Live download replaces it automatically; frames older than tecCacheMaxAgeH feed replay only.");
-        } else if (tecStatusB->simulated) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "TEC: %dx%d (MOCK offline)",
-                tecStatusB->grid.width, tecStatusB->grid.height);
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Simulated diurnal pattern (EsaAdapter): GloTEC unreachable. Switches to real data automatically when the download succeeds.");
-        } else {
-            char tgbuf[16] = "--:--";
-            {
-                std::time_t tt = (std::time_t)tecStatusB->grid.timestamp;
-                std::tm gg;
-#ifdef _WIN32
-                gmtime_s(&gg, &tt);
-#else
-                gmtime_r(&tt, &gg);
-#endif
-                strftime(tgbuf, sizeof(tgbuf), "%H:%M", &gg);
-            }
-            ImGui::Text("TEC: %dx%d GloTEC %s (+%.0fs)", tecStatusB->grid.width, tecStatusB->grid.height, tgbuf,
-                fmax(0.0, difftime(std::time(nullptr), (std::time_t)tecStatusB->grid.timestamp)));
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real GloTEC grid (NOAA SWPC) with its data time (UTC) and age ticking every second.");
-            ImGui::Text("Source: NOAA SWPC GloTEC");
-        }
-    } else {
-        ImGui::TextDisabled("TEC: waiting for data...");
+    ImGui::SameLine();
+    ImGui::BeginChild("sidebody", ImVec2(0, 0), false);
+    switch (impl->sideTab) {
+        case 0: tabVista(); break;
+        case 2: tabVolumen(); break;
+        case 3: tabEstaciones(); break;
+        case 4: tabViento(); break;
+        case 1:
+        default: tabDatos(); break;
     }
+    ImGui::EndChild();
     ImGui::End();
 
     drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)
