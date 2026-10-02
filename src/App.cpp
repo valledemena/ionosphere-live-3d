@@ -193,10 +193,9 @@ struct App::Impl {
     bool giroStationsVisible = true;
     bool auroraVisible = true;
     bool showEarth = true, showAtmosphere = true, showStars = true;
-    // UI-081: flags del menu Ventana (sin persistencia; default true = conducta actual).
-    bool showWinMain = true, showWinLayers = true, showWinSpace = true;
-    bool showWinRadio = true, showWinCircuit = true, showWinLegend = true;
-    bool showWinAlt = true, showWinLimb = true, showWinTime = true;
+    // UI-087: flags de flotantes del menu Ventana (sin persistencia; default true = conducta actual).
+    bool showWinCircuit = true, showWinLegend = true, showWinAlt = true;
+    bool showWinLimb = true, showWinTime = true;
     bool terminatorVisible = true;
     float nightLevel = 0.45f;   // night-side brightness (earth.frag u_night)
     float cloudAmt = 0.55f;     // 0 = clear, 1 = overcast (earth.frag u_cloudAmt)
@@ -3491,56 +3490,9 @@ void App::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // UI-081: menu superior clasico — cada ventana flotante anclada en Ventana.
+    // UI-087: barra de menus con contenido (particion 086) — System/Layers/Space/Radio + Ventana.
     if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("Ventana")) {
-            ImGui::MenuItem("Ionosphere Live 3D", nullptr, &impl->showWinMain);
-            ImGui::MenuItem("Layers", nullptr, &impl->showWinLayers);
-            ImGui::MenuItem("Space Weather", nullptr, &impl->showWinSpace);
-            ImGui::MenuItem("Radio Propagation", nullptr, &impl->showWinRadio);
-            ImGui::MenuItem("Circuit", nullptr, &impl->showWinCircuit);
-            ImGui::MenuItem("Legend", nullptr, &impl->showWinLegend);
-            ImGui::MenuItem("Altitude", nullptr, &impl->showWinAlt);
-            ImGui::MenuItem("Limb x3", nullptr, &impl->showWinLimb);
-            ImGui::MenuItem("Timeline", nullptr, &impl->showWinTime);
-            {
-                // M11 kick-on-open preservado al conmutar Sun desde el menu.
-                bool sunWasM = impl->sunVisible;
-                if (ImGui::MenuItem("Sun", nullptr, &impl->sunVisible))
-                    if (impl->sunVisible && !sunWasM) impl->sdoKick.store(true);
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::EndMainMenuBar();
-    }
-
-    if ((float)glfwGetTime() < impl->cineHintUntil && impl->hintMsg[0] != '\0') {
-        ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 110.0f, (float)winH - 40.0f), ImGuiCond_Always);
-        ImGui::Begin("##cinehint", nullptr,
-            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs |
-            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.85f), "%s", impl->hintMsg);
-        ImGui::End();
-    }
-
-    // Loading overlay: live data arrives in the background, globe is immediate.
-    if (!impl->initialLoadDone.load()) {
-        int done = impl->loadDone.load(), total = impl->loadTotal.load();
-        ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 160.0f, (float)winH * 0.5f - 50.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(320, 90), ImGuiCond_Always);
-        ImGui::Begin("##loading", nullptr,
-            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
-        ImGui::Text("Downloading live data... %d/%d", done, total > 0 ? total : 5);
-        ImGui::ProgressBar(total > 0 ? (float)done / (float)total : 0.0f, ImVec2(-1, 0), "");
-        ImGui::TextDisabled("Globe, clouds and UI stay interactive.");
-        ImGui::End();
-    }
-
-    // FPS
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(200, 60), ImGuiCond_FirstUseEver);
-    if (impl->showWinMain) {
-    ImGui::Begin("Ionosphere Live 3D");
+        if (ImGui::BeginMenu("System")) {
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frames per second. Below ~30 the view feels sluggish (try disabling Bloom).");
     ImGui::Text("OpenGL: %s", glGetString(GL_VERSION));
@@ -3683,116 +3635,9 @@ void App::render() {
             ImGui::EndTable();
         }
     }
-    ImGui::End();
-    }
-
-    // UI-081: izca incondicional por frame (082 exigencia critica) — vivia
-    // dentro de Layers; el flag del menu la mataria con la ventana.
-    // Tooltip + hover/pin: nearest station under the cursor on the globe.
-    // Click (no drag) on a station pins it; click on empty space unpins.
-    // The Radio Propagation panel shows the pinned station, else the hovered one.
-    ImGuiIO& io2 = ImGui::GetIO();
-    int hitIdx = -1;
-    double curMX = 0.0, curMY = 0.0;
-    if (!io2.WantCaptureMouse && impl->ionosondeLayer.isVisible() && impl->ionosondeLayer.getStationCount() > 0) {
-        double mx, my;
-        glfwGetCursorPos(window, &mx, &my);
-        curMX = mx; curMY = my;
-        float ndcX = (float)(2.0 * mx / winW - 1.0);
-        float ndcY = (float)(1.0 - 2.0 * my / winH);
-        hitIdx = impl->ionosondeLayer.hitTest(ndcX, ndcY, view, proj, glm::radians(12.0f));
-        if (hitIdx >= 0) {
-            const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
-            if (sp) {
-                ImGui::BeginTooltip();
-                ImGui::Text("%s (%s)", sp->name.c_str(), sp->code.c_str());
-                ImGui::Text("lat %.2f  lon %.2f", sp->latDeg, sp->lonDeg);
-                ImGui::Text("foF2 %.2f MHz  MUF %.1f MHz", sp->foF2, sp->muf);
-                ImGui::Text("hmF2 %.0f km  NmF2 %.2e m^-3", sp->hmF2, sp->nmF2);
-                ImGui::Text("foE %s  foEs %s  fmin %s",
-                    giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
-                ImGui::Text("B0 %s km  B1 %s",
-                    giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
-                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
-                if (sp->stale && sp->valid)
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                        "stale row (>6 h; maps exclude it)");
-                // M4 (P4): fuera de la lista prioritaria -> catalogo visible
-                // sin polling (dropdown): avisarlo en el tooltip (en modo
-                // kc2g TODAS las filas mostradas traen dato del failover).
-                if (!impl->giro.isPolled(sp->code) &&
-                    impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
-                    ImGui::TextDisabled("not polled (catalog only)");
-                // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
-                // Busca en GIRO y DIAS.
-                {
-                    std::vector<float> fh;
-                    for (const auto& s : impl->giro.copySamples()) {
-                        if (s.code != sp->code) continue;
-                        for (const auto& h : s.history) fh.push_back(h.foF2);
-                        break;
-                    }
-                    if (fh.size() < 2) {
-                        for (const auto& s : impl->dias.copySamples()) {
-                            if (s.code != sp->code) continue;
-                            for (const auto& h : s.history) fh.push_back(h.foF2);
-                            break;
-                        }
-                    }
-                    if (fh.size() >= 2) {
-                        float mn = fh[0], mx = fh[0];
-                        for (float v : fh) { mn = fminf(mn, v); mx = fmaxf(mx, v); }
-                        if (mx - mn < 0.5f) { mx += 0.25f; mn -= 0.25f; }
-                        ImGui::Text("foF2 %.1fh", (fh.size() - 1) * 5.0f / 60.0f);
-                        ImGui::PlotLines("##fof2hist", fh.data(), (int)fh.size(), 0, nullptr, mn, mx, ImVec2(180, 36));
-                    }
-                }
-                ImGui::TextDisabled("Click to pin this station");
-                ImGui::EndTooltip();
-            } else {
-                hitIdx = -1;
-            }
+        ImGui::EndMenu();
         }
-    }
-    impl->hoveredStation = hitIdx;
-    {
-        bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (leftDown && !impl->mouseLeftPrev) {
-            impl->mouseDownX = curMX; impl->mouseDownY = curMY;
-        }
-        if (!leftDown && impl->mouseLeftPrev && !io2.WantCaptureMouse) {
-            double dx = curMX - impl->mouseDownX, dy = curMY - impl->mouseDownY;
-            if (dx * dx + dy * dy < 36.0 && impl->ionosondeLayer.isVisible()) {
-                if (hitIdx >= 0) {
-                    const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
-                    if (impl->hfPickRx) {
-                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
-                        // circuito (consume el click, no toca el pin).
-                        if (sp) {
-                            impl->hfRxCode = sp->code;
-                            impl->hfCircuitDirty = true;
-                        }
-                        impl->hfPickRx = false;
-                    } else if (sp && sp->code == impl->pinnedCode) {
-                        impl->pinnedCode.clear();  // toggle off
-                    } else if (sp) {
-                        impl->pinnedCode = sp->code;
-                    }
-                } else if (impl->hfPickRx) {
-                    impl->hfPickRx = false;   // click al vacio: cancela el pick (pin intacto)
-                } else {
-                    impl->pinnedCode.clear();
-                }
-            }
-        }
-        impl->mouseLeftPrev = leftDown;
-    }
-
-    // Layer panel
-    ImGui::SetNextWindowPos(ImVec2((float)winW - 220, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(210, 250), ImGuiCond_FirstUseEver);
-    if (impl->showWinLayers) {
-    ImGui::Begin("Layers");
+        if (ImGui::BeginMenu("Layers")) {
     ImGui::Checkbox("Earth", &impl->showEarth);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Earth globe with day/night texture driven by the solar position.");
     if (ImGui::SliderFloat("Night light", &impl->nightLevel, 0.05f, 1.0f)) {
@@ -4267,20 +4112,13 @@ void App::render() {
     } else {
         ImGui::TextDisabled("TEC: waiting for data...");
     }
-    ImGui::End();
-    }
-
-    drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)
-
-    // ---- Space Weather HUD (indices NOAA SWPC, Fase 1) ----
+        ImGui::EndMenu();
+        }
     auto idxB = impl->getIndices();
     static const IndexSnapshot kNoSnap{};
     static const std::vector<IndexHistoryPoint> kNoKp{}, kNoDst{}, kNoF107{}, kNoSsn{};
     const IndexSnapshot& sw = idxB ? idxB->snap : kNoSnap;
-    if (impl->showWinSpace) {
-    ImGui::SetNextWindowPos(ImVec2((float)winW - 220, 280), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(210, 300), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Space Weather");
+        if (ImGui::BeginMenu("Space Weather")) {
     ImGui::TextWrapped("Kp / Ap / Dst / F10.7 / SSN  (NOAA SWPC)");
     HelpMarker("Live space weather indices (NOAA SWPC): Kp geomagnetic storms 0-9, Dst equatorial ring current, F10.7 solar flux, Ap planetary index, SSN sunspots. Any field offline falls back to mock.");
     if (sw.simulated)
@@ -4344,11 +4182,8 @@ void App::render() {
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", sw.error.c_str());
     }
-    ImGui::End();
-    }
-
-    // ---- Radio Propagation HUD (Fase 5): MUF/LUF/FOT + S4/TAI/AE/Faraday/Spread-F ----
-    // Source: pinned station if set, else hovered station, else global median.
+        ImGui::EndMenu();
+        }
     auto radioB = impl->getRadio();
     static const RadioPropSample kNoRp{};
     static const std::vector<RadioPropHistoryPoint> kNoAe{}, kNoS4{};
@@ -4402,10 +4237,7 @@ void App::render() {
     float showS4  = rpStation && stHasData ? stS4  : rp.s4;
     float showFaraday = rpStation && stHasData ? stFar : rp.faradayDeg;
     float showSpF = rpStation && stHasData ? stSpF : rp.spreadF;
-    ImGui::SetNextWindowPos(ImVec2(10, 280), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(220, 360), ImGuiCond_FirstUseEver);
-    if (impl->showWinRadio) {
-    ImGui::Begin("Radio Propagation");
+        if (ImGui::BeginMenu("Radio Propagation")) {
     ImGui::TextWrapped("MUF/LUF/FOT + S4/AE/TAI (GIRO+NOAA)");
     HelpMarker("HF guide: transmit between LUF and MUF, best at FOT. S4/AE/TAI/Faraday/Spread-F warn of degradation. Hover a GIRO station (or click to pin) for its values; otherwise the global median is shown.");
     if (rpStation) {
@@ -4540,8 +4372,150 @@ void App::render() {
             impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK ? "(kc2g real)" : "(GIRO real)");
     if (!rpErr.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", rpErr.c_str());
-    ImGui::End();
+        ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Ventana")) {
+            ImGui::MenuItem("Circuit", nullptr, &impl->showWinCircuit);
+            ImGui::MenuItem("Legend", nullptr, &impl->showWinLegend);
+            ImGui::MenuItem("Altitude", nullptr, &impl->showWinAlt);
+            ImGui::MenuItem("Limb x3", nullptr, &impl->showWinLimb);
+            ImGui::MenuItem("Timeline", nullptr, &impl->showWinTime);
+            {
+                // M11 kick-on-open preservado al conmutar Sun desde el menu.
+                bool sunWasM = impl->sunVisible;
+                if (ImGui::MenuItem("Sun", nullptr, &impl->sunVisible))
+                    if (impl->sunVisible && !sunWasM) impl->sdoKick.store(true);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
     }
+
+    if ((float)glfwGetTime() < impl->cineHintUntil && impl->hintMsg[0] != '\0') {
+        ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 110.0f, (float)winH - 40.0f), ImGuiCond_Always);
+        ImGui::Begin("##cinehint", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.85f), "%s", impl->hintMsg);
+        ImGui::End();
+    }
+
+    // Loading overlay: live data arrives in the background, globe is immediate.
+    if (!impl->initialLoadDone.load()) {
+        int done = impl->loadDone.load(), total = impl->loadTotal.load();
+        ImGui::SetNextWindowPos(ImVec2((float)winW * 0.5f - 160.0f, (float)winH * 0.5f - 50.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(320, 90), ImGuiCond_Always);
+        ImGui::Begin("##loading", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::Text("Downloading live data... %d/%d", done, total > 0 ? total : 5);
+        ImGui::ProgressBar(total > 0 ? (float)done / (float)total : 0.0f, ImVec2(-1, 0), "");
+        ImGui::TextDisabled("Globe, clouds and UI stay interactive.");
+        ImGui::End();
+    }
+
+    // UI-081: izca incondicional por frame (082 exigencia critica) — vivia
+    // dentro de Layers; el flag del menu la mataria con la ventana.
+    // Tooltip + hover/pin: nearest station under the cursor on the globe.
+    // Click (no drag) on a station pins it; click on empty space unpins.
+    // The Radio Propagation panel shows the pinned station, else the hovered one.
+    ImGuiIO& io2 = ImGui::GetIO();
+    int hitIdx = -1;
+    double curMX = 0.0, curMY = 0.0;
+    if (!io2.WantCaptureMouse && impl->ionosondeLayer.isVisible() && impl->ionosondeLayer.getStationCount() > 0) {
+        double mx, my;
+        glfwGetCursorPos(window, &mx, &my);
+        curMX = mx; curMY = my;
+        float ndcX = (float)(2.0 * mx / winW - 1.0);
+        float ndcY = (float)(1.0 - 2.0 * my / winH);
+        hitIdx = impl->ionosondeLayer.hitTest(ndcX, ndcY, view, proj, glm::radians(12.0f));
+        if (hitIdx >= 0) {
+            const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
+            if (sp) {
+                ImGui::BeginTooltip();
+                ImGui::Text("%s (%s)", sp->name.c_str(), sp->code.c_str());
+                ImGui::Text("lat %.2f  lon %.2f", sp->latDeg, sp->lonDeg);
+                ImGui::Text("foF2 %.2f MHz  MUF %.1f MHz", sp->foF2, sp->muf);
+                ImGui::Text("hmF2 %.0f km  NmF2 %.2e m^-3", sp->hmF2, sp->nmF2);
+                ImGui::Text("foE %s  foEs %s  fmin %s",
+                    giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
+                ImGui::Text("B0 %s km  B1 %s",
+                    giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
+                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
+                if (sp->stale && sp->valid)
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                        "stale row (>6 h; maps exclude it)");
+                // M4 (P4): fuera de la lista prioritaria -> catalogo visible
+                // sin polling (dropdown): avisarlo en el tooltip (en modo
+                // kc2g TODAS las filas mostradas traen dato del failover).
+                if (!impl->giro.isPolled(sp->code) &&
+                    impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
+                    ImGui::TextDisabled("not polled (catalog only)");
+                // Sparkline foF2 del historial real (paso 5 min; M4: hasta 6 h).
+                // Busca en GIRO y DIAS.
+                {
+                    std::vector<float> fh;
+                    for (const auto& s : impl->giro.copySamples()) {
+                        if (s.code != sp->code) continue;
+                        for (const auto& h : s.history) fh.push_back(h.foF2);
+                        break;
+                    }
+                    if (fh.size() < 2) {
+                        for (const auto& s : impl->dias.copySamples()) {
+                            if (s.code != sp->code) continue;
+                            for (const auto& h : s.history) fh.push_back(h.foF2);
+                            break;
+                        }
+                    }
+                    if (fh.size() >= 2) {
+                        float mn = fh[0], mx = fh[0];
+                        for (float v : fh) { mn = fminf(mn, v); mx = fmaxf(mx, v); }
+                        if (mx - mn < 0.5f) { mx += 0.25f; mn -= 0.25f; }
+                        ImGui::Text("foF2 %.1fh", (fh.size() - 1) * 5.0f / 60.0f);
+                        ImGui::PlotLines("##fof2hist", fh.data(), (int)fh.size(), 0, nullptr, mn, mx, ImVec2(180, 36));
+                    }
+                }
+                ImGui::TextDisabled("Click to pin this station");
+                ImGui::EndTooltip();
+            } else {
+                hitIdx = -1;
+            }
+        }
+    }
+    impl->hoveredStation = hitIdx;
+    {
+        bool leftDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (leftDown && !impl->mouseLeftPrev) {
+            impl->mouseDownX = curMX; impl->mouseDownY = curMY;
+        }
+        if (!leftDown && impl->mouseLeftPrev && !io2.WantCaptureMouse) {
+            double dx = curMX - impl->mouseDownX, dy = curMY - impl->mouseDownY;
+            if (dx * dx + dy * dy < 36.0 && impl->ionosondeLayer.isVisible()) {
+                if (hitIdx >= 0) {
+                    const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
+                    if (impl->hfPickRx) {
+                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
+                        // circuito (consume el click, no toca el pin).
+                        if (sp) {
+                            impl->hfRxCode = sp->code;
+                            impl->hfCircuitDirty = true;
+                        }
+                        impl->hfPickRx = false;
+                    } else if (sp && sp->code == impl->pinnedCode) {
+                        impl->pinnedCode.clear();  // toggle off
+                    } else if (sp) {
+                        impl->pinnedCode = sp->code;
+                    }
+                } else if (impl->hfPickRx) {
+                    impl->hfPickRx = false;   // click al vacio: cancela el pick (pin intacto)
+                } else {
+                    impl->pinnedCode.clear();
+                }
+            }
+        }
+        impl->mouseLeftPrev = leftDown;
+    }
+
+    drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)
 
     // ---- M8 (plan 11.4): panel «Circuit» (TX/RX + matriz de bandas) ----
     {
