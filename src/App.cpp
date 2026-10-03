@@ -347,7 +347,7 @@ struct App::Impl {
     std::shared_ptr<const SdoBundle> lastSdo;  // M11
     // M11: Sun (disco SDO + ARs).
     int sunProduct = 0;             // 0=HMIIF 1=A304 (click alterna)
-    bool sunVisible = true;         // toggle Layers + gate de trafico
+    bool sunVisible = true;         // toggle Globe + gate de trafico
     GLuint sunTex[2] = {0, 0};      // D1: una por producto (toggle = 1 frame)
     int sunTexW[2] = {0, 0}, sunTexH[2] = {0, 0};
     double sunUpTime[2] = {-1.0, -1.0};  // ultimo subido por producto (hilo main)
@@ -2208,7 +2208,7 @@ void App::update(float dt) {
                 }
             }
             hfIn.freqMHz = impl->hfFreqMHz;
-            hfIn.heightExag = impl->explodeFactor;   // M9: el arco acompana la altura visual (Layers/Explode)
+            hfIn.heightExag = impl->explodeFactor;   // M9: el arco acompana la altura visual (Ionosphere/Explode)
             hfIn.apexOffsetKm = impl->altKm - 300.0f;   // M9fix: apice = (h' + altKm-300)·exag — sigue al slider de capa (default 300 = M9 byte-exacto)
             hfIn.gridStamp = impl->hfGridStamp;
             if (impl->hfFoF2Grid.valid && !impl->hfFoF2Grid.values.empty())
@@ -4653,7 +4653,7 @@ void App::render() {
         if (ImGui::IsItemHovered() && impl->tecColShell.isVisible()) impl->legendSolo = App::Impl::SoloTarget::Model;
         if (impl->volumeLayer.isVisible()) {
             ImGui::Text("Volume [%s] (%s)", impl->volumeMode == 1 ? "chapman" : "logNe",
-                        impl->volumeLayer.getColormapName().c_str());
+                        impl->volumeMode == 1 ? "fixed" : impl->volumeLayer.getColormapName().c_str());
             if (ImGui::IsItemHovered()) {
                 impl->legendSolo = App::Impl::SoloTarget::Volume;
                 ImGui::SetItemTooltip("Hover to isolate the volume. Mode Chapman shows fixed D/E/F1/F2 colors.");

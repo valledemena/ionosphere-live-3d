@@ -40,14 +40,14 @@
 // ribbon 0.0075 (M9b: semiancho demo-verbatim, constante) es directo en unidades de mundo.
 // M9 (port demo->C++, peticion de DAVID): el arco acompana la altura
 // visual de las capas — la altitud de las patas se multiplica por
-// explodeFactor (slider «Explode» 1..5 del panel Layers, default 1 =
+// explodeFactor (slider «Explode» 1..5 del menú Ionosphere, default 1 =
 // escala fisica; h' SIGUE vivo del grid GIRO). El ancho es el de la demo:
 // 0.0075 CONSTANTE — re-sellado M9b con la comparativa lado a lado (la
 // demo no escala el tubo con la exageracion; hfc::ribbonHalfWidth).
 // Pulso a paridad de la demo (0.22/2.5/0.9/0.9).
 // Fisica del circuito, grids y matriz de bandas intactas.
 // M9fix (re-check de DAVID con la demo al lado): (1) el apice ADEMAS
-// sigue al slider «Altitude (km)» de Layers — apice = (h' + altKm -
+// sigue al slider «Altitude (km)» de Ionosphere — apice = (h' + altKm -
 // 300)·exag, offset en la firma P7 (la shell de color ya vive a
 // altKm·explode: el arco y la shell se mueven juntos, hueco (300-h')·
 // exag constante); (2) cursor del pulso MULTIPLICATIVO col*(0.55+
@@ -221,7 +221,7 @@ inline double sampleGrid(const float* values, int w, int h, double lat, double l
 
 // Altitud de una muestra de pata (subida t, bajada 1-t): (h'+off)·t·exag.
 // M9fix: off = apexOffsetKm (App: altKm - 300, slider «Altitude (km)» de
-// Layers) — el apice sigue a la shell de color (applyAltitudes mueve
+// Ionosphere) — el apice sigue a la shell de color (applyAltitudes mueve
 // TEC/outer al mismo altKm·explode; default 300 => off = 0 = M9 exacto).
 // Lineal en t => exageracion y offset escalan una recta, sin curvatura:
 // LEGS=14 (27/salto) sigue sub-pixel a cualquier exag. Floor: la base

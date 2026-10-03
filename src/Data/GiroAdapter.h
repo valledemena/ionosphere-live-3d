@@ -105,7 +105,7 @@ public:
     // Muestreo de la red en un instante (para replay): interpola cada estacion
     // con historia a 'epoch' (clamp a extremos). Sin historia usa el ultimo valor.
     std::vector<StationSample> sampleHistoryAt(double epoch) const;
-    // M4 (P5): estado de red para la UI (TimeBar / panel Layers).
+    // M4 (P5): estado de red para la UI (TimeBar / menú Ionosphere).
     struct GiroNetStatus {
         int polled = 0;             // prioritarias presentes en el catalogo
         int withData = 0;           // ... de ellas con muestra valida
