@@ -3490,7 +3490,7 @@ void App::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // UI-087: barra de menus con contenido (particion 086) — System/Layers/Space/Radio + Ventana.
+    // UI-091: barra de menus (particion 090) — System/Globe/Ionosphere/Space/Radio + Ventana.
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("System")) {
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -3637,7 +3637,7 @@ void App::render() {
     }
         ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Layers")) {
+        if (ImGui::BeginMenu("Globe")) {
     ImGui::Checkbox("Earth", &impl->showEarth);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Earth globe with day/night texture driven by the solar position.");
     if (ImGui::SliderFloat("Night light", &impl->nightLevel, 0.05f, 1.0f)) {
@@ -3669,6 +3669,33 @@ void App::render() {
     ImGui::Checkbox("Sun", &impl->sunVisible);  // M11 (N2: abrir patea)
     if (impl->sunVisible && !sunWas) impl->sdoKick.store(true);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SDO solar disk (HMI/AIA-304) with active regions. Downloads only while open (1 JPG/15 min).");
+
+    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
+    // el dato real vive en la ventana Sun M11.)
+
+    ImGui::Separator();
+    ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar direction (computed). Defines day/night and the terminator.");
+    {
+        // Reloj verificador dia/noche: UTC + punto subsolar en el marco del globo.
+        std::time_t nowT = std::time(nullptr);
+        std::tm g;
+#ifdef _WIN32
+        gmtime_s(&g, &nowT);
+#else
+        gmtime_r(&nowT, &g);
+#endif
+        char cbuf[32] = "--:--:--";
+        strftime(cbuf, sizeof(cbuf), "%H:%M:%S UTC", &g);
+        glm::vec3 sd = glm::normalize(impl->sunDirection);
+        float slat = glm::degrees(asinf(glm::clamp(sd.y, -1.0f, 1.0f)));
+        float slon = glm::degrees(atan2f(sd.z, -sd.x));
+        ImGui::Text("%s  sub %+.1f, %+.1f", cbuf, slat, slon);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("UTC clock and subsolar point (lat, lon). Sanity check: at 12:00 UTC lon ~0 (Greenwich noon), at 00:00 UTC lon ~180. If the terminator disagrees, the sun math is wrong.");
+    }
+        ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Ionosphere")) {
     ImGui::Separator();
     ImGui::Text("Ionosphere");
     HelpMarker("Color shell over the globe. Pick the variable (real TEC or GIRO/HF interpolations) and it is painted with its colormap.");
@@ -3949,56 +3976,6 @@ void App::render() {
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DIAS Ionostream (NOA Athens): full EU profiles over plain HTTPS (no FTP). Fills stations missing in GIRO; GIRO wins ties. EB040 does not flow here (verified).");
     }
 
-    // ---- Viento solar (Fase 4) ----
-    ImGui::Separator();
-    auto windB = impl->getWind();
-    static const SolarWindSample kNoWind{};
-    static const std::vector<SolarWindHistoryPoint> kNoBz{};
-    static const std::string kNoErr{};
-    const SolarWindSample& swl = windB ? windB->latest : kNoWind;
-    const bool windSim = windB ? windB->simulated : true;
-    const std::string& windErr = windB ? windB->error : kNoErr;
-    const auto& bzh = windB ? windB->bzHist : kNoBz;
-    bool showSW = impl->swArrowsVisible;
-    if (ImGui::Checkbox("Solar wind", &showSW)) {
-        impl->swArrowsVisible = showSW;
-        impl->solarWindLayer.setVisible(showSW);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed.");
-    const char* swModes[] = { "color: velocity", "color: Bz (red N / blue S)" };
-    if (ImGui::Combo("Arrow color", &impl->swArrowMode, swModes, 2)) {
-        impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, impl->sunDirection, impl->swArrowMode);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow color: by speed (blue->red) or by Bz (red=north, blue=south/geoeffective).");
-    if (ImGui::SliderFloat("Arrow scale", &impl->swArrowScale, 0.2f, 4.0f)) {
-        impl->solarWindLayer.setArrowScale(impl->swArrowScale);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow length multiplier. Visual only.");
-    ImGui::Text("Speed: %.0f km/s", swl.speed);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Solar wind speed (NOAA RTSW wind_1m, proton_speed). Calm ~350-450 km/s, CME >600.");
-    ImGui::Text("Density: %.1f cm^-3", swl.density);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Proton density (NOAA RTSW wind_1m). Rises in sheaths/CMEs.");
-    ImVec4 bzCol = swl.bz >= 0 ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.3f, 0.5f, 1.0f, 1.0f);
-    ImGui::TextColored(bzCol, "Bz: %+.1f nT  (%s)", swl.bz, swl.bz >= 0 ? "north" : "south");
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("IMF Bz GSM (NOAA RTSW mag_1m). Southward (negative) means reconnection; sustained < -10 nT likely storms.");
-    ImGui::ProgressBar(glm::clamp((swl.speed - 200.0f) / 800.0f, 0.0f, 1.0f), ImVec2(0, 0), "speed");
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Speed normalized to 200-1000 km/s.");
-    if (swl.valid && windSim)
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "(simulated: offline)");
-    else if (swl.valid && !windSim)
-        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "(NOAA live)");
-    if (!windErr.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", windErr.c_str());
-
-    // Mini-grafica temporal de Bz (ultimas 24h).
-    std::vector<float> bzVals;
-    for (const auto& h : bzh) bzVals.push_back(h.value);
-    if (!bzVals.empty()) {
-        ImGui::Text("Bz last 24h");
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Bz history ~24h (NOAA RTSW). Dips below -10 nT mean a possible geomagnetic storm.");
-        ImGui::PlotLines("Bz", bzVals.data(), (int)bzVals.size(), 0, nullptr, -15.0f, 15.0f, ImVec2(190, 40));
-    }
-
     // ---- Faraday rotation (Fase 5): vectores 3D GL_LINES sobre la esfera ----
     ImGui::Separator();
     bool showFar = impl->faradayVisible;
@@ -4021,55 +3998,6 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Vector length multiplier. Visual only.");
     ImGui::Text("Vectors: %d", impl->faradayLayer.getVectorCount());
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Number of vectors drawn (7x12 grid).");
-
-    // ---- Aurora oval (NOAA Ovation): green overlay, both hemispheres ----
-    ImGui::Separator();
-    bool showAur = impl->auroraVisible;
-    if (ImGui::Checkbox("Aurora oval", &showAur)) {
-        impl->auroraVisible = showAur;
-        impl->auroraLayer.setVisible(showAur);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("NOAA Ovation auroral oval forecast (~30-90 min ahead). Green shell at ~110 km over both poles. Brightens and expands toward the equator during storms (high AE/Kp).");
-    if (ImGui::SliderFloat("Aurora opacity", &impl->aurOpacity, 0.0f, 1.5f)) {
-        impl->aurOpacity = glm::clamp(impl->aurOpacity, 0.0f, 1.5f);
-        impl->auroraLayer.setOpacity(impl->aurOpacity);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the aurora overlay. Visual only.");
-    auto aurB = impl->getAurora();
-    if (aurB && aurB->grid.valid) {
-        float amn, amx;
-        impl->auroraLayer.getDisplayRange(amn, amx);
-        ImGui::Text("Ovation max: %.0f", amx);
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Peak auroral intensity in the current Ovation forecast (arbitrary units, higher = brighter oval).");
-    } else if (aurB && !aurB->error.empty()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Aurora: %s", aurB->error.c_str());
-    } else {
-        ImGui::TextDisabled("Aurora: waiting for data...");
-    }
-
-    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
-    // el dato real vive en la ventana Sun M11.)
-
-    ImGui::Separator();
-    ImGui::Text("Sun: %.2f, %.2f, %.2f", impl->sunDirection.x, impl->sunDirection.y, impl->sunDirection.z);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar direction (computed). Defines day/night and the terminator.");
-    {
-        // Reloj verificador dia/noche: UTC + punto subsolar en el marco del globo.
-        std::time_t nowT = std::time(nullptr);
-        std::tm g;
-#ifdef _WIN32
-        gmtime_s(&g, &nowT);
-#else
-        gmtime_r(&nowT, &g);
-#endif
-        char cbuf[32] = "--:--:--";
-        strftime(cbuf, sizeof(cbuf), "%H:%M:%S UTC", &g);
-        glm::vec3 sd = glm::normalize(impl->sunDirection);
-        float slat = glm::degrees(asinf(glm::clamp(sd.y, -1.0f, 1.0f)));
-        float slon = glm::degrees(atan2f(sd.z, -sd.x));
-        ImGui::Text("%s  sub %+.1f, %+.1f", cbuf, slat, slon);
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("UTC clock and subsolar point (lat, lon). Sanity check: at 12:00 UTC lon ~0 (Greenwich noon), at 00:00 UTC lon ~180. If the terminator disagrees, the sun math is wrong.");
-    }
     ImGui::Separator();
     auto tecStatusB = impl->getTec();
     if (tecStatusB && tecStatusB->grid.valid) {
@@ -4181,6 +4109,81 @@ void App::render() {
     if (!sw.error.empty()) {
         ImGui::Separator();
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", sw.error.c_str());
+    }
+
+    // ---- Viento solar (Fase 4) ----
+    ImGui::Separator();
+    auto windB = impl->getWind();
+    static const SolarWindSample kNoWind{};
+    static const std::vector<SolarWindHistoryPoint> kNoBz{};
+    static const std::string kNoErr{};
+    const SolarWindSample& swl = windB ? windB->latest : kNoWind;
+    const bool windSim = windB ? windB->simulated : true;
+    const std::string& windErr = windB ? windB->error : kNoErr;
+    const auto& bzh = windB ? windB->bzHist : kNoBz;
+    bool showSW = impl->swArrowsVisible;
+    if (ImGui::Checkbox("Solar wind", &showSW)) {
+        impl->swArrowsVisible = showSW;
+        impl->solarWindLayer.setVisible(showSW);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed.");
+    const char* swModes[] = { "color: velocity", "color: Bz (red N / blue S)" };
+    if (ImGui::Combo("Arrow color", &impl->swArrowMode, swModes, 2)) {
+        impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, impl->sunDirection, impl->swArrowMode);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow color: by speed (blue->red) or by Bz (red=north, blue=south/geoeffective).");
+    if (ImGui::SliderFloat("Arrow scale", &impl->swArrowScale, 0.2f, 4.0f)) {
+        impl->solarWindLayer.setArrowScale(impl->swArrowScale);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow length multiplier. Visual only.");
+    ImGui::Text("Speed: %.0f km/s", swl.speed);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Solar wind speed (NOAA RTSW wind_1m, proton_speed). Calm ~350-450 km/s, CME >600.");
+    ImGui::Text("Density: %.1f cm^-3", swl.density);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Proton density (NOAA RTSW wind_1m). Rises in sheaths/CMEs.");
+    ImVec4 bzCol = swl.bz >= 0 ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.3f, 0.5f, 1.0f, 1.0f);
+    ImGui::TextColored(bzCol, "Bz: %+.1f nT  (%s)", swl.bz, swl.bz >= 0 ? "north" : "south");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("IMF Bz GSM (NOAA RTSW mag_1m). Southward (negative) means reconnection; sustained < -10 nT likely storms.");
+    ImGui::ProgressBar(glm::clamp((swl.speed - 200.0f) / 800.0f, 0.0f, 1.0f), ImVec2(0, 0), "speed");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Speed normalized to 200-1000 km/s.");
+    if (swl.valid && windSim)
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "(simulated: offline)");
+    else if (swl.valid && !windSim)
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "(NOAA live)");
+    if (!windErr.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", windErr.c_str());
+
+    // Mini-grafica temporal de Bz (ultimas 24h).
+    std::vector<float> bzVals;
+    for (const auto& h : bzh) bzVals.push_back(h.value);
+    if (!bzVals.empty()) {
+        ImGui::Text("Bz last 24h");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Bz history ~24h (NOAA RTSW). Dips below -10 nT mean a possible geomagnetic storm.");
+        ImGui::PlotLines("Bz", bzVals.data(), (int)bzVals.size(), 0, nullptr, -15.0f, 15.0f, ImVec2(190, 40));
+    }
+
+    // ---- Aurora oval (NOAA Ovation): green overlay, both hemispheres ----
+    ImGui::Separator();
+    bool showAur = impl->auroraVisible;
+    if (ImGui::Checkbox("Aurora oval", &showAur)) {
+        impl->auroraVisible = showAur;
+        impl->auroraLayer.setVisible(showAur);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("NOAA Ovation auroral oval forecast (~30-90 min ahead). Green shell at ~110 km over both poles. Brightens and expands toward the equator during storms (high AE/Kp).");
+    if (ImGui::SliderFloat("Aurora opacity", &impl->aurOpacity, 0.0f, 1.5f)) {
+        impl->aurOpacity = glm::clamp(impl->aurOpacity, 0.0f, 1.5f);
+        impl->auroraLayer.setOpacity(impl->aurOpacity);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the aurora overlay. Visual only.");
+    auto aurB = impl->getAurora();
+    if (aurB && aurB->grid.valid) {
+        float amn, amx;
+        impl->auroraLayer.getDisplayRange(amn, amx);
+        ImGui::Text("Ovation max: %.0f", amx);
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Peak auroral intensity in the current Ovation forecast (arbitrary units, higher = brighter oval).");
+    } else if (aurB && !aurB->error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Aurora: %s", aurB->error.c_str());
+    } else {
+        ImGui::TextDisabled("Aurora: waiting for data...");
     }
         ImGui::EndMenu();
         }
@@ -4354,7 +4357,7 @@ void App::render() {
     ImGui::ProgressBar(glm::clamp(rp.tai / 3.0f, 0.0f, 1.0f), ImVec2(0, 0), "tec activity");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TAI normalized 0-3.");
     ImGui::Text("Faraday: %.0f deg", showFaraday);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(rpStation ? "Faraday rotation at this station (deg at 100 MHz, one hop), from its NmF2-derived TEC. Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Layers." : "Median Faraday rotation (deg at 100 MHz, one hop). Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Layers.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(rpStation ? "Faraday rotation at this station (deg at 100 MHz, one hop), from its NmF2-derived TEC. Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Ionosphere." : "Median Faraday rotation (deg at 100 MHz, one hop). Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Ionosphere.");
     ImGui::Text("Spread-F: %.0f %%", showSpF);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Spread-F: % occurrence of spread echoes in the ionogram. Nocturnal equatorial/auroral. Causes fading and unstable MUF. The map uses a diverging colormap.");
     ImGui::ProgressBar(glm::clamp(showSpF / 100.0f, 0.0f, 1.0f), ImVec2(0, 0), "spread-F");
