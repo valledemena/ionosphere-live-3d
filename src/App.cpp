@@ -3847,21 +3847,23 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Real raymarched electron density Ne(lat, lon, h) rebuilt from station profiles (Chapman + Epstein) every ~5 s. Heavier on the GPU; follows live and replay.");
     ImGui::Checkbox("Limb zoom", &impl->pipVisible);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Magnifier following the east limb: same framebuffer, x3 zoom, no extra render cost. Shows shell stacking edge-on.");
+    ImGui::BeginDisabled(!impl->volumeVisible);
     if (ImGui::SliderFloat("Volume opacity", &impl->volumeOpacity, 0.0f, 2.5f)) {
         impl->volumeOpacity = glm::clamp(impl->volumeOpacity, 0.0f, 2.5f);
         impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Brightness of the volumetric rendering. Visual only.");
-    const char* volModes[] = { "Density", "Layers" };
+    const char* volModes[] = { "Density", "Chapman" };
     if (ImGui::Combo("Volume mode", &impl->volumeMode, volModes, 2)) {
         impl->volumeMode = impl->volumeMode & 1;
         impl->volumeLayer.setColorMode(impl->volumeMode);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Density: continuous viridis scale. Layers: 4 fixed colors by winning layer (D orange, E green, F1 yellow, F2 cyan), exact boundaries (unfiltered).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Density: continuous viridis scale. Chapman: 4 fixed colors by winning layer (D orange, E green, F1 yellow, F2 cyan), exact boundaries (unfiltered).");
     if (ImGui::Checkbox("Iso bands", &impl->isoBands)) {
         impl->volumeLayer.setIsoBands(impl->isoBands);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Highlight shells at logNe 10.5/11/11.5 (white bands). Works in both volume modes.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Highlight shells at logNe 10.5/11/11.5 (white bands). Works in both volume modes; needs Volumetric density ON.");
+    ImGui::EndDisabled();
     ImGui::Checkbox("Labels", &impl->labelsVisible);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Floating labels anchored in 3D (station F2 peak, aurora oval, TEC shell) with leader lines.");
     if (ImGui::SliderFloat("Explode", &impl->explodeFactor, 1.0f, 5.0f)) {
@@ -4650,11 +4652,11 @@ void App::render() {
         if (impl->tecColShell.isVisible()) ImGui::TextDisabled("modelTEC [TECU] (viridis)");
         if (ImGui::IsItemHovered() && impl->tecColShell.isVisible()) impl->legendSolo = App::Impl::SoloTarget::Model;
         if (impl->volumeLayer.isVisible()) {
-            ImGui::Text("Volume [%s] (%s)", impl->volumeMode == 1 ? "layer" : "logNe",
+            ImGui::Text("Volume [%s] (%s)", impl->volumeMode == 1 ? "chapman" : "logNe",
                         impl->volumeLayer.getColormapName().c_str());
             if (ImGui::IsItemHovered()) {
                 impl->legendSolo = App::Impl::SoloTarget::Volume;
-                ImGui::SetItemTooltip("Hover to isolate the volume. Mode Layers shows fixed D/E/F1/F2 colors.");
+                ImGui::SetItemTooltip("Hover to isolate the volume. Mode Chapman shows fixed D/E/F1/F2 colors.");
             }
         }
         if (impl->tecLayer.getGrid().valid && impl->tecLayer.isVisible()) {

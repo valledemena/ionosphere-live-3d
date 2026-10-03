@@ -115,7 +115,7 @@ void main() {
             float m = min(min(abs(d - 0.556), abs(d - 0.667)), abs(d - 0.778));
             float band = 1.0 - smoothstep(0.0, u_isoWidth, m);
             col = mix(col, vec3(1.0), band * 0.55);
-            a = max(a, band * 0.35);
+            a = max(a, min(band * 0.35, u_opacityScale));
         }
 
         accumColor += (1.0 - accumAlpha) * a * col;
