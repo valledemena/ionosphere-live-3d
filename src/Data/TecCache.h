@@ -62,4 +62,9 @@ std::vector<std::size_t> missingInWindow(const std::vector<double>& cachedEpochs
                                          const std::vector<double>& indexEpochs,
                                          double nowUtc, std::size_t cap);
 
+// Fit-check pre-fetch (P1 retencion, particion 106): decide SI pedir vale
+// la pena. Cabe ssi hay hueco (ringSize < cap) o epoch > oldestEpoch.
+// Puro, sin I/O ni estado; fuera-de-ventana NO es su asunto (missingInWindow).
+bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, double epoch);
+
 }  // namespace teccache

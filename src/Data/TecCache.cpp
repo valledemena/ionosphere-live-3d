@@ -178,4 +178,9 @@ std::vector<std::size_t> missingInWindow(
     return out;
 }
 
+bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, double epoch) {
+    if (ringSize < cap) return true;
+    return epoch > oldestEpoch;
+}
+
 }  // namespace teccache

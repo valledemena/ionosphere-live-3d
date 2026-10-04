@@ -205,6 +205,17 @@ int main() {
         check_bool("removeFrame false sin fichero", !removeFrame(d, 1.0));
     }
 
+    std::printf("--- P1b: fit-check fitsInRing (6 bordes) ---\n");
+    {
+        const std::size_t C = 432;
+        check_bool("hueco aunque epoch<oldest", fitsInRing(100, C, 500.0, 100.0));
+        check_bool("lleno+epoch>oldest", fitsInRing(C, C, 500.0, 600.0));
+        check_bool("lleno+epoch==oldest false", !fitsInRing(C, C, 500.0, 500.0));
+        check_bool("lleno+epoch<oldest false", !fitsInRing(C, C, 500.0, 100.0));
+        check_bool("vacio true con oldest 0.0", fitsInRing(0, C, 0.0, 100.0));
+        check_bool("viejo rige oldest sin ventana", !fitsInRing(C, C, 500.0, 1.0));
+    }
+
     std::printf("\n[test_tec_cache] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

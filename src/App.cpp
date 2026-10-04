@@ -1356,14 +1356,25 @@ bool App::init(int width, int height, const char* title) {
                     teccache::missingInWindow(cachedEp, idxEp, nowPre,
                                               (std::size_t)teccache::kCapFrames);
                 self->impl->histTotal.store((int)want.size());
+                int nSkipped = 0;
                 for (std::size_t k : want) {
                     if (self->impl->shutdownRequested.load()) break;   // M0.2
+                    {
+                        std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
+                        const std::size_t nRing = self->impl->tecHist.size();
+                        const double ringOld = nRing > 0 ? self->impl->tecHist.front().timestamp : 0.0;
+                        if (!teccache::fitsInRing(nRing, (std::size_t)teccache::kCapFrames, ringOld, idx[k].timeUtc)) {
+                            ++nSkipped;
+                            self->impl->histDone.store(self->impl->histDone.load() + 1);
+                            continue;
+                        }
+                    }
                     GridData fr;
                     if (loader.fetchFrame(idx[k].url, idx[k].timeUtc, fr))
                         self->pushHistoryFrame(fr, idx[k].timeUtc, false);
                     self->impl->histDone.store(self->impl->histDone.load() + 1);
                 }
-                printf("[App] History preload: %d cached + %d fetched\n", nCached, (int)want.size());
+                printf("[App] History preload: %d cached + %d fetched + %d skipped\n", nCached, (int)want.size() - nSkipped, nSkipped);
             }
             self->impl->histLoading.store(false);
         });
