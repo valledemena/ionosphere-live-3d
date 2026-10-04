@@ -186,6 +186,25 @@ int main() {
         }
     }
 
+    std::printf("--- P1: retencion delete-on-pop (removeFrame) ---\n");
+    {
+        std::string d = freshDir("ret");
+        const int N = 435;
+        for (int i = 0; i < N; i++)
+            check_bool("save para retencion", saveFrame(d, makeFrame(2000000.0 + i * 600.0, 2, 2)));
+        for (int i = 0; i < N - 432; i++)
+            check_bool("removeFrame borra existente",
+                       removeFrame(d, 2000000.0 + i * 600.0));
+        std::size_t left = 0;
+        for (const auto& e : std::filesystem::directory_iterator(d)) {
+            if (!e.is_regular_file()) continue;
+            const std::string nm = e.path().filename().string();
+            if (nm.compare(0, 4, "tec_") == 0) ++left;
+        }
+        check_bool("quedan 432 en disco tras pops", left == 432);
+        check_bool("removeFrame false sin fichero", !removeFrame(d, 1.0));
+    }
+
     std::printf("\n[test_tec_cache] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

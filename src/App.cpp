@@ -3011,11 +3011,10 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
     }
     GridData fr = grid;
     fr.timestamp = ts;
-    size_t pos = 0;
-    while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
-    impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
-    while (impl->tecHist.size() > 432) impl->tecHist.erase(impl->tecHist.begin());   // TEC-ext 034: cap 432 = 72 h @ 10 min
-    // M10: todo frame real que entra al anillo persiste (simulated/ESA excluidos).
+    // M10: todo frame real persiste ANTES del cap (simulated/ESA excluidos).
+    // El pop expulsa el mas viejo — incluido el recien insertado si es viejo
+    // (gaps viejos de preload): al guardar primero, su fichero existe cuando
+    // el delete lo alcanza. Neto en disco 0 por frame (P1, particion 102).
     if (teccache::shouldCacheFrame(grid.valid, simulated, impl->tecCacheEnabled)) {
         teccache::Frame f;
         f.epoch = ts;
@@ -3024,6 +3023,14 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
         f.v = grid.values;
         teccache::saveFrame("cache", f);
     }
+    size_t pos = 0;
+    while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
+    impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
+    while (impl->tecHist.size() > 432) {
+        const double dropTs = impl->tecHist.begin()->timestamp;
+        impl->tecHist.erase(impl->tecHist.begin());
+        teccache::removeFrame("cache", dropTs);   // P1 delete-on-pop (particion 102)
+    }   // TEC-ext 034: cap 432 = 72 h @ 10 min
 }
 
 // M11: subida GL de la imagen SDO (render thread, patron Earth.cpp:14-31

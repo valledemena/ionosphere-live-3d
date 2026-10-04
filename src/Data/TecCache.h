@@ -35,6 +35,7 @@ bool isFresh(double epoch, double nowUtc, double maxAgeH);
 std::string frameName(double epoch);   // "tec_<s>.bin"
 bool ensureDir(const std::string& dir);
 bool saveFrame(const std::string& dir, const Frame& f);  // atomica tmp+rename
+bool removeFrame(const std::string& dir, double epoch);  // P1 delete-on-pop: borra tec_<epoch>.bin si existe (best-effort, nunca lanza)
 bool loadFrame(const std::string& path, Frame& out);     // false si corrupto
 
 struct ScanResult {

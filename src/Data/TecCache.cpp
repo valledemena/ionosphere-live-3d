@@ -92,6 +92,13 @@ bool saveFrame(const std::string& dir, const Frame& f) {
     return !ec;
 }
 
+bool removeFrame(const std::string& dir, double epoch) {
+    std::error_code ec;
+    const bool gone =
+        std::filesystem::remove(dir + "/" + frameName(epoch), ec);
+    return gone && !ec;
+}
+
 bool loadFrame(const std::string& path, Frame& out) {
     Frame f;
     if (!readAll(path, f)) return false;
