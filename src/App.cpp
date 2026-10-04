@@ -163,6 +163,8 @@ struct App::Impl {
     GridLayer auroraLayer;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
+    Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
+    bool limbCatReady = false;      // idem: blit ejecutado este frame
     Framebuffer bloomFBO[2];
 
     Shader tecShader;
@@ -3532,6 +3534,43 @@ void App::render() {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
+    // UI-117B: Limb en modo Chapman — muestrea sceneFBO (sin categorico);
+    // con Chapman se hace blit GPU->GPU del rect ya compuesto (post-3b).
+    // Gate estricto: coste solo con Limb abierto Y Chapman activo.
+    // Rect 1:1 con el bloque de la ventana (uvc bottom-up, flip en UV).
+    impl->limbCatReady = false;
+    if (showVolCat && impl->pipVisible && impl->showWinLimb) {
+        if (!impl->limbFBO.fbo && !impl->limbFBO.init(320, 190))
+            fprintf(stderr, "[App] limbFBO init failed\n");
+        else {
+            glm::vec3 vdL = glm::normalize(-camPos);
+            glm::vec3 rrL = glm::cross(vdL, glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::vec2 uvcL(-1.0f, -1.0f);
+            if (glm::length(rrL) > 1e-4f) {
+                glm::vec3 limbL = glm::normalize(rrL);
+                glm::vec4 cL = proj * view * glm::vec4(limbL, 1.0f);
+                if (cL.w > 0.0f) {
+                    glm::vec3 ndcL = glm::vec3(cL) / cL.w;
+                    if (ndcL.x > -1.0f && ndcL.x < 1.0f && ndcL.y > -1.0f && ndcL.y < 1.0f)
+                        uvcL = glm::vec2(ndcL.x * 0.5f + 0.5f, ndcL.y * 0.5f + 0.5f);
+                }
+            }
+            if (uvcL.x >= 0.0f) {
+                float hwL = 0.055f;
+                float hhL = hwL * (320.0f / 190.0f) / ((float)winW / (float)winH);
+                float x0L = glm::clamp(uvcL.x - hwL, 0.0f, 1.0f);
+                float x1L = glm::clamp(uvcL.x + hwL, 0.0f, 1.0f);
+                float y0L = glm::clamp(uvcL.y - hhL, 0.0f, 1.0f);
+                float y1L = glm::clamp(uvcL.y + hhL, 0.0f, 1.0f);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, impl->limbFBO.fbo);
+                glBlitFramebuffer((int)(x0L * winW), (int)(y0L * winH), (int)(x1L * winW), (int)(y1L * winH),
+                                  0, 0, 320, 190, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                impl->limbCatReady = true;
+            }
+        }
+    }
 
     // --- ImGui --- (Hide UI lo oculta todo salvo el aviso breve;
     // siempre visible mientras llegan los datos iniciales)
@@ -4866,8 +4905,12 @@ void App::render() {
             float x1 = glm::clamp(uvc.x + hw, 0.0f, 1.0f);
             float y0 = glm::clamp(uvc.y - hh, 0.0f, 1.0f);
             float y1 = glm::clamp(uvc.y + hh, 0.0f, 1.0f);
-            ImGui::Image((ImTextureID)(intptr_t)impl->sceneFBO.colorTexture,
-                         ImVec2(320, 190), ImVec2(x0, y1), ImVec2(x1, y0));   // limb fix: sin espejo V (uvc ya es bottom-up; FBO fila 0 = abajo)
+            if (impl->limbCatReady)
+                ImGui::Image((ImTextureID)(intptr_t)impl->limbFBO.colorTexture,
+                             ImVec2(320, 190), ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));   // UI-117B: verdad post-3b en Chapman
+            else
+                ImGui::Image((ImTextureID)(intptr_t)impl->sceneFBO.colorTexture,
+                             ImVec2(320, 190), ImVec2(x0, y1), ImVec2(x1, y0));   // limb fix: sin espejo V (uvc ya es bottom-up; FBO fila 0 = abajo)
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("East limb magnified from the live framebuffer (scene without bloom). Watch shells stack edge-on.");
         } else {
             ImGui::TextDisabled("limb behind camera");
