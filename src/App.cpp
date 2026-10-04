@@ -2956,7 +2956,7 @@ void App::restoreTecCache() {
             g.valid = true;
             impl->tecHist.push_back(g);  // scan ordenado asc
         }
-        while (impl->tecHist.size() > 432) impl->tecHist.erase(impl->tecHist.begin());   // TEC-ext 034: cap 432 = 72 h @ 10 min
+        while (impl->tecHist.size() > (std::size_t)teccache::kCapFrames) impl->tecHist.erase(impl->tecHist.begin());   // TEC-ext 034: cap 432 = 72 h @ 10 min
     }
     const double newest = scan.frames.back().epoch;
     const double now = (double)std::time(nullptr);
@@ -3037,7 +3037,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
     size_t pos = 0;
     while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
     impl->tecHist.insert(impl->tecHist.begin() + pos, fr);
-    while (impl->tecHist.size() > 432) {
+    while (impl->tecHist.size() > (std::size_t)teccache::kCapFrames) {
         const double dropTs = impl->tecHist.begin()->timestamp;
         impl->tecHist.erase(impl->tecHist.begin());
         teccache::removeFrame("cache", dropTs);   // P1 delete-on-pop (particion 102)
