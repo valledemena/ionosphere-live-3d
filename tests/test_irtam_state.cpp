@@ -25,7 +25,7 @@ int main() {
     {
         const std::string s = badgeLine("foF2", false, 0.0, "", -1.0, false);
         check_bool("sin dato: menciona backfill",
-                   s.find("backfill en curso") != std::string::npos);
+                   s.find("backfill running") != std::string::npos);
         check_bool("sin dato: nunca vacio", !s.empty());
     }
     {
@@ -35,7 +35,7 @@ int main() {
         check_bool("error 429 visible en linea",
                    s.find("429") != std::string::npos);
         check_bool("error: reintento pasivo (sin re-burst)",
-                   s.find("reintento pasivo") != std::string::npos);
+                   s.find("passive retry") != std::string::npos);
     }
     {
         const std::string s =
@@ -68,7 +68,7 @@ int main() {
         // Sin dato en replay: sigue honesto, sin nota de congelado.
         const std::string s = badgeLine("foF2", false, 0.0, "", -1.0, true);
         check_bool("replay sin dato: honesto",
-                   s.find("sin datos") != std::string::npos);
+                   s.find("no data") != std::string::npos);
     }
 
     std::printf("--- M-irtam-replay-A: zonas de la ventana union ---\n");
@@ -150,9 +150,9 @@ int main() {
         const std::string c =
             badgeSampled("B0", 1464004800.0, 1464004800.0 + 4320.0 * 60.0, true);
         check_bool("clamp con nota de borde",
-                   c.find("borde de ventana") != std::string::npos);
+                   c.find("window edge") != std::string::npos);
         const std::string n = badgeSampled("hmF2", 0.0, 9999.0, false);
-        check_bool("sin TOV: honesto", n.find("sin datos") != std::string::npos);
+        check_bool("sin TOV: honesto", n.find("no data") != std::string::npos);
     }
 
     std::printf("--- M-irtam-replay-025: hora-dato por capa (rangos runtime) ---\n");
@@ -240,7 +240,7 @@ int main() {
         LayerRanges e;
         check_bool("7: rangos vacios -> sin datos",
                    std::string(perLayerZoneName(now - 3.0 * 3600.0, now,
-                                                e)) == "sin datos");
+                                                e)) == "no data");
         LayerRanges all;
         all.tecOldest = now - 86.6 * 3600.0;
         all.tecNewest = now;

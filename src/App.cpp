@@ -193,7 +193,7 @@ struct App::Impl {
     bool giroStationsVisible = true;
     bool auroraVisible = true;
     bool showEarth = true, showAtmosphere = true, showStars = true;
-    // UI-087: flags de flotantes del menu Ventana (sin persistencia; default true = conducta actual).
+    // UI-087: flags de flotantes del menu Windows (sin persistencia; default true = conducta actual).
     bool showWinCircuit = true, showWinLegend = true, showWinAlt = true;
     bool showWinLimb = true, showWinTime = true;
     bool terminatorVisible = true;
@@ -1400,7 +1400,7 @@ bool App::init(int width, int height, const char* title) {
                     self->impl->catalogReady.store(true);
                     break;
                 }
-                printf("[GiroAdapter] catalogo intento %d/3 fallido\n", a + 1);
+                printf("[GiroAdapter] catalog attempt %d/3 failed\n", a + 1);
                 for (int s = 0; s < 5 && !self->impl->shutdownRequested.load(); s++)
                     std::this_thread::sleep_for(std::chrono::seconds(1));
             }
@@ -1680,7 +1680,8 @@ bool App::init(int width, int height, const char* title) {
 
     // Set scroll callback once (respeta la UI: sobre paneles, la rueda es de ImGui).
     glfwSetWindowUserPointer(window, this);
-    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double sy) {
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double xoffset, double sy) {
+        ImGui_ImplGlfw_ScrollCallback(w, xoffset, sy);   // la rueda llega a ImGui (scroll UI)
         auto* self = static_cast<App*>(glfwGetWindowUserPointer(w));
         if (!self) return;
         if (ImGui::GetIO().WantCaptureMouse) return;  // encima de la UI: no zoom
@@ -1776,8 +1777,6 @@ void App::run() {
 }
 
 void App::processInput() {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
 
     // Cinema (C): solo auto-rotacion. Hide UI (H): oculta todo (opcion aparte).
     bool cDown = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
@@ -2024,7 +2023,7 @@ void App::update(float dt) {
                           gmtime_r(&tt, &gg);
 #endif
                           strftime(c1, sizeof(c1), "%H:%M", &gg); }
-                        printf("[kc2g] replay: %d st con historia, rango [%s..%s UTC]\n",
+                        printf("[kc2g] replay: %d st with history, range [%s..%s UTC]\n",
                                nSt, c0, c1);
                     } else {
                         printf("[kc2g] replay: sin historia acumulada (freeze honesto FASE A)\n");
@@ -3011,7 +3010,7 @@ void App::restoreKc2gCache() {
       gmtime_r(&tt, &gg);
 #endif
       strftime(c1, sizeof(c1), "%H:%M", &gg); }
-    printf("[kc2g] cache: %d batches restored, %d st con historia, rango [%s..%s UTC]\n",
+    printf("[kc2g] cache: %d batches restored, %d st with history, range [%s..%s UTC]\n",
            n, nSt, c0, c1);
 }
 
@@ -3508,7 +3507,7 @@ void App::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // UI-091: barra de menus (particion 090) — System/Globe/Ionosphere/Space/Radio + Ventana.
+    // UI-091: barra de menus (particion 090) — System/Globe/Ionosphere/Space/Radio + Windows.
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("System")) {
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
@@ -3790,7 +3789,7 @@ void App::render() {
         } else {
             ImGui::Text("%s", line.c_str());
         }
-        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DATA-age del bucket gambit-coeffs (TOV del mensaje, no del fetch). Malla 46x45 evaluada en P1b.");
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DATA-age of the gambit-coeffs bucket (message TOV, not fetch time). 46x45 grid evaluated in P1b.");
     }
     bool showTEC = impl->tecVisible;
     if (ImGui::Checkbox("Color Layer", &showTEC)) {
@@ -4397,7 +4396,7 @@ void App::render() {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", rpErr.c_str());
         ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Ventana")) {
+        if (ImGui::BeginMenu("Windows")) {
             ImGui::MenuItem("Circuit", nullptr, &impl->showWinCircuit);
             ImGui::MenuItem("Legend", nullptr, &impl->showWinLegend);
             ImGui::MenuItem("Altitude", nullptr, &impl->showWinAlt);
@@ -4935,7 +4934,7 @@ void App::render() {
                                   (shiB - sloB) / 3600.0);
                     modeLabel = mb;
                 } else {
-                    modeLabel = "Loop: capa sin historia (unión)";
+                    modeLabel = "Loop: layer with no history (union)";
                 }
             }
             ImGui::TextDisabled("%s", modeLabel.c_str());
@@ -5027,9 +5026,9 @@ void App::render() {
                             irtamstate::formatTovShort(ldt.dataEpoch).c_str());
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetItemTooltip("Hora-dato real de la capa activa (stale = clampeada al borde de su historia o worker en curso). Muestra la distancia del cursor al dato; el aviso worker solo aplica a capas IRTAM.");
+                        ImGui::SetItemTooltip("Real data-time of the active layer (stale = clamped to its history edge or worker in progress). Shows the cursor-to-data distance; the worker notice applies to IRTAM layers only.");
                 } else {
-                    ImGui::TextDisabled("DATA sin dato en capa");
+                    ImGui::TextDisabled("DATA no data on layer");
                 }
             }
         }

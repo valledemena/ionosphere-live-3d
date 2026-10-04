@@ -632,7 +632,7 @@ bool Kc2gAdapter::fetch(double nowUtc) {
         }
         kc2gcache::saveFrame("cache", f);
     }
-    printf("[Kc2gAdapter] failover: %d/%d filas usables (%d grid, %d stale, fresco %.1f min)\n",
+    printf("[Kc2gAdapter] failover: %d/%d usable rows (%d grid, %d stale, fresh %.1f min)\n",
            st.panelUsable, st.rows, st.gridUsable, st.stale,
            st.freshestAgeMin < 0.0 ? -1.0 : st.freshestAgeMin);
     return st.panelUsable > 0;

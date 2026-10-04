@@ -117,7 +117,7 @@ bool GiroAdapter::fetchCatalog() {
     lgdcpacing::recordLaunch(catMs);
     lgdctrace::trace("launch", "catalog");
     if (!catalogOk) {
-        fprintf(stderr, "[GiroAdapter] No se pudo obtener el catalogo de estaciones\n");
+        fprintf(stderr, "[GiroAdapter] Could not fetch station catalog\n");
         return false;
     }
     // Cada fila: ...ursiCode=XXXXX">XXXXX</a></big></td><td...><big>NAME</big></td>
@@ -148,7 +148,7 @@ bool GiroAdapter::fetchCatalog() {
         samples_ = std::move(parsed);
         progress_ = 0;
     }
-    printf("[GiroAdapter] Catalogo cargado: %d estaciones\n", (int)samples_.size());
+    printf("[GiroAdapter] Catalog loaded: %d stations\n", (int)samples_.size());
     return !samples_.empty();
 }
 
@@ -392,7 +392,7 @@ bool GiroAdapter::fetchStationsSync(double utc) {
     double now = (utc > 0) ? utc : (double)std::time(nullptr);
     int ok = pollRound(now);
     lastFetchUtc_ = now;
-    printf("[GiroAdapter] Sincrono getbest: %d estaciones actualizadas\n", ok);
+    printf("[GiroAdapter] Sync getbest: %d stations updated\n", ok);
     return ok > 0;
 }
 
@@ -403,7 +403,7 @@ void GiroAdapter::fetchStationsAsync() {
         double now = (double)std::time(nullptr);
         int ok = pollRound(now);
         lastFetchUtc_ = now;
-        printf("[GiroAdapter] getbest async: %d estaciones actualizadas\n", ok);
+        printf("[GiroAdapter] getbest async: %d stations updated\n", ok);
         fetching_.store(false);
     }).detach();
 }

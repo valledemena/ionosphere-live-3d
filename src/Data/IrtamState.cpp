@@ -16,11 +16,11 @@ std::string badgeLine(const std::string& param, bool valid, double dataEpoch,
         // (no solo en tooltip) — 429/504/parse-fail/ventana/TOV-no-comun.
         if (!error.empty()) {
             std::snprintf(buf, sizeof(buf),
-                          "IRTAM %s: sin datos (%s; reintento pasivo)",
+                          "IRTAM %s: no data (%s; passive retry)",
                           param.c_str(), error.c_str());
         } else {
             std::snprintf(buf, sizeof(buf),
-                          "IRTAM %s: sin datos (backfill en curso)",
+                          "IRTAM %s: no data (backfill running)",
                           param.c_str());
         }
         return std::string(buf);
@@ -66,7 +66,7 @@ const char* perLayerZoneName(double replayEpoch, double nowUtc,
     if (tec) return "solo-TEC";
     if (giro) return "solo-GIRO";
     if (irtam) return "solo-IRTAM";
-    return "sin datos";
+    return "no data";
 }
 
 TovBracket bracketTovs(const std::vector<double>& sortedTovs, double epoch) {
@@ -130,7 +130,7 @@ std::string badgeSampled(const std::string& param, double shownTov,
     char buf[256];
     if (shownTov <= 0.0) {
         std::snprintf(buf, sizeof(buf),
-                      "IRTAM %s: sin datos en este instante (replay)",
+                      "IRTAM %s: no data at this time (replay)",
                       param.c_str());
         return std::string(buf);
     }
@@ -138,7 +138,7 @@ std::string badgeSampled(const std::string& param, double shownTov,
     if (clamped) {
         std::snprintf(buf, sizeof(buf),
                       "IRTAM %s | retrospectivo @ %s | %.0f min "
-                      "(borde de ventana)",
+                      "(window edge)",
                       param.c_str(), formatTovShort(shownTov).c_str(), ageMin);
     } else {
         std::snprintf(buf, sizeof(buf), "IRTAM %s | retrospectivo @ %s | %.0f min",

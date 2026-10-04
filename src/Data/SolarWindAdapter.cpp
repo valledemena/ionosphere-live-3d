@@ -263,7 +263,7 @@ bool SolarWindAdapter::fetch(double utc) {
     lastFetchUtc_ = utc;
     simulated_ = false;
     error_.clear();
-    printf("[SolarWindAdapter] Viento solar real: speed=%.0f km/s density=%.1f cm^-3 Bz=%.1f nT (hist %d pts)\n",
+    printf("[SolarWindAdapter] Real solar wind: speed=%.0f km/s density=%.1f cm^-3 Bz=%.1f nT (hist %d pts)\n",
            latest_.speed, latest_.density, latest_.bz, (int)bzHistory_.size());
     return true;
 }

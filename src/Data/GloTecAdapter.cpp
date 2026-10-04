@@ -298,7 +298,7 @@ bool GloTecAdapter::fetchTEC(double utc) {    // 1) Obtener el indice y extraer 
 
     float minv = 1e9f, maxv = -1e9f;
     for (float v : grid_.values) { minv = fminf(minv, v); maxv = fmaxf(maxv, v); }
-    printf("[GloTecAdapter] TEC real GloTEC OK (%dx%d): min=%.2f max=%.2f TECU\n",
+    printf("[GloTecAdapter] Real TEC GloTEC OK (%dx%d): min=%.2f max=%.2f TECU\n",
            grid_.width, grid_.height, minv, maxv);
     return true;
 }

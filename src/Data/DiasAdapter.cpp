@@ -263,7 +263,7 @@ bool DiasAdapter::fetch(double utc) {
     }
     lastFetchUtc_ = utc;
     error_.clear();
-    printf("[DiasAdapter] OK: %d estaciones EU\n", (int)samples_.size());
+    printf("[DiasAdapter] OK: %d EU stations\n", (int)samples_.size());
     return true;
 }
 
