@@ -196,6 +196,10 @@ struct App::Impl {
     // UI-087: flags de flotantes del menu Windows (sin persistencia; default true = conducta actual).
     bool showWinCircuit = true, showWinLegend = true, showWinAlt = true;
     bool showWinLimb = true, showWinTime = true;
+    // UI-117C: watchdog de stalls (solo traza stderr, sin comportamiento).
+    double watchVolMs = 0.0;   // ms del rebuild del volumen en este frame
+    int watchBundles = 0;      // bundles aplicados en este frame
+    int watchFocused = -1;     // ultimo foco visto (-1 = sin inicializar)
     bool terminatorVisible = true;
     float nightLevel = 0.45f;   // night-side brightness (earth.frag u_night)
     float cloudAmt = 0.55f;     // 0 = clear, 1 = overcast (earth.frag u_cloudAmt)
@@ -1768,11 +1772,33 @@ void App::run() {
         lastFrame = currentFrame;
         impl->time = currentFrame;
 
+        impl->watchVolMs = 0.0;
+        impl->watchBundles = 0;
+        const double tPh0 = glfwGetTime();
         glfwPollEvents();
         processInput();
+        const double tPh1 = glfwGetTime();
         update(deltaTime);
+        const double tPh2 = glfwGetTime();
         render();
+        const double tPh3 = glfwGetTime();
         glfwSwapBuffers(window);
+        const double tPh4 = glfwGetTime();
+        // UI-117C: watchdog de stalls >250 ms a stderr (tag propio, nunca [LGDC]).
+        const int focusedNow = glfwGetWindowAttrib(window, GLFW_FOCUSED) ? 1 : 0;
+        const int iconicNow = glfwGetWindowAttrib(window, GLFW_ICONIFIED) ? 1 : 0;
+        if (impl->watchFocused < 0) {
+            impl->watchFocused = focusedNow;
+        } else if (focusedNow != impl->watchFocused) {
+            impl->watchFocused = focusedNow;
+            fprintf(stderr, "[WATCHDOG] focus %s (iconified=%d)\n", focusedNow ? "gained" : "lost", iconicNow);
+        }
+        const double msTotal = (tPh4 - tPh0) * 1000.0;
+        if (msTotal > 250.0) {
+            fprintf(stderr, "[WATCHDOG] stall %.0fms (poll %.0f update %.0f render %.0f swap %.0f) focused=%d iconified=%d vol=%.0fms bundles=%d\n",
+                    msTotal, (tPh1 - tPh0) * 1000.0, (tPh2 - tPh1) * 1000.0, (tPh3 - tPh2) * 1000.0, (tPh4 - tPh3) * 1000.0,
+                    focusedNow, iconicNow, impl->watchVolMs, impl->watchBundles);
+        }
     }
 }
 
@@ -2238,6 +2264,7 @@ void App::update(float dt) {
     static double lastVolBuild = -1.0;
     if (now - lastVolBuild > 5.0) {
         lastVolBuild = now;
+        const double tVol0 = glfwGetTime();
         glm::vec3 sd = glm::normalize(impl->sunDirection);
         // M5: mismo vector solar y mismo epoch del volumen para el fondo
         // climatologico (el dia del modelo sigue al terminador, M2/effEpoch);
@@ -2287,6 +2314,7 @@ void App::update(float dt) {
                 printf("[App] WARNING: median hmF2 %.0f km approaches volume ceiling (700 km)\n", mh);
             impl->refShells.updateAltitudes(110.0f, std::max(150.0f, 0.8f * mh), mh);
         }
+        impl->watchVolMs = (glfwGetTime() - tVol0) * 1000.0;
     }
 
     // Viento solar: refrescar la orientacion/longitud/color de las flechas cuando
@@ -2829,6 +2857,7 @@ void App::consumeBundles() {
     auto t = impl->getTec();
     if (t && t != impl->lastTec) {
         impl->lastTec = t;
+        ++impl->watchBundles;
         if (t->grid.valid) {
             pushHistoryFrame(t->grid, t->grid.timestamp, t->simulated);
             if (!impl->replayMode) updateMainGrid(t->grid);
@@ -2837,11 +2866,13 @@ void App::consumeBundles() {
     auto ix = impl->getIndices();
     if (ix && ix != impl->lastIndices) {
         impl->lastIndices = ix;
+        ++impl->watchBundles;
         applyRelief();   // Kp nuevo -> storm swell actualizado
     }
     auto w = impl->getWind();
     if (w && w != impl->lastWind) {
         impl->lastWind = w;
+        ++impl->watchBundles;
         if (w->latest.valid)
             impl->solarWindLayer.updateArrowData(w->latest.speed, w->latest.bz,
                                                  impl->sunDirection, impl->swArrowMode);
@@ -2849,19 +2880,23 @@ void App::consumeBundles() {
     auto au = impl->getAurora();
     if (au && au != impl->lastAurora) {
         impl->lastAurora = au;
+        ++impl->watchBundles;
         if (au->grid.valid) impl->auroraLayer.updateFromGrid(au->grid);
     }
     auto rp = impl->getRadio();
     if (rp && rp != impl->lastRadio) {
         impl->lastRadio = rp;
+        ++impl->watchBundles;
     }
     auto xr = impl->getXray();
     if (xr && xr != impl->lastXray) {
         impl->lastXray = xr;
+        ++impl->watchBundles;
     }
     auto sd = impl->getSdo();
     if (sd && sd != impl->lastSdo) {
         impl->lastSdo = sd;
+        ++impl->watchBundles;
         const int p = sd->img.product;
         if (p >= 0 && p <= 1 && sd->img.timeUtc != impl->sunUpTime[p])
             uploadSunTexture(sd->img);  // D1: ambas texturas (toggle = 1 frame)
