@@ -17,10 +17,17 @@ public:
     void init();
     // Reconstruye los vectores con el TEC LOCAL bajo cada punto (grid 72x72
     // estilo GloTEC: fila 0 = sur, col 0 = lon -180). Si el grid no es valido
-    // usa fallbackTecu. La rotacion local es 2.2*TEC*(0.4+0.6*|cos lat|) @100MHz.
-    //   sunWorld: direccion solar (modula dia/noche). mode: 0=longitud por
-    //   valor, 1=longitud fija + color por valor.
+    // usa fallbackTecu. La rotacion local es Omega REAL IGRF a 100 MHz
+    // (referencia FARADAY_REF_FREQ_HZ) via helper compartido stationOmegaRad.
+    //   sunWorld: se conserva el parametro (compatibilidad de llamada); la
+    //   modulacion dia/noche la lleva el TEC real del grid (parches dayF/eqF
+    //   eliminados: hoy doble-contaban).
+    //   mode: 0=longitud por valor, 1=longitud fija + color por valor.
     void updateData(const GridData& tecGrid, float fallbackTecu, const glm::vec3& sunWorld, int mode);
+    // Muestreo bilineal del grid (misma convencion que GridLayer): referencia
+    // para la cadena TEC de App (hilo principal). Devuelve fallback si el
+    // grid no es valido.
+    static float sampleGridTec(const GridData& g, float latDeg, float lonDeg, float fallback);
     void render(const glm::mat4& view, const glm::mat4& projection);
     void destroy();
 

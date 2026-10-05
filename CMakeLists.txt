@@ -85,6 +85,7 @@ set(SOURCES
     src/Utils/CoordinateSystem.cpp
     src/Utils/SolarPosition.cpp
     src/Utils/Exporter.cpp  # S-1: exportacion PNG+CSV (logica pura + stb write)
+    src/Utils/Igrf.cpp  # M'-1: IGRF-14 grado 8 (puro, sin GL/red)
 )
 
 # ── Executable ───────────────────────────────────────────────────────
@@ -192,12 +193,22 @@ add_test(NAME tour COMMAND test_tour)
 add_executable(test_alerts tests/test_alerts.cpp)
 target_include_directories(test_alerts PRIVATE src)
 add_test(NAME alerts COMMAND test_alerts)
+# M'-1 (ruling 142 sec.4): Faraday IGRF real - llama a PRODUCCION
+# (namespace igrf + RadioPropagationAdapter::resolveTecSI/medianOf/
+# stationOmegaRad), no replica. El adapter usa curl: enlaza CURL::libcurl.
+add_executable(test_igrf tests/test_igrf.cpp src/Utils/Igrf.cpp src/Data/RadioPropagationAdapter.cpp)
+target_include_directories(test_igrf PRIVATE src libs/glad/include)
+target_link_libraries(test_igrf PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_igrf PRIVATE Threads::Threads)
+endif()
+add_test(NAME igrf COMMAND test_igrf)
 # M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
 # PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
 # RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.
 add_executable(test_d_region tests/test_d_region.cpp)
 target_include_directories(test_d_region PRIVATE src)
-target_sources(test_d_region PRIVATE src/Data/RadioPropagationAdapter.cpp)
+target_sources(test_d_region PRIVATE src/Data/RadioPropagationAdapter.cpp src/Utils/Igrf.cpp)  # M'-1: adapter usa igrf::
 target_link_libraries(test_d_region PRIVATE CURL::libcurl)
 add_test(NAME d_region COMMAND test_d_region)
 # M8 (plan 11): circuito HF — llama a PRODUCCION (namespace hfc inline en

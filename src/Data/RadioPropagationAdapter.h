@@ -12,7 +12,7 @@ struct RadioPropSample {
     float s4 = 0.0f;         // indice de centelleo S4 (0..1, mostrado en dB aprox)
     float ae = 0.0f;         // nT, auroral electrojet (proxy de Kp si no hay Kyoto)
     float tai = 0.0f;        // indice TEC activity (proxy 0..3)
-    float faradayDeg = 0.0f; // deg, rotacion de Faraday mediana (a 100 MHz, un salto)
+    float faradayDeg = 0.0f; // deg, mediana de Omega REAL por estacion (cada una a su FOT, un salto)
     float spreadF = 0.0f;    // %, ocurrencia Spread-F ecuatorial/nocturna
     double timeUtc = 0.0;
     bool valid = false;
@@ -64,7 +64,18 @@ public:
     static float deriveFOT(float muf);
     static float deriveSpreadF(float latDeg, float lonDeg, double utc, float kpProxy);
     static float deriveS4(float latDeg, float lonDeg, double utc);
-    static float deriveFaraday(float tecu, float latDeg);
+    // M'-1 (ruling 142 sec.4): rotacion de Faraday REAL en camino vertical v1
+    // (juguete 2.2*TEC*(0.4+0.6|..|) EXTINGUIDO). Omega en radianes via
+    // igrf::omegaRad con B vertical IGRF-14 a 300 km. tecM2 en m^-2 (SI).
+    static double stationOmegaRad(double latDeg, double lonDeg, double tecM2,
+                                  double freqHz);
+    // Cadena TEC unica (3 eslabones declarados): grid GloTec si valido (rung
+    // 0) -> heuristica nmF2-slab (rung 1) -> mock 15 TECU (rung 2). SI m^-2.
+    // El worker NO toca el grid (hilo principal): sus eslabones son nmF2->15.
+    static float resolveTecSI(bool gridOk, float gridTecu, bool hasNmF2, float nmF2,
+                              int& rung);
+    // Mediana (patron mufMed): copia ordenada, elemento central superior.
+    static float medianOf(std::vector<float> v);
     // M7 (plan 10, P4 sellado): termino de flare del LUF (MHz-equivalente,
     // A ~ F^0.75). Unica fuente de verdad: la usa deriveLUF (dayF interno
     // lstH) y el panel para el trigger del aviso (dayFactor = max(0, cosChi);

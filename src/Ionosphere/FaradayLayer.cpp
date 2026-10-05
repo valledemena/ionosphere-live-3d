@@ -1,4 +1,6 @@
 #include "FaradayLayer.h"
+#include "Data/RadioPropagationAdapter.h"  // M'-1: helper compartido stationOmegaRad
+#include "Utils/Igrf.h"                    // M'-1: FARADAY_REF_FREQ_HZ/FULL_DEG
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <cstdio>
@@ -63,7 +65,8 @@ void FaradayLayer::updateData(const GridData& tecGrid, float fallbackTecu, const
     if (vao_ != 0) rebuild();
 }
 
-static float sampleTec(const GridData& g, float latDeg, float lonDeg, float fallback) {
+float FaradayLayer::sampleGridTec(const GridData& g, float latDeg, float lonDeg,
+                                    float fallback) {
     if (!g.valid || g.width < 2 || g.height < 2 || g.values.empty()) return fallback;
     const int W = g.width, H = g.height;
     float gx = (lonDeg + 180.0f) / 360.0f * W - 0.5f;
@@ -92,26 +95,37 @@ void FaradayLayer::rebuild() {
             float lon = -180.0f + (360.0f * j / NLON);
             glm::vec3 P = latLonToPos(lat, lon, r);
             glm::vec3 radial = glm::normalize(P);
-            // TEC local bajo el vector (del grid GloTEC) -> rotacion local.
-            float tecu = sampleTec(tecGrid_, lat, lon, fallbackTecu_);
-            float local = 2.2f * tecu * (0.4f + 0.6f * fabsf(cosf(lat * 3.14159265f / 180.0f)));
-            // Rotacion local: mas de dia (subsolar) y en ecuador.
-            float dayF = glm::clamp(glm::dot(radial, sunWorld_), -1.0f, 1.0f) * 0.5f + 0.5f;
-            float eqF = expf(-powf(lat / 35.0f, 2.0f));
-            local *= (0.35f + 0.9f * dayF * (0.5f + 0.5f * eqF));
+            // TEC local bajo el vector (del grid GloTEC) -> rotacion REAL.
+            // Camino vertical v1 a 100 MHz (FARADAY_REF_FREQ_HZ) via helper
+            // compartido; parches dayF/eqF eliminados (el TEC del grid ya
+            // lleva la variacion diurna/ecuatorial: hoy doble-contaba).
+            const float tecSI =
+                sampleGridTec(tecGrid_, lat, lon, fallbackTecu_) * 1e16f;
+            const double om =
+                RadioPropagationAdapter::stationOmegaRad(lat, lon, tecSI,
+                                                         igrf::FARADAY_REF_FREQ_HZ);
+            const float local = (float)fabs(om * 57.29577951308232);  // grados
             // Direccion: radial inclinado en azimut por el angulo (polarizacion).
             // Base tangencial este-oeste:
             glm::vec3 east = glm::normalize(glm::cross(glm::vec3(0, 1, 0), radial) +
                                             glm::vec3(1e-5f));
             float tilt = glm::radians(fmodf(local, 90.0f));
             glm::vec3 dir = glm::normalize(radial * cosf(tilt * 0.5f) + east * sinf(tilt * 0.5f));
+            // Escala visual recalibrada a magnitud fisica (FARADAY_FULL_DEG):
+            // antes u=local/60 con grados-juguete (~decenas); ahora grados
+            // reales (cientos). Base 0.02 + vano 0.10, como antes en espiritu.
+            constexpr float kLenBase = 0.02f;
+            constexpr float kLenSpan = 0.10f;
             float len = (mode_ == 1)
                 ? 0.06f * scale_
-                : (0.02f + 0.0035f * fminf(local, 90.0f)) * scale_;
+                : (kLenBase + kLenSpan * fminf(local, (float)igrf::FARADAY_FULL_DEG) /
+                                        (float)igrf::FARADAY_FULL_DEG) *
+                      scale_;
             glm::vec3 tail = P;
             glm::vec3 head = P + dir * len;
-            // Color divergente por rotacion (azul=baja, rojo=alta).
-            float u = glm::clamp(local / 60.0f, 0.0f, 1.0f);
+            // Color divergente por rotacion (azul=baja, rojo=alta), escala
+            // recalibrada a grados reales (FARADAY_FULL_DEG).
+            float u = glm::clamp(local / (float)igrf::FARADAY_FULL_DEG, 0.0f, 1.0f);
             glm::vec3 col;
             if (u < 0.5f) col = glm::mix(glm::vec3(0.2f, 0.4f, 0.9f), glm::vec3(0.3f, 0.85f, 0.4f), u * 2.0f);
             else          col = glm::mix(glm::vec3(0.3f, 0.85f, 0.4f), glm::vec3(0.95f, 0.25f, 0.15f), (u - 0.5f) * 2.0f);

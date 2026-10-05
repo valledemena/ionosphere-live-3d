@@ -94,6 +94,11 @@ float RadioPropagationAdapter::dRegionAbsorptionDb(float cosChi, float xrayFlux,
 
 float RadioPropagationAdapter::deriveLUF(float muf, float foF2, float latDeg, float lonDeg, double utc,
                                          float xrayFlux, float kp) {
+    // M'-1: firma intacta (sellada M7); latDeg/kp hoy no se usan en el cuerpo.
+    // Casts para -Wall -Wextra (el TU igrf compila este fichero con warnings
+    // estrictos): cero comportamiento.
+    (void)latDeg;
+    (void)kp;
     if (muf <= 0.0f) return 0.0f;
     // Absorcion de capa D: maxima de dia en el subsolar. Aproximacion simple:
     // hora local solar a partir de lon + UTC.
@@ -159,12 +164,34 @@ float RadioPropagationAdapter::deriveS4(float latDeg, float lonDeg, double utc) 
     return fminf(1.0f, fmaxf(0.02f, 0.55f * post * eq + aur * post + 0.03f));
 }
 
-float RadioPropagationAdapter::deriveFaraday(float tecu, float latDeg) {
-    // Rotacion a 100 MHz ~ 2.36e4 * B_par(T) * TEC(e/m2) / f^2. Con B~30uT y
-    // TEC 10 TECU -> ~ decenas de grados. Aproximacion didactica:
-    float tec = fmaxf(1.0f, tecu);
-    float dip = cosf(latDeg * 3.14159265f / 180.0f);  // max en ecuador magnetico
-    return 2.2f * tec * (0.4f + 0.6f * fabsf(dip));
+#include "Utils/Igrf.h"
+
+// M'-1: Faraday REAL (camino vertical v1). B vertical IGRF-14 a 300 km;
+// juguete 2.2*TEC*(0.4+0.6|..|) extinguido (censo 142 sec.4).
+double RadioPropagationAdapter::stationOmegaRad(double latDeg, double lonDeg,
+                                                double tecM2, double freqHz) {
+    const igrf::Ned b = igrf::fieldNed(latDeg, lonDeg, igrf::FARADAY_EVAL_ALT_KM);
+    return igrf::omegaRad((double)b.d * 1e-9, tecM2, freqHz);
+}
+
+float RadioPropagationAdapter::resolveTecSI(bool gridOk, float gridTecu,
+                                             bool hasNmF2, float nmF2, int& rung) {
+    if (gridOk && gridTecu > 0.0f) {
+        rung = 0;
+        return gridTecu * 1e16f;
+    }
+    if (hasNmF2 && nmF2 > 0.0f) {
+        rung = 1;
+        return nmF2 * 2e5f;  // slab ~200 km (patron App.cpp historico)
+    }
+    rung = 2;
+    return 15.0f * 1e16f;  // mock declarado
+}
+
+float RadioPropagationAdapter::medianOf(std::vector<float> v) {
+    if (v.empty()) return 0.0f;
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
 }
 
 float RadioPropagationAdapter::stationValue(const StationSample& s, int var, double utc, float kpProxy,
@@ -188,7 +215,10 @@ void RadioPropagationAdapter::fillSimulated(double utc) {
     latest_.s4 = 0.15f;
     latest_.ae = 120.0f;
     latest_.tai = 0.8f;
-    latest_.faradayDeg = 25.0f;
+    // Mock declarado SOBRE EL CAMINO REAL: lat 10 / 15 TECU / FOT del mock.
+    latest_.faradayDeg =
+        (float)(stationOmegaRad(10.0, 0.0, 15.0e16, (double)latest_.fot * 1e6) *
+                57.29577951308232);
     latest_.spreadF = 12.0f;
     latest_.valid = true;
     aeHistory_.clear();
@@ -247,8 +277,24 @@ bool RadioPropagationAdapter::fetch(double utc, const std::vector<StationSample>
     latest_.ae = 40.0f + 90.0f * kp + 12.0f * kp * kp * 0.2f;
     // TAI 0..3 (actividad TEC): escala con Kp + Spread-F diurno
     latest_.tai = fminf(3.0f, 0.3f + 0.32f * kp);
-    // Faraday mediana: con TEC mediano ~15 TECU
-    latest_.faradayDeg = deriveFaraday(15.0f, 10.0f);
+    // Faraday mediana: Omega REAL por estacion valida (su lat/lon + su cadena
+    // TEC + su FOT) -> mediana, mismo patron que mufMed. En el worker la
+    // cadena es nmF2->15 (el grid vive en el hilo principal, no se toca aqui).
+    {
+        std::vector<float> oms;
+        for (const StationSample& st : giroSamples) {
+            if (!st.valid || st.muf <= 0.0f) continue;
+            int rung = -1;
+            const float tecSI =
+                resolveTecSI(false, 0.0f, st.nmF2 > 0.0f, st.nmF2, rung);
+            const double fotHz = (double)deriveFOT(st.muf) * 1e6;
+            if (fotHz <= 0.0) continue;
+            oms.push_back((float)(stationOmegaRad(st.latDeg, st.lonDeg, tecSI, fotHz) *
+                                  57.29577951308232));
+        }
+        if (!oms.empty()) latest_.faradayDeg = medianOf(oms);
+        // Sin estaciones validas se conserva el valor previo (declarado).
+    }
     latest_.spreadF = 8.0f + 4.0f * kp;
     if (latest_.spreadF > 60.0f) latest_.spreadF = 60.0f;
     latest_.valid = true;

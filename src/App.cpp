@@ -4474,9 +4474,19 @@ void App::render() {
             stLuf = RadioPropagationAdapter::deriveLUF(stMuf, rpStation->foF2, rpStation->latDeg, rpStation->lonDeg, rpEpoch, rpFlux, rpKp);
             stS4 = RadioPropagationAdapter::deriveS4(rpStation->latDeg, rpStation->lonDeg, rpEpoch);
             stSpF = RadioPropagationAdapter::deriveSpreadF(rpStation->latDeg, rpStation->lonDeg, rpEpoch, rpKp);
-            float tecu = 15.0f;
-            if (rpStation->nmF2 > 0.0f) tecu = rpStation->nmF2 * 2e-11f;  // ~slab 200 km
-            stFar = RadioPropagationAdapter::deriveFaraday(tecu, rpStation->latDeg);
+            // M'-1: cadena TEC unica (rung 0 = grid mostrado SOLO si es TEC;
+            // si no, nmF2-slab; si no, mock 15) -> Omega REAL a su FOT.
+            const GridData& cg = impl->tecLayer.getGrid();
+            const bool gridIsTec = cg.valid && impl->mapVariable == 0;
+            int tecRung = -1;
+            const float tecSI = RadioPropagationAdapter::resolveTecSI(
+                gridIsTec, gridIsTec ? FaradayLayer::sampleGridTec(
+                                           cg, rpStation->latDeg, rpStation->lonDeg, 15.0f)
+                                     : 0.0f,
+                rpStation->nmF2 > 0.0f, rpStation->nmF2, tecRung);
+            stFar = (float)RadioPropagationAdapter::stationOmegaRad(
+                        rpStation->latDeg, rpStation->lonDeg, tecSI, stFot * 1e6) *
+                    57.29577951308232f;
         }
     }
     float showMuf = rpStation && stHasData ? stMuf : rp.muf;
@@ -4632,8 +4642,8 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TAI: TEC activity 0-3 (Kp proxy). 0 quiet, 3 heavily disturbed. Anticipates GPS errors. Global index, not per station.");
     ImGui::ProgressBar(glm::clamp(rp.tai / 3.0f, 0.0f, 1.0f), ImVec2(0, 0), "tec activity");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TAI normalized 0-3.");
-    ImGui::Text("Faraday: %.0f deg", showFaraday);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(rpStation ? "Faraday rotation at this station (deg at 100 MHz, one hop), from its NmF2-derived TEC. Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Ionosphere." : "Median Faraday rotation (deg at 100 MHz, one hop). Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Ionosphere.");
+    ImGui::Text("Faraday @FOT %.1f MHz: %.0f deg", showFot, showFaraday);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(rpStation ? "Faraday rotation at this station (deg, one hop) at its FOT: real IGRF-14 field (vertical path) times its TEC chain. Rotates polarization; fading on linear/satellite antennas. See 3D vectors in Ionosphere." : "Median Faraday rotation (deg, one hop) over valid stations, each at its own FOT. Real IGRF-14 field times station TEC. See 3D vectors in Ionosphere.");
     ImGui::Text("Spread-F: %.0f %%", showSpF);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Spread-F: % occurrence of spread echoes in the ionogram. Nocturnal equatorial/auroral. Causes fading and unstable MUF. The map uses a diverging colormap.");
     ImGui::ProgressBar(glm::clamp(showSpF / 100.0f, 0.0f, 1.0f), ImVec2(0, 0), "spread-F");
