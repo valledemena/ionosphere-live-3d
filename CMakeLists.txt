@@ -186,6 +186,9 @@ add_test(NAME volume_shadow COMMAND test_volume_shadow)
 add_executable(test_volume_jitter tests/test_volume_jitter.cpp)
 target_include_directories(test_volume_jitter PRIVATE src)
 add_test(NAME volume_jitter COMMAND test_volume_jitter)
+add_executable(test_tour tests/test_tour.cpp)
+target_include_directories(test_tour PRIVATE src)
+add_test(NAME tour COMMAND test_tour)
 # M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
 # PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
 # RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.

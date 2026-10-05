@@ -36,6 +36,7 @@
 #include "Globe/Terminator.h"
 #include "Ionosphere/GridLayer.h"
 #include "Utils/Exporter.h"
+#include "Utils/Tour.h"
 #include "Ionosphere/IonosondeLayer.h"
 #include "Ionosphere/SolarWindLayer.h"
 #include "Data/DataManager.h"
@@ -184,8 +185,11 @@ struct App::Impl {
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
     bool hideUI = false;           // ocultar toda la UI (key H)
-    bool cPrev = false, hPrev = false, ePrev = false;
+    bool cPrev = false, hPrev = false, ePrev = false, tPrev = false;
     bool exportReq = false;   // S-1: tecla E -> volcar PNG+CSV tras el composite
+    bool tourOn = false;      // S-4: tour didactico (tecla T)
+    bool tourSpanish = true;  // idioma del overlay del tour
+    float tourT = 0.0f;       // reloj del tour (solo avanza con dato listo)
     float cineHintUntil = 0.0f;
     char hintMsg[64] = "";
     // Espejos persistentes de UI (antes static locales / locales de panel).
@@ -1870,6 +1874,42 @@ void App::processInput() {
         impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
     }
     impl->ePrev = eDown;
+    // S-4 tour (T): toggle con reinicio a t=0; cualquier click fuera de la UI
+    // aborta (la camara se queda donde esta: salida sin salto por continuidad).
+    bool tDown = glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS;
+    if (tDown && !impl->tPrev) {
+        impl->tourOn = !impl->tourOn;
+        if (impl->tourOn) {
+            impl->tourT = 0.0f;
+            snprintf(impl->hintMsg, sizeof(impl->hintMsg), "TOUR ON - press T or click to exit");
+            impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+        }
+    }
+    impl->tPrev = tDown;
+    if (impl->tourOn) {
+        ImGuiIO& ioT = ImGui::GetIO();
+        const bool clickAbort =
+            ((glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) ||
+             (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) ||
+             (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)) &&
+            !ioT.WantCaptureMouse;
+        if (clickAbort) {
+            impl->tourOn = false;
+            snprintf(impl->hintMsg, sizeof(impl->hintMsg), "TOUR OFF - camera is yours");
+            impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+        } else {
+            const bool ready = impl->tecLayer.getGrid().valid;
+            impl->tourT = tour::advance(impl->tourT, deltaTime, ready);
+            const tour::State st = tour::eval(impl->tourT);
+            impl->camera.rotateY = st.ry;
+            impl->camera.distance = st.dist;
+            if (st.done) {
+                impl->tourOn = false;
+                snprintf(impl->hintMsg, sizeof(impl->hintMsg), "TOUR COMPLETE - camera is yours");
+                impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+            }
+        }
+    }
     if (impl->cineMode) {
         impl->camera.rotateY += deltaTime * impl->cineSpeed;
     }
@@ -3687,6 +3727,16 @@ void App::render() {
         }
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Hide every panel and window. The hint fades after 4 s; press H to bring the UI back.");
+    if (ImGui::Checkbox("Guided tour (T)", &impl->tourOn)) {
+        if (impl->tourOn) {
+            impl->tourT = 0.0f;
+            snprintf(impl->hintMsg, sizeof(impl->hintMsg), "TOUR ON - press T or click to exit");
+            impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Guided camera tour (44 s): terminator, equatorial anomaly, aurora, storm. Any click aborts and hands the camera back where it is.");
+    ImGui::Checkbox("Tour en espanol", &impl->tourSpanish);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Tour overlay language: checked = Espanol, unchecked = English.");
     // FASE B (P5): bloque unico de atribucion (G7). Texto completo aqui;
     // los badges por fuente siguen visibles en sus paneles.
     if (ImGui::CollapsingHeader("Data sources & attribution")) {
@@ -4871,6 +4921,17 @@ void App::render() {
         }
         ImGui::End();
         }
+    }
+
+    // S-4: overlay del tour didactico (solo mientras corre).
+    if (impl->tourOn) {
+        ImGui::Begin("Guided tour");
+        const tour::State st = tour::eval(impl->tourT);
+        const tour::Key& k = tour::key(st.index);
+        ImGui::Text("Stop %d / 4", st.index + 1);
+        ImGui::TextWrapped("%s", impl->tourSpanish ? k.es : k.en);
+        ImGui::TextDisabled("T / click = exit - ES/EN in System menu");
+        ImGui::End();
     }
 
     // ---- Altitude ruler (Fase 1): 60-700 km + pico bajo pin/hover ----
