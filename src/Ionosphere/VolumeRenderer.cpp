@@ -71,12 +71,18 @@ void main() {
     }
 
     float dt = (tExit - tEnter) / float(u_steps);
+    // S-3: jitter del punto de entrada (ruling 130 sec.6.3). IGN espacial
+    // determinista (sin componente temporal: el motor no tiene TAA).
+    // Decorrela el peine de muestreo entre pixeles vecinos (anti-banding);
+    // espejo CPU en Utils/VolumeJitter.h (misma formula).
+    float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float tEnterJ = tEnter + dt * jit;
     vec3 accumColor = vec3(0.0);
     float accumAlpha = 0.0;
 
     for (int i = 0; i < 256; i++) {
         if (i >= u_steps) break;
-        float t = tEnter + dt * (float(i) + 0.5);
+        float t = tEnterJ + dt * (float(i) + 0.5);
         if (t >= tExit) break;
 
         vec3 p = ro + rd * t;
