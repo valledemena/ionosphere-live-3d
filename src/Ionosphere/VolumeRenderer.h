@@ -39,6 +39,8 @@ public:
     // Vista explotada: multiplica (r-1) de ambas esferas.
     void setExplode(float f) { explode_ = glm::clamp(f, 1.0f, 5.0f); }
     void setStepCount(int n) { steps_ = glm::clamp(n, 16, 256); }
+    // S-2: direccion solar para la sombra dura (la fija App por frame).
+    void setSunDirection(const glm::vec3& d) { sunDir_ = d; }
 
     bool hasVolume() const { return hasVolume_; }
 
@@ -56,6 +58,7 @@ private:
     bool isoOn_ = false;
     int steps_ = 64;
     int mode_ = 0;
+    glm::vec3 sunDir_ = glm::vec3(0.0f, 0.0f, 1.0f);
     bool visible_ = false;
     bool hasVolume_ = false;
     std::string colormapName_ = "viridis";

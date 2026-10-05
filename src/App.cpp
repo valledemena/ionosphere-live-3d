@@ -3512,7 +3512,11 @@ void App::render() {
         if (showShell) impl->shellLayer.render(view, proj);
         if (showPeak) impl->peakShell.render(view, proj);
         if (showModel) impl->tecColShell.render(view, proj);
-        if (showVolScene) impl->volumeLayer.render(view, proj, camPos);
+        if (showVolScene) {
+            // S-2: sol del frame para la sombra dura del volumen.
+            impl->volumeLayer.setSunDirection(impl->sunDirection);
+            impl->volumeLayer.render(view, proj, camPos);
+        }
         if (showSlice) impl->sliceLayer.render(view, proj);
         // Terminador aqui (post-bloom): linea fina y nitida, sin quemarse.
         if (impl->terminatorVisible) {
@@ -3575,6 +3579,8 @@ void App::render() {
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        // S-2: mismo sol del frame que en el pase de escena.
+        impl->volumeLayer.setSunDirection(impl->sunDirection);
         impl->volumeLayer.render(view, proj, camPos);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_TRUE);

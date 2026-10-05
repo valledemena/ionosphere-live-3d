@@ -25,6 +25,7 @@ uniform sampler3D u_density;    // log10(Ne) normalizado 0..1 (filtrado)
 uniform sampler3D u_layer;      // rama ganadora 0..3 (SIN filtrar: texelFetch)
 uniform sampler1D u_colormap;
 uniform vec3 u_camPos;
+uniform vec3 u_sunDir;            // S-2: direccion solar (sombra dura, ruling 130 sec.6.2)
 uniform float u_innerR, u_outerR;
 uniform float u_opacityScale;
 uniform int u_steps;
@@ -79,6 +80,12 @@ void main() {
         if (t >= tExit) break;
 
         vec3 p = ro + rd * t;
+        // S-2: sombra dura del planeta (ruling 130 sec.6.2). Multiplicativa:
+        // el dimming cosChi de CPU se conserva y se combina. Dura, sin
+        // penumbra; espejo CPU en Utils/VolumeShadow.h (misma matematica).
+        float sh0, sh1;
+        float sunShadow = 1.0;
+        if (raySphere(p, u_sunDir, u_innerR, sh0, sh1) && sh0 > 1e-4) sunShadow = 0.0;
         float r = length(p);
         float altNorm = clamp((r - u_innerR) / (u_outerR - u_innerR), 0.0, 1.0);
 
@@ -109,7 +116,8 @@ void main() {
         } else {
             col = texture(u_colormap, d).rgb;
         }
-        float a = clamp(d * d * u_opacityScale * dt * 40.0, 0.0, 1.0);
+        col *= sunShadow;
+        float a = clamp(d * d * u_opacityScale * dt * 40.0, 0.0, 1.0) * sunShadow;
         if (u_isoOn != 0) {
             // Iso-bandas logNe 10.5/11/11.5 (normalizado 0.556/0.667/0.778).
             float m = min(min(abs(d - 0.556), abs(d - 0.667)), abs(d - 0.778));
@@ -249,6 +257,8 @@ void VolumeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     glUniformMatrix4fv(glGetUniformLocation(shader_, "u_projection"), 1, GL_FALSE, &projection[0][0]);
     glUniform3f(glGetUniformLocation(shader_, "u_camPos"),
                 camPosWorld.x, camPosWorld.y, camPosWorld.z);
+    glUniform3f(glGetUniformLocation(shader_, "u_sunDir"),
+                sunDir_.x, sunDir_.y, sunDir_.z);
     glUniform1f(glGetUniformLocation(shader_, "u_innerR"), innerR);
     glUniform1f(glGetUniformLocation(shader_, "u_outerR"), outerR);
     glUniform1f(glGetUniformLocation(shader_, "u_opacityScale"), opacityScale_);
