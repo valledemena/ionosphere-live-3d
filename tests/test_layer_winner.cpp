@@ -108,6 +108,30 @@ int main() {
                    fa > 110.0f && fb > 110.0f && std::fabs(fa - fb) <= 15.0f);
     }
 
+    std::printf("== deuda 128 sec.5: pin REAL-shape E-fuerte (medido) ==\n");
+    {
+        // foE=4/foF2=7, hmF2=300, B1=3: NmE <= NmF2 -> el early-out VIEJO aqui
+        // disparaba (suelo 110); el corregido da el cruce real. Valores MEDIDOS
+        // con produccion (harness contra LayerProfile.h real).
+        const float NmE = 1.24e10f * 4.0f * 4.0f;
+        const float NmF2 = 1.24e10f * 7.0f * 7.0f;
+        for (int k = 0; k < 3; ++k) {
+            LayerProfile p;
+            p.NmE = NmE;
+            p.hasE = true;
+            p.NmF2 = NmF2;
+            p.hmF2 = 300.0f;
+            p.B1 = 3.0f;
+            p.hasF2 = true;
+            p.B0 = (k == 0) ? 60.0f : ((k == 1) ? 45.0f : 80.0f);
+            const float want = (k == 0) ? 145.0f : ((k == 1) ? 155.0f : 136.0f);
+            char what[64];
+            std::snprintf(what, sizeof(what), "REAL-shape B0=%.0f -> suelo == %.1f",
+                          (double)p.B0, (double)want);
+            expectSame(what, f2FloorKm(p), want);
+        }
+    }
+
     std::printf("== winners: dia sin-F1 (75->D, 110->E, 200/300->F2) ==\n");
     {
         LayerProfile p = dayNoF1();

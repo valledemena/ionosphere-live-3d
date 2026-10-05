@@ -84,6 +84,7 @@ set(SOURCES
     src/UI/SunPanel.cpp  # M11: ventana Sun
     src/Utils/CoordinateSystem.cpp
     src/Utils/SolarPosition.cpp
+    src/Utils/Exporter.cpp  # S-1: exportacion PNG+CSV (logica pura + stb write)
 )
 
 # ── Executable ───────────────────────────────────────────────────────
@@ -176,6 +177,9 @@ add_test(NAME model_foF2 COMMAND test_model_foF2)
 add_executable(test_layer_winner tests/test_layer_winner.cpp)
 target_include_directories(test_layer_winner PRIVATE src libs/glad/include)
 add_test(NAME layer_winner COMMAND test_layer_winner)
+add_executable(test_exporter tests/test_exporter.cpp src/Utils/Exporter.cpp)
+target_include_directories(test_exporter PRIVATE src libs/glad/include libs/stb)
+add_test(NAME exporter COMMAND test_exporter)
 # M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
 # PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
 # RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.

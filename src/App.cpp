@@ -35,6 +35,7 @@
 #include "Globe/Atmosphere.h"
 #include "Globe/Terminator.h"
 #include "Ionosphere/GridLayer.h"
+#include "Utils/Exporter.h"
 #include "Ionosphere/IonosondeLayer.h"
 #include "Ionosphere/SolarWindLayer.h"
 #include "Data/DataManager.h"
@@ -183,7 +184,8 @@ struct App::Impl {
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
     bool hideUI = false;           // ocultar toda la UI (key H)
-    bool cPrev = false, hPrev = false;
+    bool cPrev = false, hPrev = false, ePrev = false;
+    bool exportReq = false;   // S-1: tecla E -> volcar PNG+CSV tras el composite
     float cineHintUntil = 0.0f;
     char hintMsg[64] = "";
     // Espejos persistentes de UI (antes static locales / locales de panel).
@@ -1761,6 +1763,37 @@ void App::recreateRenderTargets(int w, int h) {
     glViewport(0, 0, w, h);
 }
 
+// S-1: volcado PNG+CSV. Corre en el hilo GL tras render(), antes del swap:
+// el default framebuffer contiene el frame completo (UI incluida; H la oculta).
+// 0 hilos nuevos, 0 red.
+static void doExportFrame(int mapVariable, const GridData& grid, int w, int h) {
+    // Fuente de verdad de los 12: combo "Variable" (misma lista, mismo orden).
+    static const char* kVarNames[12] = {"TEC",         "foF2",      "MUF",        "hmF2",
+                                        "NmF2",        "LUF",       "FOT",        "Spread-F",
+                                        "IRTAM foF2",  "IRTAM hmF2", "IRTAM B0",   "IRTAM B1"};
+    if (w <= 0 || h <= 0) return;
+    std::vector<unsigned char> px((size_t)w * h * 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    exporter::flipRowsY(px, w, h, 4);
+    const std::vector<unsigned char> png = exporter::encodePng(w, h, 4, px.data());
+    if (png.empty()) return;
+    const std::string pngName = exporter::buildPngName((long long)std::time(nullptr));
+    if (FILE* f = fopen(pngName.c_str(), "wb")) {
+        fwrite(png.data(), 1, png.size(), f);
+        fclose(f);
+    }
+    const int vi = std::max(0, std::min(11, mapVariable));
+    const std::string csv = exporter::gridCsv(kVarNames[vi], grid);
+    const std::string csvName = pngName.substr(0, pngName.size() - 4) + ".csv";
+    // "wb" tambien para el CSV: en Windows el modo texto traduciria \n->CRLF
+    // y la spec exige LF (el contenido ya viene LF-puro de gridCsv).
+    if (FILE* c = fopen(csvName.c_str(), "wb")) {
+        fputs(csv.c_str(), c);
+        fclose(c);
+    }
+    std::printf("[Export] wrote %s + %s\n", pngName.c_str(), csvName.c_str());
+}
+
 void App::run() {
     while (!glfwWindowShouldClose(window)) {
         // M0.1: resize diferido (el callback solo encola; aqui hay contexto).
@@ -1783,6 +1816,10 @@ void App::run() {
         update(deltaTime);
         const double tPh2 = glfwGetTime();
         render();
+        if (impl->exportReq) {
+            impl->exportReq = false;
+            doExportFrame(impl->mapVariable, impl->tecLayer.getGrid(), winW, winH);
+        }
         const double tPh3 = glfwGetTime();
         glfwSwapBuffers(window);
         const double tPh4 = glfwGetTime();
@@ -1824,6 +1861,15 @@ void App::processInput() {
         }
     }
     impl->hPrev = hDown;
+    // S-1 export (E): solo arma el flag; el volcado corre tras render()
+    // (frame completo en el default framebuffer, antes del swap).
+    bool eDown = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
+    if (eDown && !impl->ePrev) {
+        impl->exportReq = true;
+        snprintf(impl->hintMsg, sizeof(impl->hintMsg), "EXPORT QUEUED - dumping after frame");
+        impl->cineHintUntil = (float)glfwGetTime() + 4.0f;
+    }
+    impl->ePrev = eDown;
     if (impl->cineMode) {
         impl->camera.rotateY += deltaTime * impl->cineSpeed;
     }
