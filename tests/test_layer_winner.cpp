@@ -5,8 +5,8 @@
 // (f2FloorKm + evalNeTotal, inline de src/Ionosphere/LayerProfile.h).
 //
 // Pines: suelos exactos donde la regla es estructural (early-out hmE,
-// NINGUNO -1 sin hasE), estructura donde hay scan (rango, no valor
-// transcrito), winners robustos por margenes amplios, e invariante best
+// NINGUNO -1 sin hasE, cruce E-fuerte == 167.0 medido con produccion),
+// winners robustos por margenes amplios, e invariante best
 // contra replica independiente del max() viejo (aislacion del gate).
 // =============================================================================
 #include "Ionosphere/LayerProfile.h"
@@ -93,6 +93,9 @@ int main() {
         p.NmF2 = 1e12f; p.hmF2 = 300.0f; p.B0 = 60.0f; p.B1 = 2.5f; p.hasF2 = true;
         const float f = f2FloorKm(p);
         expectTrue("cruce: hmE < suelo <= hmF2", f > 110.0f && f <= 300.0f);
+        // Pin E-fuerte exacto (veredicto 126 sec.4.2): valor MEDIDO con produccion,
+        // no rango. Caza el early-out defectuoso (daba 110.0 aqui).
+        expectSame("cruce E-fuerte B0=60 -> suelo == 167.0 exacto", f, 167.0f);
     }
     {
         // Continuidad: B0 a +-2 km del mismo perfil -> suelos a pocos km.

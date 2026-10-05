@@ -69,7 +69,21 @@ inline float chapmanAlpha(float Nm, float hm, float H, float h) {
 // F2-bottomside de evalNeTotal (mantener sincronizado; el TU lo pinnea).
 static inline float f2FloorKm(const LayerProfile& p) {
     if (!(p.hasE && p.hasF2)) return -1.0f;
-    if (p.NmE <= p.NmF2) return p.hmE;   // early-out: sin cruce a la vista
+    // Early-out correcto (ruling 124 sec.2, veredicto 126 sec.4):
+    // NmE <= NeF2(hmE) => sin cruce en [hmE, hmF2] => suelo = hmE.
+    // NeF2(hmE): Epstein bottomside en hmE, replica 1:1 de evalNeTotal
+    // (mantener sincronizado). Cuesta 1 Epstein (3-4 trascendentes) donde
+    // antes habia una comparacion; memoizacion POR COLUMNA pre-autorizada
+    // en 124 sec.2 si el perf-baseline lo exigiera.
+    {
+        float B0e = p.B0 > 0.0f ? p.B0 : 100.0f;
+        float xe = (p.hmF2 - p.hmE) / B0e;
+        const float xmaxe = 1.6f;
+        float xce = xe < xmaxe ? xe : xmaxe;
+        float NeF2_at_hmE = p.NmF2 * expf(-powf(xce, p.B1) / coshf(xce));
+        if (xe > xmaxe) NeF2_at_hmE *= expf(-(xe - xmaxe) / 1.2f);
+        if (p.NmE <= NeF2_at_hmE) return p.hmE;
+    }
     float sup = p.hmE;
     for (float h = p.hmF2; h >= 60.0f; h -= 1.0f) {
         float e = chapmanAlpha(p.NmE, p.hmE, 10.0f, h);
