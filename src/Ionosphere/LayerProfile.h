@@ -63,6 +63,25 @@ inline float chapmanAlpha(float Nm, float hm, float H, float h) {
     return Nm * expf(0.5f * (1.0f - z - expf(-z)));
 }
 
+// Suelo de validez F2 (ruling 124): mayor h con NeE(h) >= NeF2(h),
+// clamp hmE; NINGUNO (-1.0f) sin hasE. Puro, determinista, sin estado.
+// NeE via chapmanAlpha (compartido); Epstein abajo replica 1:1 la rama
+// F2-bottomside de evalNeTotal (mantener sincronizado; el TU lo pinnea).
+static inline float f2FloorKm(const LayerProfile& p) {
+    if (!(p.hasE && p.hasF2)) return -1.0f;
+    if (p.NmE <= p.NmF2) return p.hmE;   // early-out: sin cruce a la vista
+    float sup = p.hmE;
+    for (float h = p.hmF2; h >= 60.0f; h -= 1.0f) {
+        float e = chapmanAlpha(p.NmE, p.hmE, 10.0f, h);
+        float B0 = p.B0 > 0.0f ? p.B0 : 100.0f;
+        float x = (p.hmF2 - h) / B0, xc = x < 1.6f ? x : 1.6f;
+        float f = p.NmF2 * expf(-powf(xc, p.B1) / coshf(xc));
+        if (x > 1.6f) f *= expf(-(x - 1.6f) / 1.2f);
+        if (e >= f && h > sup) sup = h;
+    }
+    return sup;
+}
+
 // Densidad total [m^-3] a altura hKm.
 //   cosChi: coseno del angulo cenital solar en la celda (<=0 de noche).
 //   flareFactor: multiplicador de fulguracion (>=1, ver XrayAdapter).
@@ -105,7 +124,7 @@ inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float f
             float Htop = 60.0f * (1.0f + (hKm - p.hmF2) / 300.0f);
             NeF2 = p.NmF2 * expf(-(hKm - p.hmF2) / Htop);
         }
-        if (NeF2 > best) { best = NeF2; win = 3; }
+        if (NeF2 > best) { best = NeF2; if (hKm > f2FloorKm(p)) win = 3; }   // estricto: E gana su propio voxel pico
     }
     if (winner) *winner = win;
     return best;

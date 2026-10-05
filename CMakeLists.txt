@@ -173,6 +173,9 @@ add_executable(test_model_foF2 tests/test_model_foF2.cpp)
 target_include_directories(test_model_foF2 PRIVATE src libs/glad/include)
 target_sources(test_model_foF2 PRIVATE src/Utils/SolarPosition.cpp)
 add_test(NAME model_foF2 COMMAND test_model_foF2)
+add_executable(test_layer_winner tests/test_layer_winner.cpp)
+target_include_directories(test_layer_winner PRIVATE src libs/glad/include)
+add_test(NAME layer_winner COMMAND test_layer_winner)
 # M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
 # PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
 # RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.
