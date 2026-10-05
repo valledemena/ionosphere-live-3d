@@ -20,6 +20,10 @@ struct Ned {
 // Campo a (lat, lon, altKm). Alt clamp declarado [0, 1000] km.
 Ned fieldNed(double latDeg, double lonDeg, double altKm);
 
+// Ancla de funcion para test (receta prescrita): Schmidt cuasi-normalizada
+// S[n][m](theta), theta = colatitud en radianes. p.ej. S[2][0](x) = (3x^2-1)/2.
+double schmidtS(int n, int m, double theta);
+
 inline float modNed(const Ned& b) {
     return sqrtf(b.n * b.n + b.e * b.e + b.d * b.d);
 }

@@ -11,9 +11,10 @@
 // monotonia del dip; (v) mediana sintetica; (vi) cadena TEC por eslabones.
 // Fuente coefs: https://www.ngdc.noaa.gov/IAGA/vmod/coeffs/igrf14coeffs.txt
 // (columna 2025.0, recuperado 2026-10-05; testigo g10 = -29350.0 nT).
-// Referencia grado-13: harness Python independiente sobre el mismo fichero
-// (la calculadora NOAA corre ese mismo modelo grado-13; la tolerancia cubre
-// el truncado grado-8, medido <=0.13%/0.32deg).
+// Referencia de anclas: paquete publicado ppigrf 2.1.0 (IGRF14.shc oficial,
+// grado 13) corrido el 2026-10-05 — FUENTE INDEPENDIENTE del codigo bajo
+// test (otra receta y otros coefs efectivos que los embebidos grado-8).
+// La calculadora NOAA corre ese mismo modelo grado-13.
 // =============================================================================
 #include "Utils/Igrf.h"
 #include "Data/RadioPropagationAdapter.h"
@@ -46,16 +47,16 @@ int main() {
         expectTrue("Bpar=0 -> Om=0 exacto", igrf::omegaRad(0.0, 1e17, 100e6) == 0.0);
     }
 
-    std::printf("== igrf: anclas grado-13 (+-2%% |B|, +-2 dip) ==\n");
+    std::printf("== igrf: anclas ppigrf-2.1.0 (+-2%% |B|, +-2 dip) ==\n");
     {
-        // Valores de referencia: harness independiente, grado 13 completo.
+        // Valores ppigrf (grado 13 oficial) medidos el 2026-10-05.
         struct Anchor {
             double la, lo, h, f, dip;
         };
         const Anchor a[] = {
-            {0.0, 0.0, 0.0, 28153.0, -17.95},
-            {51.5, 0.0, 0.0, 49293.0, 63.69},
-            {-33.9, 151.2, 0.0, 52051.0, -65.02},
+            {0.0, 0.0, 0.0, 31835.0, -30.17},
+            {51.5, 0.0, 0.0, 49068.0, 66.52},
+            {-33.9, 151.2, 0.0, 57011.0, -64.41},
         };
         for (const Anchor& an : a) {
             const igrf::Ned b = igrf::fieldNed(an.la, an.lo, an.h);
@@ -75,6 +76,16 @@ int main() {
         const float dm20 = igrf::dipDeg(igrf::fieldNed(-20.0, 0.0, 0.0));
         expectTrue("dip crece al polo N", d60 > d20 && d20 > 0.0f);
         expectTrue("dip sur negativo", dm20 < 0.0f);
+    }
+    {
+        // Anclas de funcion a mano (receta prescrita, verificables en papel):
+        // S[2][0](x) = (3x^2-1)/2; S[2][2] = (sqrt3/2)sin^2T; S[3][0] = (5x^3-3x)/2.
+        expectTrue("S[2][0](x=0.5) = -0.125",
+                   fabs(igrf::schmidtS(2, 0, acos(0.5)) - (-0.125)) < 1e-9);
+        expectTrue("S[2][2](sinT=0.6) = (sqrt3/2)*0.36",
+                   fabs(igrf::schmidtS(2, 2, asin(0.6)) - (0.8660254037844386 * 0.36)) < 1e-9);
+        expectTrue("S[3][0](x=0.5) = -0.4375",
+                   fabs(igrf::schmidtS(3, 0, acos(0.5)) - (-0.4375)) < 1e-9);
     }
 
     std::printf("== igrf: mediana + cadena TEC ==\n");

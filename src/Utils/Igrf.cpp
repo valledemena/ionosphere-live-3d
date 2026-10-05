@@ -107,10 +107,48 @@ constexpr double kInvF = 298.257223563;      // WGS-84 1/f
 constexpr double kArefKm = 6371.2;           // radio de referencia IGRF (km)
 constexpr int kNmax = 8;
 
+// Acceso seguro (n-2,m) inexistente = 0 (m > n-2).
+static double Sget(int n, int m, const double S[9][9]) {
+    if (n < 0 || m < 0 || m > n) return 0.0;
+    return S[n][m];
+}
+
+// Recursion Schmidt cuasi-normalizada compartida (campo + anclas del TU).
+static void evalSchmidt(double thc, double S[9][9], double dS[9][9]) {
+    const double st = sin(thc), ct = cos(thc);
+    S[0][0] = 1.0;
+    dS[0][0] = 0.0;
+    S[1][1] = st;
+    dS[1][1] = ct;
+    S[1][0] = ct;
+    dS[1][0] = -st;
+    for (int n = 2; n <= kNmax; ++n) {
+        const double f = sqrt((2.0 * n - 1.0) / (2.0 * n));
+        S[n][n] = st * S[n - 1][n - 1] * f;
+        dS[n][n] = (ct * S[n - 1][n - 1] + st * dS[n - 1][n - 1]) * f;
+        for (int m = 0; m < n; ++m) {
+            const double a = (2.0 * n - 1.0) / sqrt((double)((n - m) * (n + m)));
+            const double b = sqrt((double)((n - 1) * (n - 1) - m * m) /
+                                  (double)((n - m) * (n + m)));
+            S[n][m] = a * ct * S[n - 1][m] - b * Sget(n - 2, m, S);
+            dS[n][m] = a * (-st * S[n - 1][m] + ct * dS[n - 1][m]) - b * Sget(n - 2, m, dS);
+        }
+    }
+}
+
 }  // namespace
 
+// Ancla de funcion para el TU (receta prescrita 144, verificable a mano).
+double schmidtS(int n, int m, double theta) {
+    if (n < 0 || n > kNmax || m < 0 || m > n) return 0.0;
+    double S[9][9] = {};
+    double dS[9][9] = {};
+    evalSchmidt(theta, S, dS);
+    return S[n][m];
+}
+
 double faradayK() {
-    // CODATA 2022 (exactas donde aplique): e, c exactas por definicion SI.
+    // CODATA 2018 (e y c exactas por definicion SI).
     constexpr double e = 1.602176634e-19;      // C, carga elemental
     constexpr double eps0 = 8.8541878128e-12;  // F/m, permitividad del vacio
     constexpr double me = 9.1093837015e-31;    // kg, masa del electron
@@ -137,33 +175,10 @@ Ned fieldNed(double latDeg, double lonDeg, double altKm) {
     const double r = sqrt(X * X + Y * Y + Z * Z);
     const double thc = acos(Z / r);  // colatitud geocentrica
     const double lam = atan2(Y, X);
-    // Legendre Schmidt semi-normalizada + derivada (recursion estandar).
-    double P[9][9] = {};
-    double dP[9][9] = {};
-    P[0][0] = 1.0;
-    const double st = sin(thc), ct = cos(thc);
-    for (int n = 1; n <= kNmax; ++n) {
-        for (int m = 0; m <= n; ++m) {
-            // OJO: aritmetica en double (la division entera truncaria k).
-            const double k = (n > 1) ? (double)((n - 1) * (n - 1) - m * m) /
-                                           (double)((2 * n - 1) * (2 * n - 3))
-                                     : 0.0;
-            const double pN1 = P[n - 1][m];
-            const double dN1 = dP[n - 1][m];
-            const double pN2 = (m <= n - 2) ? P[n - 2][m] : 0.0;
-            const double dN2 = (m <= n - 2) ? dP[n - 2][m] : 0.0;
-            if (n == m) {
-                P[n][m] = st * P[n - 1][m - 1];
-                dP[n][m] = st * dP[n - 1][m - 1] + ct * P[n - 1][m - 1];
-            } else if (n == 1) {
-                P[n][m] = ct * pN1;
-                dP[n][m] = ct * dN1 - st * pN1;
-            } else {
-                P[n][m] = ct * pN1 - k * pN2;
-                dP[n][m] = ct * dN1 - st * pN1 - k * dN2;
-            }
-        }
-    }
+    const double st = sin(thc);
+    double S[9][9] = {};
+    double dS[9][9] = {};
+    evalSchmidt(thc, S, dS);
     // Suma de armadura esferica (nT).
     double Br = 0.0, Bt = 0.0, Bp = 0.0;
     for (const Coef& cf : kCoefs) {
@@ -172,10 +187,10 @@ Ned fieldNed(double latDeg, double lonDeg, double altKm) {
         const double g = cf.isH ? 0.0 : cf.v;
         const double h = cf.isH ? cf.v : 0.0;
         const double B = g * cm + h * sm;
-        Br += (cf.n + 1) * q * B * P[cf.n][cf.m];
-        Bt += -q * B * dP[cf.n][cf.m];
+        Br += (cf.n + 1) * q * B * S[cf.n][cf.m];
+        Bt += -q * B * dS[cf.n][cf.m];
         if (st > 1e-9)
-            Bp += -q * cf.m * (-g * sm + h * cm) * P[cf.n][cf.m] / st;
+            Bp += -q * cf.m * (-g * sm + h * cm) * S[cf.n][cf.m] / st;
     }
     // (Br, Bt, Bp) geocentricos -> ECEF.
     const double stc = sin(thc), ctc = cos(thc);
