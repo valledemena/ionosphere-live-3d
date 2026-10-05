@@ -35,6 +35,7 @@
 #include "Globe/Atmosphere.h"
 #include "Globe/Terminator.h"
 #include "Ionosphere/GridLayer.h"
+#include "Data/Alerts.h"
 #include "Utils/Exporter.h"
 #include "Utils/Tour.h"
 #include "Ionosphere/IonosondeLayer.h"
@@ -190,6 +191,7 @@ struct App::Impl {
     bool tourOn = false;      // S-4: tour didactico (tecla T)
     bool tourSpanish = true;  // idioma del overlay del tour
     float tourT = 0.0f;       // reloj del tour (solo avanza con dato listo)
+    alerts::Engine alerts_;   // S-5: motor de reglas sobre bundles (hilo ppal)
     float cineHintUntil = 0.0f;
     char hintMsg[64] = "";
     // Espejos persistentes de UI (antes static locales / locales de panel).
@@ -2941,7 +2943,37 @@ void App::fetchWorker() {
 
 // Aplica en el hilo principal los bundles frescos del worker (llamadas GL
 // y UI van aqui; el worker nunca toca OpenGL).
+// S-5: evaluacion del motor de alertas sobre los ultimos publicados (una
+// evaluacion por publicacion; sin red/hilos nuevos; lo ausente deshabilita).
+static void evalAlertRules(alerts::Engine& eng,
+                           bool kpOk, float kp, double kpT,
+                           bool bzOk, float bz, double bzT,
+                           bool xOk, char xCls, double xT,
+                           bool mufOk, float muf, double mufT) {
+    alerts::Input in;
+    in.kpOk = kpOk;
+    in.kp = kp;
+    in.bzOk = bzOk;
+    in.bz = bz;
+    in.xrayOk = xOk;
+    in.xrayClass = xCls;
+    in.mufOk = mufOk;
+    in.muf = muf;
+    double utc = 0.0;
+    if (mufOk) utc = mufT;
+    else if (xOk) utc = xT;
+    else if (bzOk) utc = bzT;
+    else if (kpOk) utc = kpT;
+    if (utc <= 0.0) return;
+    in.utc = utc;
+    eng.evaluate(in);
+}
+
 void App::consumeBundles() {
+    auto pIx = impl->lastIndices;
+    auto pW = impl->lastWind;
+    auto pRp = impl->lastRadio;
+    auto pXr = impl->lastXray;
     auto t = impl->getTec();
     if (t && t != impl->lastTec) {
         impl->lastTec = t;
@@ -2980,6 +3012,24 @@ void App::consumeBundles() {
     if (xr && xr != impl->lastXray) {
         impl->lastXray = xr;
         ++impl->watchBundles;
+    }
+    // S-5: una evaluacion si alguno de los 4 bundles vigilados se publico.
+    if (impl->lastIndices != pIx || impl->lastWind != pW ||
+        impl->lastRadio != pRp || impl->lastXray != pXr) {
+        const bool kpOk = impl->lastIndices && impl->lastIndices->snap.valid;
+        const bool bzOk = impl->lastWind && impl->lastWind->latest.valid;
+        const bool xOk = impl->lastXray && impl->lastXray->latest.valid;
+        const bool mufOk = impl->lastRadio && impl->lastRadio->latest.valid;
+        evalAlertRules(
+            impl->alerts_,
+            kpOk, kpOk ? impl->lastIndices->snap.kp : 0.0f,
+            kpOk ? impl->lastIndices->snap.timeUtc : 0.0,
+            bzOk, bzOk ? impl->lastWind->latest.bz : 0.0f,
+            bzOk ? impl->lastWind->latest.timeUtc : 0.0,
+            xOk, xOk ? impl->lastXray->latest.fclass : 'A',
+            xOk ? impl->lastXray->latest.timeUtc : 0.0,
+            mufOk, mufOk ? impl->lastRadio->latest.muf : 0.0f,
+            mufOk ? impl->lastRadio->latest.timeUtc : 0.0);
     }
     auto sd = impl->getSdo();
     if (sd && sd != impl->lastSdo) {
@@ -4529,6 +4579,37 @@ void App::render() {
             ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.25f, 1.0f),
                 "D-region fadeout: +%.1f dB", dB);
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SID (sudden ionospheric disturbance): the ongoing X-ray flare enhances D-layer absorption and closes the lower HF bands. Model total absorption in dB (Sauer-Wilkinson simplified: flare + auroral Kp terms at this point). Fades out as the flare decays.");
+        }
+    }
+    // S-5: semaforo de alertas sobre bundles publicados (0 red nueva).
+    // El aviso ambar M7 de arriba se MANTIENE como detalle de flare: la regla
+    // X del motor lee la misma fuente (rpFlux/XraySample) y el panel lleva el
+    // estado — conectado por fuente de verdad, sin duplicar logica.
+    {
+        const alerts::Engine& ae = impl->alerts_;
+        auto lvlCol = [](int l) {
+            if (l == alerts::RED) return ImVec4(0.9f, 0.2f, 0.2f, 1.0f);
+            if (l == alerts::AMBER) return ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+            if (l == alerts::OFF) return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+            return ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
+        };
+        auto lvlTxt = [](int l) {
+            return (l == alerts::RED) ? "RED" : (l == alerts::AMBER) ? "AMBER"
+                                              : (l == alerts::OFF)   ? "OFF"
+                                                                     : "GREEN";
+        };
+        ImGui::TextColored(lvlCol(ae.overall()), "Alerts: %s", lvlTxt(ae.overall()));
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Propagation alerts engine (S-5): rules over published bundles, no new fetches. Kp>=5, Bz<-10 nT, X-ray>=M, MUF drop>20% vs 24 h median. Red needs 2 consecutive samples. Gray OFF = missing data or short history (declared, never an alert).");
+        const char* tn[4] = {"Kp", "Bz", "X-ray", "MUF drop"};
+        for (int r = 0; r < 4; ++r) {
+            ImGui::TextColored(lvlCol(ae.level(r)), "  %s: %s", tn[r], lvlTxt(ae.level(r)));
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Per-rule state. Thresholds: Kp 4/5, Bz -5/-10 nT, X-ray C/M, MUF drop 10%/20% vs 24 h median (6+ samples over 3+ h or disabled).");
+        int shown = 0;
+        for (int i = (int)ae.events().size() - 1; i >= 0 && shown < 6; --i, ++shown) {
+            const alerts::Event& ev = ae.events()[i];
+            ImGui::TextDisabled("  %s %s -> %s", alerts::Engine::ruleName(ev.rule),
+                                lvlTxt(ev.from), lvlTxt(ev.to));
         }
     }
     // S4 gauge 0..1
