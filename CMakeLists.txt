@@ -203,6 +203,11 @@ if(NOT WIN32)
     target_link_libraries(test_igrf PRIVATE Threads::Threads)
 endif()
 add_test(NAME igrf COMMAND test_igrf)
+# M'-2 (ruling 142 sec.5): god rays screen-space - llama a PRODUCCION
+# (namespace godrays, espejo CPU del pase), no replica.
+add_executable(test_godrays tests/test_godrays.cpp)
+target_include_directories(test_godrays PRIVATE src libs/glm)
+add_test(NAME godrays COMMAND test_godrays)
 # M7 (plan 10): absorcion D Sauer-Wilkinson + termino SID del LUF — llama a
 # PRODUCCION (deriveLUF/flareAbsorption/dRegionAbsorptionDb de
 # RadioPropagationAdapter), no replica. Sin std::thread: solo CURL.

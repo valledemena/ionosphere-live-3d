@@ -37,6 +37,7 @@
 #include "Ionosphere/GridLayer.h"
 #include "Data/Alerts.h"
 #include "Utils/Exporter.h"
+#include "Utils/Godrays.h"
 #include "Utils/Tour.h"
 #include "Ionosphere/IonosondeLayer.h"
 #include "Ionosphere/SolarWindLayer.h"
@@ -169,6 +170,8 @@ struct App::Impl {
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
     bool limbCatReady = false;      // idem: blit ejecutado este frame
     Framebuffer bloomFBO[2];
+    Framebuffer compFBO;            // M'-2: destino del composite con god rays ON
+    Shader godraysShader;           // M'-2: pase god rays post-composite
 
     Shader tecShader;
 
@@ -185,6 +188,7 @@ struct App::Impl {
     int msaaSamples = 4;           // M1: MSAA de escena 0/2/4 (default 4, persistible)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
+    bool godraysEnabled = true;    // M'-2: god rays screen-space (S-2 sombra intacta)
     bool hideUI = false;           // ocultar toda la UI (key H)
     bool cPrev = false, hPrev = false, ePrev = false, tPrev = false;
     bool exportReq = false;   // S-1: tecla E -> volcar PNG+CSV tras el composite
@@ -1300,6 +1304,64 @@ bool App::init(int width, int height, const char* title) {
         );
     }
 
+    if (!impl->godraysShader.load("shaders/godrays.vert", "shaders/godrays.frag")) {
+        // M'-2: fallback en paralelo con shaders/godrays.frag (12 taps).
+        fprintf(stderr, "Godrays shader failed, using fallback\n");
+        impl->godraysShader.loadFromSource(
+            "#version 400 core\n"
+            "layout(location=0) in vec2 aPos;\n"
+            "out vec2 vUV;\n"
+            "void main(){ vUV = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n",
+            "#version 400 core\n"
+            "in vec2 vUV;\n"
+            "uniform sampler2D u_scene;\n"
+            "uniform vec2 u_sunUV;\n"
+            "uniform vec3 u_sunColor;\n"
+            "uniform float u_gain;\n"
+            "uniform float u_decay;\n"
+            "uniform float u_radius;\n"
+            "uniform float u_falloffK;\n"
+            "uniform float u_aspect;\n"
+            "uniform mat4 u_invViewProj;\n"
+            "uniform vec3 u_camPos;\n"
+            "out vec4 fragColor;\n"
+            "bool raySphere(vec3 ro, vec3 rd, float r, out float t0, out float t1){\n"
+            "  float b = dot(ro, rd);\n"
+            "  float c = dot(ro, ro) - r * r;\n"
+            "  float disc = b * b - c;\n"
+            "  if(disc < 0.0) return false;\n"
+            "  float s = sqrt(disc);\n"
+            "  t0 = -b - s; t1 = -b + s;\n"
+            "  return true;\n"
+            "}\n"
+            "void main(){\n"
+            "  vec3 base = texture(u_scene, vUV).rgb;\n"
+            "  vec2 auv = vec2(vUV.x * u_aspect, vUV.y);\n"
+            "  vec2 asun = vec2(u_sunUV.x * u_aspect, u_sunUV.y);\n"
+            "  vec2 d = asun - auv;\n"
+            "  float L = length(d);\n"
+            "  float fall = 1.0 / (1.0 + u_falloffK * L);\n"
+            "  vec3 rays = vec3(0.0);\n"
+            "  if(L > 1e-5){\n"
+            "    vec2 dir = d / L;\n"
+            "    float stepLen = min(L, u_radius) / 11.0;\n"
+            "    for(int i=0;i<12;i++){\n"
+            "      vec2 auvTap = auv + dir * (stepLen * float(i));\n"
+            "      vec2 tapUV = vec2(auvTap.x / u_aspect, auvTap.y);\n"
+            "      vec4 clip = vec4(tapUV * 2.0 - 1.0, 1.0, 1.0);\n"
+            "      vec4 world = u_invViewProj * clip;\n"
+            "      vec3 tdir = normalize(world.xyz / world.w - u_camPos);\n"
+            "      float t0, t1;\n"
+            "      float mask = 1.0;\n"
+            "      if(raySphere(u_camPos, tdir, 1.0, t0, t1) && t1 > 1e-4) mask = 0.0;\n"
+            "      rays += u_sunColor * (pow(u_decay, float(i)) * mask);\n"
+            "    }\n"
+            "  }\n"
+            "  fragColor = vec4(base + u_gain * fall * rays, 1.0);\n"
+            "}\n"
+        );
+    }
+
     // Globe
     impl->earth.init();
     impl->stars.init();
@@ -1671,6 +1733,7 @@ bool App::init(int width, int height, const char* title) {
     impl->sceneFBO.init(winW, winH, impl->msaaSamples);
     impl->bloomFBO[0].init(winW / 2, winH / 2);
     impl->bloomFBO[1].init(winW / 2, winH / 2);
+    impl->compFBO.init(winW, winH);   // M'-2: composite con god rays ON
 
     // Fullscreen quad for post-processing (bloom, composite)
     float quadVerts[] = {
@@ -1761,10 +1824,12 @@ void App::recreateRenderTargets(int w, int h) {
     impl->sceneFBO.destroy();
     impl->bloomFBO[0].destroy();
     impl->bloomFBO[1].destroy();
+    impl->compFBO.destroy();   // M'-2: con god rays OFF no se usa (coste 0)
     if (!impl->sceneFBO.init(w, h, impl->msaaSamples))
         fprintf(stderr, "[App] sceneFBO recreate failed at %dx%d\n", w, h);
     impl->bloomFBO[0].init(w / 2, h / 2);
     impl->bloomFBO[1].init(w / 2, h / 2);
+    impl->compFBO.init(w, h);
     impl->camera.aspect = (h > 0) ? (float)w / (float)h : 1.0f;
     glViewport(0, 0, w, h);
 }
@@ -2480,6 +2545,7 @@ void App::saveSettings() {
     fprintf(f, "bloomIntensity %g\n", (double)impl->bloomIntensity);
     fprintf(f, "bloomStrength %g\n", (double)impl->bloomStrength);
     fprintf(f, "toneMap %d\n", impl->toneMap ? 1 : 0);
+    fprintf(f, "godraysEnabled %d\n", impl->godraysEnabled ? 1 : 0);   // M'-2
     fprintf(f, "exposure %g\n", (double)impl->exposure);
     fprintf(f, "msaaSamples %d\n", impl->msaaSamples);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
@@ -2579,6 +2645,7 @@ void App::loadSettings() {
         else if (k == "bloomIntensity") impl->bloomIntensity = glm::clamp((float)v, 0.0f, 3.0f);
         else if (k == "bloomStrength") impl->bloomStrength = glm::clamp((float)v, 0.0f, 2.0f);
         else if (k == "toneMap") impl->toneMap = clB(v);
+        else if (k == "godraysEnabled") impl->godraysEnabled = clB(v);   // M'-2
         else if (k == "exposure") impl->exposure = glm::clamp((float)v, 0.2f, 2.5f);
         else if (k == "msaaSamples") {   // M1: solo 0/2/4 validos, resto -> 4
             int s = (int)v;
@@ -3635,7 +3702,17 @@ void App::render() {
         additiveDrawn = true;
     }
 
-    // --- Pass 3: Composite to screen ---
+    // --- Pass 3: Composite to screen (o a compFBO con god rays) ---
+    // M'-2: puerta CPU del god rays (costo 0 si no aplica): sol en pantalla
+    // y delante del limbo. Sin god rays el camino es byte a byte el de hoy.
+    const glm::mat4 godVP = proj * view;
+    const glm::vec3 godSun = glm::normalize(impl->sunDirection);
+    const godrays::SunProj gsp = godrays::projectSun(godVP, camPos, godSun);
+    const bool gLimbo = godrays::rayHitsEarth(camPos, godSun);
+    const bool doGodrays = impl->godraysEnabled && impl->compFBO.colorTexture != 0 &&
+                           !godrays::gateSkip(gsp, gLimbo);
+    if (doGodrays)
+        impl->compFBO.bind();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
     impl->compositeShader.use();
@@ -3659,6 +3736,34 @@ void App::render() {
     glBindVertexArray(impl->quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+
+    // M'-2: pase god rays fullscreen a pantalla (post-ACES, aditivo sobre la
+    // color resuelta). Solo si la puerta CPU lo aprobo.
+    if (doGodrays) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, winW, winH);
+        glDisable(GL_DEPTH_TEST);
+        impl->godraysShader.use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, impl->compFBO.colorTexture);
+        impl->godraysShader.setInt("u_scene", 0);
+        impl->godraysShader.setVec2(
+            "u_sunUV", glm::vec2(gsp.x * 0.5f + 0.5f, gsp.y * 0.5f + 0.5f));
+        impl->godraysShader.setVec3("u_sunColor",
+                                    glm::vec3(godrays::SUN_R, godrays::SUN_G, godrays::SUN_B));
+        impl->godraysShader.setFloat("u_gain", godrays::GAIN);
+        impl->godraysShader.setFloat("u_decay", godrays::DECAY);
+        impl->godraysShader.setFloat("u_radius", godrays::MAX_RADIUS);
+        impl->godraysShader.setFloat("u_falloffK", godrays::FALLOFF_K);
+        impl->godraysShader.setFloat("u_aspect",
+                                     (winH > 0) ? (float)winW / (float)winH : 1.0f);
+        const glm::mat4 godInv = glm::inverse(godVP);
+        impl->godraysShader.setMat4("u_invViewProj", godInv);
+        impl->godraysShader.setVec3("u_camPos", camPos);
+        glBindVertexArray(impl->quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
 
     glActiveTexture(GL_TEXTURE0);
     glEnable(GL_DEPTH_TEST);
@@ -3760,6 +3865,8 @@ void App::render() {
         }
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Multisample anti-aliasing on the 3D scene (shells, terminator, station points). Rebuilds render targets on change; 0 = off (fastest, for weak GPUs and A/B).");
     }
+    ImGui::Checkbox("God rays", &impl->godraysEnabled);
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Sun shafts screen-space (12 taps toward the projected sun, Earth-masked). Skipped at zero cost when the sun is off-screen or behind the planet.");
     if (ImGui::Checkbox("Cinema (C)", &impl->cineMode)) {
         snprintf(impl->hintMsg, sizeof(impl->hintMsg), "CINEMA %s - press C to exit",
                  impl->cineMode ? "ON" : "OFF");
