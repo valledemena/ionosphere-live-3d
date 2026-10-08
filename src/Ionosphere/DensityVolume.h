@@ -191,6 +191,16 @@ inline DensityVolume buildDensityVolume(const std::vector<LayerProfile>& profile
     vol.valid = false;
     if ((int)profiles.size() != lonRes * latRes) return vol;
 
+    // Ruling 190 (a): tabla de suelos F2 por columna, calculada UNA vez al
+    // inicio del build y descartada al terminar (local: sin staleness entre
+    // builds). 5184 f2FloorKm en vez de ~311k (una por celda con F2
+    // dominante). Reuso puro del valor via evalNeTotalWithFloor.
+    std::vector<float> floorMemo((size_t)lonRes * latRes);
+    for (int latIdx = 0; latIdx < latRes; latIdx++)
+        for (int lonIdx = 0; lonIdx < lonRes; lonIdx++)
+            floorMemo[(size_t)latIdx * lonRes + lonIdx] =
+                f2FloorKm(profiles[(size_t)latIdx * lonRes + lonIdx]);
+
     const float kPi = 3.14159265f;
     for (int latIdx = 0; latIdx < latRes; latIdx++) {
         float latDeg = -90.0f + 180.0f * (latIdx + 0.5f) / latRes;
@@ -204,10 +214,11 @@ inline DensityVolume buildDensityVolume(const std::vector<LayerProfile>& profile
             float cz = sinf(phi) * sinf(theta);
             float cosChi = cx * sunX + cy * sunY + cz * sunZ;
             const LayerProfile& p = profiles[(size_t)latIdx * lonRes + lonIdx];
+            const float floorKm = floorMemo[(size_t)latIdx * lonRes + lonIdx];
             for (int a = 0; a < altRes; a++) {
                 float h = volumeAltKm(a, altRes, altMinKm, altMaxKm);
                 int w = -1;
-                float ne = evalNeTotal(p, h, cosChi, flareFactor, &w);
+                float ne = evalNeTotalWithFloor(p, h, cosChi, flareFactor, floorKm, &w);
                 if (w < 0) w = 0;
                 if (w > 3) w = 3;
                 float l10 = (ne > 0.0f) ? log10f(ne) : 0.0f;

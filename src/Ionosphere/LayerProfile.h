@@ -143,6 +143,53 @@ inline float evalNeTotal(const LayerProfile& p, float hKm, float cosChi, float f
     if (winner) *winner = win;
     return best;
 }
+// Ruling 190 (a): variante con suelo F2 precalculado. Replica 1:1 el cuerpo
+// de evalNeTotal salvo la comparacion `hKm > f2FloorKm(p)`, que usa el valor
+// pasado (f2FloorKm depende SOLO de p: sin inputs por-celda — dominio
+// verificado, sin STOP). Mantener sincronizado con evalNeTotal; el TU
+// test_volume_memo pinnea equivalencia bit-exacta naive vs memoizado.
+inline float evalNeTotalWithFloor(const LayerProfile& p, float hKm, float cosChi, float flareFactor,
+                                  float floorKm, int* winner = nullptr) {
+    float best = 0.0f;
+    int win = -1;
+
+    // D: sin fo medible; fondo Chapman Nm=1e9*sqrt(cosChi), H=10, hm=75.
+    if (cosChi > 0.0f) {
+        float NmD = 1.0e9f * sqrtf(cosChi) * flareFactor;
+        float v = chapmanAlpha(NmD, 75.0f, 10.0f, hKm);
+        if (v > best) { best = v; win = 0; }
+    }
+    if (p.hasE) {
+        float v = chapmanAlpha(p.NmE, p.hmE, 10.0f, hKm);
+        if (v > best) { best = v; win = 1; }
+    }
+    if (p.hasF1) {
+        float v = chapmanAlpha(p.NmF1, p.hmF1, 25.0f, hKm);
+        if (v > best) { best = v; win = 2; }
+    }
+    if (p.hasF2) {
+        float NeF2 = 0.0f;
+        if (hKm <= p.hmF2) {
+            // Epstein modificado. El minimo real de x^B1/cosh(x) esta en
+            // x*tanh(x)=B1 (x*~=1.97 para B1=1.9): clampear a 3.0 YA resucita
+            // con B1 realista. Clamp a 1.6 (seguro para B1>=1.7, saneado arriba)
+            // + taper exponencial mas alla, en vez de meseta.
+            float B0 = p.B0 > 0.0f ? p.B0 : 100.0f;
+            float x = (p.hmF2 - hKm) / B0;
+            const float xmax = 1.6f;
+            float xc = x < xmax ? x : xmax;
+            float base = p.NmF2 * expf(-powf(xc, p.B1) / coshf(xc));
+            if (x > xmax) base *= expf(-(x - xmax) / 1.2f);
+            NeF2 = base;
+        } else {
+            float Htop = 60.0f * (1.0f + (hKm - p.hmF2) / 300.0f);
+            NeF2 = p.NmF2 * expf(-(hKm - p.hmF2) / Htop);
+        }
+        if (NeF2 > best) { best = NeF2; if (hKm > floorKm) win = 3; }   // estricto: E gana su propio voxel pico
+    }
+    if (winner) *winner = win;
+    return best;
+}
 // ---------------------------------------------------------------------------
 // M5 (plan 8, sellado): fondo climatologico + distancia gran circulo.
 // Inline en LayerProfile.h (la opcion que el propio plan 8 ofrece para

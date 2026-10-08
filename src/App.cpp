@@ -69,6 +69,7 @@
 #include "Ionosphere/HFTraceLayer.h"    // M8 (plan 11): capa HF multi-salto
 #include "Ionosphere/LayerProfile.h"
 #include "Ionosphere/DensityVolume.h"
+#include "Ionosphere/VolumeBuildKey.h"   // Ruling 190 (b): guard anti-stall
 #include "Utils/SolarPosition.h"
 #include "Utils/CoordinateSystem.h"
 
@@ -2416,7 +2417,10 @@ void App::update(float dt) {
 
     // Volumen Ne(h) + RefShells dinamicos: reconstruir cada ~5 s con las
     // muestras activas (sigue live, replay, sol y flares).
+    // Ruling 190 (b): guard de clave enumerada — con todos los inputs
+    // estaticos (replay en pausa) se salta el rebuild entero (cero stalls).
     static double lastVolBuild = -1.0;
+    static VolumeBuildKey lastVolKey;
     if (now - lastVolBuild > 5.0) {
         lastVolBuild = now;
         const double tVol0 = glfwGetTime();
@@ -2429,11 +2433,24 @@ void App::update(float dt) {
         double f107 = 120.0;
         auto idxB = impl->getIndices();
         if (idxB) f107 = (double)idxB->snap.f107;
-        auto profs = interpLayerProfiles(gsAct, 72, 72, sd, volEpoch, f107);
-        applyDayNight(profs, 72, 72, sd.x, sd.y, sd.z);
         float flare = 1.0f;
         if (impl->lastXray && impl->lastXray->latest.valid)
             flare = XrayAdapter::flareFactor(impl->lastXray->latest.flux);
+        VolumeBuildKey key;
+        key.volEpoch = volEpoch;
+        key.sunX = sd.x; key.sunY = sd.y; key.sunZ = sd.z;
+        key.f107 = f107;
+        key.flare = flare;
+        key.samplesFp = volumeSamplesFingerprint(gsAct);
+        key.sourceBits = (kc2gMode ? 1u : 0u) | (impl->replayMode ? 2u : 0u) |
+                         (!impl->giroReplayCache.empty() ? 4u : 0u);
+        key.armed = true;
+        if (!volumeShouldRebuild(key, lastVolKey)) {
+            impl->watchVolMs = 0.0;   // skip: inputs estaticos, volumen vigente
+        } else {
+        lastVolKey = key;
+        auto profs = interpLayerProfiles(gsAct, 72, 72, sd, volEpoch, f107);
+        applyDayNight(profs, 72, 72, sd.x, sd.y, sd.z);
         DensityVolume vol = buildDensityVolume(profs, 72, 72, 60, 60.0f, 700.0f,
                                                sd.x, sd.y, sd.z, flare);
         vol.timestamp = volEpoch;
@@ -2470,6 +2487,7 @@ void App::update(float dt) {
             impl->refShells.updateAltitudes(110.0f, std::max(150.0f, 0.8f * mh), mh);
         }
         impl->watchVolMs = (glfwGetTime() - tVol0) * 1000.0;
+        }   // else volumeShouldRebuild (guard 190b)
     }
 
     // Viento solar: refrescar la orientacion/longitud/color de las flechas cuando
