@@ -1887,14 +1887,24 @@ void App::run() {
         const double tPh1 = glfwGetTime();
         update(deltaTime);
         const double tPh2 = glfwGetTime();
-        render();
-        if (impl->exportReq) {
-            impl->exportReq = false;
-            doExportFrame(impl->mapVariable, impl->tecLayer.getGrid(), winW, winH);
+        // Ruling 194: con la ventana minimizada se suspende render/present
+        // (swapchain enferma tras oclusión; el pump, update e hilos siguen).
+        // Sleep para no girar en vacío; el watchdog sigue armado.
+        const bool iconicFrame = glfwGetWindowAttrib(window, GLFW_ICONIFIED) ? true : false;
+        double tPh3 = tPh2, tPh4 = tPh2;
+        if (!iconicFrame) {
+            render();
+            if (impl->exportReq) {
+                impl->exportReq = false;
+                doExportFrame(impl->mapVariable, impl->tecLayer.getGrid(), winW, winH);
+            }
+            tPh3 = glfwGetTime();
+            glfwSwapBuffers(window);
+            tPh4 = glfwGetTime();
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            tPh3 = tPh4 = glfwGetTime();
         }
-        const double tPh3 = glfwGetTime();
-        glfwSwapBuffers(window);
-        const double tPh4 = glfwGetTime();
         // UI-117C: watchdog de stalls >250 ms a stderr (tag propio, nunca [LGDC]).
         const int focusedNow = glfwGetWindowAttrib(window, GLFW_FOCUSED) ? 1 : 0;
         const int iconicNow = glfwGetWindowAttrib(window, GLFW_ICONIFIED) ? 1 : 0;
