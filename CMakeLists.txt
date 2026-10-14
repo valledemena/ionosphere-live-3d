@@ -224,6 +224,10 @@ target_include_directories(test_d_region PRIVATE src)
 target_sources(test_d_region PRIVATE src/Data/RadioPropagationAdapter.cpp src/Utils/Igrf.cpp)  # M'-1: adapter usa igrf::
 target_link_libraries(test_d_region PRIVATE CURL::libcurl)
 add_test(NAME d_region COMMAND test_d_region)
+# Espejo C++ H1-261 (ruling 266 sec.4): TU de epoca solar.
+add_executable(test_solar_epoch tests/test_solar_epoch.cpp src/Utils/SolarPosition.cpp)
+target_include_directories(test_solar_epoch PRIVATE src libs/glad/include libs/glm)
+add_test(NAME solar_epoch COMMAND test_solar_epoch)
 # M8 (plan 11): circuito HF — llama a PRODUCCION (namespace hfc inline en
 # HFTraceLayer.h sobre HfMath.h), no replica. glm/glad: solo cabeceras
 # via HFTraceLayer.h (patron model_foF2), sin link y sin std::thread.

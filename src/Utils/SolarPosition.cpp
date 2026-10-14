@@ -7,8 +7,12 @@ static const double PI = 3.14159265358979323846;
 static const double DEG2RAD = PI / 180.0;
 
 // Meeus compartido: longitud ecliptica aparente (rad, sin normalizar).
+// H1-261 (espejo web P1-261, veredicto 262): Unix->J2000 son MENOS
+// 10957.5 dias. El + computaba el sol 60 anos julianos adelante;
+// lambda y GMST se cancelaban en longitud pero la declinacion quedaba
+// ~0.17 desviada. Mismo fix en getDirection (ambos sitios).
 static double eclipticLonRad(double utcSeconds) {
-    double j2000 = utcSeconds / 86400.0 + 10957.5;
+    double j2000 = utcSeconds / 86400.0 - 10957.5;
     double T = j2000 / 36525.0;
     double L0 = fmod(280.46646 + 36000.76983 * T + 0.0003032 * T * T, 360.0);
     double M = fmod(357.52911 + 35999.05029 * T - 0.0001537 * T * T, 360.0);
@@ -27,8 +31,8 @@ double getApparentEclipticLonDeg(double utcSeconds) {
 }
 
 glm::vec3 getDirection(double utcSeconds) {
-    // Day of year from J2000 epoch
-    double j2000 = utcSeconds / 86400.0 + 10957.5; // days since J2000.0
+    // Day of year from J2000 epoch (H1-261 espejo: MENOS, ver arriba).
+    double j2000 = utcSeconds / 86400.0 - 10957.5; // days since J2000.0
     double T = j2000 / 36525.0; // centuries
 
     // Sun's ecliptic longitude (M11: helper compartido, mismo Meeus)
