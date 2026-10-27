@@ -51,6 +51,27 @@ set(SOURCES
     src/Ionosphere/SolarWindLayer.cpp
     src/Ionosphere/FaradayLayer.cpp
     src/Ionosphere/RefShells.cpp
+    src/Ionosphere/GeospaceOverlays.cpp
+    src/Ionosphere/MagnetosphereLayer.cpp
+    src/Ionosphere/VanAllenBelts.cpp
+    src/Ionosphere/WestFordRing.cpp
+    src/Data/WsprAdapter.cpp
+    src/Data/CmeAdapter.cpp
+    src/Data/StormAdapter.cpp
+    src/Data/FlareAdapter.cpp  # Lote 4C: fulguraciones DONKI (red, sin GL)
+    src/Data/SolImageAdapter.cpp  # Lote 4B: LASCO C2 / D-RAP (red + stb decode)
+    src/Data/TleAdapter.cpp  # Lote 4A: catalogo TLE CelesTrak/SatNOGS (red)
+    src/Data/OrbitProp.cpp  # Lote 4A: TLE + J2 secular + ECEF (puro)
+    src/Data/ParkerMath.cpp  # Lote 5D: espiral de Parker (puro, sin GL/red)
+    src/UI/ParkerPanel.cpp  # Lote 5D: ventana Parker spiral (draw list)
+    src/Data/VoyagerAdapter.cpp  # Lote 5B: Voyager 1/2 via JPL Horizons (red)
+    src/UI/VoyagerPanel.cpp  # Lote 5B: ventana Voyager
+    src/Data/RbeAdapter.cpp  # Lote 5C: catalogo RBE de DONKI (red)
+    src/Data/AeAdapter.cpp  # Lote 5A: AE real de Kyoto WDC (red)
+    src/Ionosphere/SatellitesLayer.cpp  # Lote 4A: puntos + anillos orbitales
+    src/Ionosphere/WsprArcs.cpp
+    src/Ionosphere/CmeLayer.cpp
+    src/Ionosphere/WhistlerLayer.cpp
     src/Ionosphere/SliceLayer.cpp
     src/Ionosphere/HFTraceLayer.cpp
     src/Data/DataManager.cpp
@@ -82,6 +103,8 @@ set(SOURCES
     src/UI/TimelineBar.cpp
     src/UI/StationPanel.cpp
     src/UI/SunPanel.cpp  # M11: ventana Sun
+    src/UI/GeospacePanel.cpp  # Lote 3: panel de datos WSPR / ENLIL / NWS
+    src/UI/SolarImagesPanel.cpp  # Lote 4B: ventana Solar imagery (texturas GL)
     src/Utils/CoordinateSystem.cpp
     src/Utils/SolarPosition.cpp
     src/Utils/Exporter.cpp  # S-1: exportacion PNG+CSV (logica pura + stb write)
@@ -324,3 +347,64 @@ add_test(NAME lgdc_trace COMMAND test_lgdc_trace)
 add_executable(test_provider_status tests/test_provider_status.cpp src/Data/ProviderStatus.cpp)
 target_include_directories(test_provider_status PRIVATE src)
 add_test(NAME provider_status COMMAND test_provider_status)
+# Lote 4C: parser de fulguraciones DONKI — llama a PRODUCCION
+# (FlareAdapter::parseFlares / flrRank), no replica.
+add_executable(test_flare_parse tests/test_flare_parse.cpp)
+target_include_directories(test_flare_parse PRIVATE src)
+target_sources(test_flare_parse PRIVATE src/Data/FlareAdapter.cpp)
+target_link_libraries(test_flare_parse PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_flare_parse PRIVATE Threads::Threads)
+endif()
+add_test(NAME flare_parse COMMAND test_flare_parse)
+# Lote 4B: imagenes solares LASCO/D-RAP — llama a PRODUCCION
+# (SolImageAdapter: urlFor/decodeImage/cache), no replica.
+add_executable(test_solimage tests/test_solimage.cpp)
+target_include_directories(test_solimage PRIVATE src libs/stb)
+target_sources(test_solimage PRIVATE src/Data/SolImageAdapter.cpp tests/stb_image_impl.cpp)
+target_link_libraries(test_solimage PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_solimage PRIVATE Threads::Threads)
+endif()
+add_test(NAME solimage COMMAND test_solimage)
+# Lote 4A: propagacion TLE (OrbitProp) y catalogo (TleAdapter) — produccion.
+add_executable(test_orbit_prop tests/test_orbit_prop.cpp)
+target_include_directories(test_orbit_prop PRIVATE src)
+target_sources(test_orbit_prop PRIVATE src/Data/OrbitProp.cpp src/Data/TleAdapter.cpp)
+target_link_libraries(test_orbit_prop PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_orbit_prop PRIVATE Threads::Threads)
+endif()
+add_test(NAME orbit_prop COMMAND test_orbit_prop)
+# Lote 5D: espiral de Parker — llama a PRODUCCION (ParkerMath), sin red.
+add_executable(test_parker tests/test_parker.cpp)
+target_include_directories(test_parker PRIVATE src)
+target_sources(test_parker PRIVATE src/Data/ParkerMath.cpp)
+add_test(NAME parker COMMAND test_parker)
+# Lote 5B: Voyager (Horizons) — llama a PRODUCCION (VoyagerAdapter).
+add_executable(test_voyager tests/test_voyager.cpp)
+target_include_directories(test_voyager PRIVATE src)
+target_sources(test_voyager PRIVATE src/Data/VoyagerAdapter.cpp)
+target_link_libraries(test_voyager PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_voyager PRIVATE Threads::Threads)
+endif()
+add_test(NAME voyager COMMAND test_voyager)
+# Lote 5C: catalogo RBE (DONKI) — llama a PRODUCCION (RbeAdapter::parseRbe).
+add_executable(test_rbe_parse tests/test_rbe_parse.cpp)
+target_include_directories(test_rbe_parse PRIVATE src)
+target_sources(test_rbe_parse PRIVATE src/Data/RbeAdapter.cpp)
+target_link_libraries(test_rbe_parse PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_rbe_parse PRIVATE Threads::Threads)
+endif()
+add_test(NAME rbe_parse COMMAND test_rbe_parse)
+# Lote 5A: AE de Kyoto — llama a PRODUCCION (AeAdapter::parseAeFile), sin red.
+add_executable(test_ae_parse tests/test_ae_parse.cpp)
+target_include_directories(test_ae_parse PRIVATE src)
+target_sources(test_ae_parse PRIVATE src/Data/AeAdapter.cpp)
+target_link_libraries(test_ae_parse PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_ae_parse PRIVATE Threads::Threads)
+endif()
+add_test(NAME ae_parse COMMAND test_ae_parse)

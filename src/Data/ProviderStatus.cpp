@@ -9,6 +9,9 @@ namespace {
 const char* kLabels[PROV_COUNT] = {
     "GIRO", "kc2g", "IRTAM", "GloTEC", "Indices", "Solar wind", "Aurora",
     "Kp/HF", "X-ray", "SDO", "DIAS", "Ebro", "ESA", "NOAA",
+    "WSPRnet", "ENLIL", "NWS alerts",
+    "Satellites", "LASCO C2", "D-RAP", "DONKI flares",
+    "AE (Kyoto)", "Voyager", "DONKI RBE",
 };
 
 bool startsWithGate(const std::string& e) {
@@ -54,6 +57,21 @@ const double kStaleSec[PROV_COUNT] = {
     7200.0,   // Ebro
     0.0,      // ESA: n/a (mock/off por diseno)
     0.0,      // NOAA stub: n/a (off permanente)
+    // Lote 3: dataEpoch = ultimo fetch correcto (no la fecha del evento), con
+    // el mismo criterio de 2x la cadencia nominal del adaptador.
+    600.0,    // WSPRnet: cadencia 5 min (TTL de spot 10 min)
+    3600.0,   // ENLIL: cadencia 30 min (el modelo publica a su ritmo)
+    600.0,    // NWS alerts: cadencia 5 min
+    // Lote 4: mismo criterio (2x la cadencia nominal del adaptador).
+    21600.0,  // TLE CelesTrak: cadencia 1 h (los TLE cambian despacio)
+    1800.0,   // LASCO C2: cadencia 15 min
+    1800.0,   // D-RAP: cadencia 15 min
+    3600.0,   // DONKI flares: cadencia 30 min
+    // Lote 5. AE: su dataEpoch es el ultimo FETCH correcto, no la muestra
+    // (Kyoto publica con hasta ~3 semanas de retraso por diseno).
+    900.0,    // AE (Kyoto): cadencia 15 min
+    43200.0,  // Voyager: TTL 6 h -> stale a las 12 h
+    3600.0,   // DONKI RBE: cadencia 30 min
 };
 
 bool hard429(int roundAttempts, int roundOk) {
@@ -63,12 +81,16 @@ bool hard429(int roundAttempts, int roundOk) {
 State classify(const Snapshot& s, double nowUtc) {
     (void)nowUtc;
     if (s.id == PROV_NOAA_STUB) return State::Off;
+    // El gate de cortesia (LGDC) es espera declarada, no un fallo: tambien
+    // cuando aun no hay dato (antes caia en "failed" y contradecia el
+    // contrato de la matriz).
+    const bool gate = startsWithGate(s.error);
     if (!s.hasData) {
         if (s.error.empty()) return State::Off;
-        return State::Failed;
+        return gate ? State::Degraded : State::Failed;
     }
     if (s.rateLimited) return State::RateLimited;
-    if (s.retryInMin > 0.0 || startsWithGate(s.error)) return State::Degraded;
+    if (s.retryInMin > 0.0 || gate) return State::Degraded;
     const double ks = (s.id >= 0 && (int)s.id < (int)PROV_COUNT)
                           ? kStaleSec[(int)s.id]
                           : 0.0;
@@ -118,13 +140,15 @@ std::vector<Row> buildRows(const Snapshot* snaps, size_t n,
         r.data = f->data;
         if (f->hasData && f->dataEpoch > 0.0)
             r.data += " · " + ageCompact(nowUtc - f->dataEpoch);
-        if (!f->error.empty())
-            r.reason = f->error;
-        else if (f->retryInMin > 0.0) {
-            char b[32];
+        // Motivo = causa declarada + espera, no una u otra: un backoff parcial
+        // (algunas estaciones) con reintento pendiente necesita ambas.
+        if (!f->error.empty()) r.reason = f->error;
+        if (f->retryInMin > 0.0) {
+            char b[40];
             std::snprintf(b, sizeof(b), "retry %d min",
                           (int)(f->retryInMin + 0.5));
-            r.reason = b;
+            if (!r.reason.empty()) r.reason += " · ";
+            r.reason += b;
         }
         rows.push_back(r);
     }

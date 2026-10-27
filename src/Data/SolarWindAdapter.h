@@ -6,7 +6,12 @@
 struct SolarWindSample {
     float speed = 0.0f;    // velocidad del viento solar (km/s)
     float density = 0.0f;  // densidad de protones (cm^-3)
-    float bz = 0.0f;       // componente Bz del campo magnetico (nT); +/- = norte/sur
+    float bz = 0.0f;       // componente Bz GSM del campo magnetico (nT); +/- = norte/sur
+    // Bx GSE (nT): +X apunta al Sol. Solo lo usa el panel de la espiral de
+    // Parker (polaridad de sector, convencion declarada). Si el feed no lo
+    // trae, hasBx queda en false y no se pinta polaridad como dato.
+    float bx = 0.0f;
+    bool hasBx = false;
     double timeUtc = 0.0;  // timestamp Unix de la muestra
     bool valid = false;
 };
@@ -39,6 +44,9 @@ public:
     const SolarWindSample& getLatest() const { return latest_; }
     // Historico de Bz (ultimas ~24h), para la mini-grafica.
     const std::vector<SolarWindHistoryPoint>& getBzHistory() const { return bzHistory_; }
+    // Historico de Bx GSE (misma ventana). Vacio si el feed no publica bx:
+    // el consumidor debe declararlo (no se rellena con ceros).
+    const std::vector<SolarWindHistoryPoint>& getBxHistory() const { return bxHistory_; }
     double getLastFetchTime() const { return lastFetchUtc_; }
     bool isSimulated() const { return simulated_; }
     const std::string& getErrorMessage() const { return error_; }
@@ -54,6 +62,7 @@ private:
 
     SolarWindSample latest_;
     std::vector<SolarWindHistoryPoint> bzHistory_;
+    std::vector<SolarWindHistoryPoint> bxHistory_;
     double lastFetchUtc_ = 0.0;
     bool simulated_ = true;
     std::string error_;

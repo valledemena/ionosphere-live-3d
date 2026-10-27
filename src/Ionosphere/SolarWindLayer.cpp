@@ -57,9 +57,11 @@ void SolarWindLayer::init() {
     printf("[OK] SolarWindLayer initialized\n");
 }
 
-void SolarWindLayer::updateArrowData(float speed, float bz, const glm::vec3& sunWorld, int mode) {
+void SolarWindLayer::updateArrowData(float speed, float bz, float density,
+                                     const glm::vec3& sunWorld, int mode) {
     speed_ = speed;
     bz_ = bz;
+    density_ = density;
     sunWorld_ = glm::normalize(sunWorld);
     mode_ = mode & 1;
     rebuild_ = true;
@@ -103,18 +105,39 @@ void SolarWindLayer::rebuild() {
             glm::vec3 tail = P;
             glm::vec3 head = P + t * (len * (0.4f + 0.6f * flowFactor));
 
-            // Color.
+            // Color. Brillos y rampa portados de la demo web
+            // (IonosphereScene.tsx: solarWindColor): la velocidad manda,
+            // Bz sur enrojece y la densidad sube el brillo.
+            const float bright = 0.86f + 0.14f * glm::clamp(density_ / 20.0f, 0.0f, 1.0f);
             glm::vec3 col;
             if (mode_ == 1) {
                 // Bz divergente: rojo = norte (Bz>0), azul = sur (Bz<0).
                 float s = glm::clamp(bz_ / 20.0f, -1.0f, 1.0f);
                 if (s >= 0.0f) col = glm::vec3(0.2f, 0.2f, 0.2f) + glm::vec3(0.8f, 0.0f, 0.0f) * s;
                 else           col = glm::vec3(0.2f, 0.2f, 0.2f) + glm::vec3(0.0f, 0.0f, 0.9f) * (-s);
+                col *= bright;
             } else {
-                // Velocidad en colormap Turbo simplificado (frio->caliente).
-                float u = glm::clamp((speed_ - 250.0f) / 500.0f, 0.0f, 1.0f);
-                if (u < 0.5f) col = glm::mix(glm::vec3(0.13f, 0.31f, 0.85f), glm::vec3(0.38f, 0.84f, 0.30f), u * 2.0f);
-                else          col = glm::mix(glm::vec3(0.38f, 0.84f, 0.30f), glm::vec3(0.93f, 0.23f, 0.10f), (u - 0.5f) * 2.0f);
+                // Rampa web de 5 paradas (violeta -> magenta -> naranja ->
+                // amarillo -> blanco calido).
+                static const float stopT[5] = { 0.00f, 0.32f, 0.55f, 0.78f, 1.00f };
+                static const glm::vec3 stopC[5] = {
+                    glm::vec3(0.45f, 0.22f, 0.95f),
+                    glm::vec3(0.95f, 0.25f, 0.80f),
+                    glm::vec3(1.00f, 0.48f, 0.16f),
+                    glm::vec3(1.00f, 0.78f, 0.28f),
+                    glm::vec3(1.00f, 0.95f, 0.78f),
+                };
+                float speedN = glm::clamp((speed_ - 250.0f) / 650.0f, 0.0f, 1.0f);
+                float southN = glm::clamp(-bz_ / 15.0f, 0.0f, 1.0f);
+                // Semilla por flecha: variacion estable, sin parpadeo entre
+                // rebuilds (el original usa ruido por particula).
+                float seed = fmodf((float)i * 0.6180340f + (float)j * 0.2718281f, 1.0f);
+                float t = glm::clamp(0.28f + 0.55f * speedN - 0.16f * southN
+                                     + 0.13f * seed, 0.0f, 1.0f);
+                int k = 0;
+                while (k < 3 && t > stopT[k + 1]) k++;
+                float f = (t - stopT[k]) / (stopT[k + 1] - stopT[k] + 1e-6f);
+                col = glm::mix(stopC[k], stopC[k + 1], f) * bright;
             }
 
             verts.push_back(tail.x); verts.push_back(tail.y); verts.push_back(tail.z);

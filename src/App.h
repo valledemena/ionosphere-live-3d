@@ -30,6 +30,10 @@ private:
     void pushHistoryFrame(const GridData& grid, double ts, bool simulated = false);
     void uploadSunTexture(const SdoImage& im);  // M11: subida GL (render thread)
     void drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)  // anillo ordenado, dedup, cap 432 + write-through M10
+    void drawGeospacePanel();  // Lote 3: panel de datos WSPR / ENLIL / NWS
+    void drawSolarImagesPanel();  // Lote 4B: ventana LASCO C2 + D-RAP
+    void drawParkerPanel();  // Lote 5D: ventana de la espiral de Parker
+    void drawVoyagerPanel();  // Lote 5B: ventana Voyager (JPL Horizons)
     void restoreTecCache();  // M10: anillo + bundle desde cache/ (init)
     void restoreKc2gCache();  // FASE B (P2): historia kc2g desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)

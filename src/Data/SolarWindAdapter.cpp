@@ -149,7 +149,13 @@ void SolarWindAdapter::fillSimulated(double utc) {
     latest_.speed   = 380.0f + 40.0f * sinf((float)(t * 0.000004f));
     latest_.density = 5.5f + 2.0f * sinf((float)(t * 0.000009f) + 1.0f);
     latest_.bz      = 1.5f + 3.0f * sinf((float)(t * 0.000012f));
+    // Bx NO se simula: la polaridad de sector del panel Parker debe ser real
+    // o no mostrarse.
+    latest_.bx = 0.0f;
+    latest_.hasBx = false;
     latest_.valid   = true;
+
+    bxHistory_.clear();
 
     bzHistory_.clear();
     for (int i = 0; i < 288; i++) {   // ~24h en pasos de 5 min
@@ -165,27 +171,37 @@ bool SolarWindAdapter::fetch(double utc) {
     // 1) Campo magnetico (Bz).
     std::string magJson;
     std::vector<SolarWindHistoryPoint> magHist;   // time, bz
+    std::vector<SolarWindHistoryPoint> bxHist;    // time, bx GSE (solo filas con bx)
     bool gotMag = false;
     if (fetchURL(SW_MAG_URL, magJson)) {
-        std::vector<std::pair<double,float>> rows;
+        struct MagRow { double t; float bz; float bx; bool hasBx; };
+        std::vector<MagRow> rows;
         size_t pos = 0;
         while (true) {
             size_t open = magJson.find('{', pos);
             if (open == std::string::npos) break;
             size_t close = findMatchingBrace(magJson, open);
             if (close == std::string::npos) break;
-            double t = 0, bz = 0;
+            double t = 0, bz = 0, bx = 0;
             if (objectNumber(magJson, open, close, "bz_gsm", bz)) {
+                const bool hasBx = objectNumber(magJson, open, close, "bx_gse", bx);
                 std::string ts;
                 objectString(magJson, open, close, "time_tag", ts);
                 t = isoToEpoch(ts);
-                if (t > 0.0) { rows.push_back({t, (float)bz}); gotMag = true; }
+                if (t > 0.0) {
+                    rows.push_back({t, (float)bz, (float)bx, hasBx});
+                    gotMag = true;
+                }
             }
             pos = close + 1;
         }
         // ordenar ascendente por tiempo
-        std::sort(rows.begin(), rows.end());
-        for (auto& r : rows) magHist.push_back({r.first, r.second});
+        std::sort(rows.begin(), rows.end(),
+                  [](const MagRow& a, const MagRow& b) { return a.t < b.t; });
+        for (const auto& r : rows) {
+            magHist.push_back({r.t, r.bz});
+            if (r.hasBx) bxHist.push_back({r.t, r.bx});
+        }
     } else {
         fprintf(stderr, "[SolarWindAdapter] No se pudo obtener mag JSON: %s\n", error_.c_str());
     }
@@ -231,9 +247,11 @@ bool SolarWindAdapter::fetch(double utc) {
         return false;
     }
 
-    // Mag: la ultima Bz.
+    // Mag: la ultima Bz (y la ultima Bx si el feed la publica).
     float bz = 0.0f;
     if (!magHist.empty()) bz = magHist.back().value;
+    float bx = 0.0f;
+    if (!bxHist.empty()) bx = bxHist.back().value;
 
     // Wind: la ultima velocidad/densidad.
     float speed = 0.0f, density = 0.0f;
@@ -250,6 +268,8 @@ bool SolarWindAdapter::fetch(double utc) {
     latest_.speed = speed;
     latest_.density = density;
     latest_.bz = bz;
+    latest_.bx = bx;
+    latest_.hasBx = !bxHist.empty();
     latest_.timeUtc = latestT;
     latest_.valid = (speed > 0.0f || gotMag);
 
@@ -259,12 +279,18 @@ bool SolarWindAdapter::fetch(double utc) {
         double cutoff = magHist.back().timeUtc - 24.0 * 3600.0;
         for (const auto& h : magHist) if (h.timeUtc >= cutoff) bzHistory_.push_back(h);
     }
+    // Bx: misma ventana, sin inventar huecos. Vacio = polaridad no disponible.
+    bxHistory_.clear();
+    if (!bxHist.empty()) {
+        double cutoff = bxHist.back().timeUtc - 24.0 * 3600.0;
+        for (const auto& h : bxHist) if (h.timeUtc >= cutoff) bxHistory_.push_back(h);
+    }
 
     lastFetchUtc_ = utc;
     simulated_ = false;
     error_.clear();
-    printf("[SolarWindAdapter] Real solar wind: speed=%.0f km/s density=%.1f cm^-3 Bz=%.1f nT (hist %d pts)\n",
-           latest_.speed, latest_.density, latest_.bz, (int)bzHistory_.size());
+    printf("[SolarWindAdapter] Real solar wind: speed=%.0f km/s density=%.1f cm^-3 Bz=%.1f nT Bx=%.1f nT (hist %d pts)\n",
+           latest_.speed, latest_.density, latest_.bz, latest_.bx, (int)bzHistory_.size());
     return true;
 }
 

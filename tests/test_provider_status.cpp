@@ -62,6 +62,17 @@ int main() {
         d.retryInMin = 5.0;
         check_bool("5: retry 5 -> degraded",
                    classify(d, now) == State::Degraded);
+        // 5b: el motivo suma causa + espera (antes el retry se perdia cuando
+        // habia un error parcial, p.ej. "backoff 1 st" de GIRO).
+        Snapshot dr;
+        dr.id = PROV_GIRO;
+        dr.hasData = true;
+        dr.error = "backoff 1 st";
+        dr.retryInMin = 7.0;
+        const std::string rsn = buildRows(&dr, 1, now)[(int)PROV_GIRO].reason;
+        check_bool("5b: reason = error + retry",
+                   rsn.find("backoff 1 st") != std::string::npos &&
+                       rsn.find("retry 7 min") != std::string::npos);
         // (6) IRTAM gate-wait = degraded, NO rate-limited.
         Snapshot g;
         g.id = PROV_IRTAM;
@@ -71,6 +82,12 @@ int main() {
                    classify(g, now) == State::Degraded);
         check_bool("6b: gate: no es rate-limited",
                    classify(g, now) != State::RateLimited);
+        // 6c: gate SIN datos tambien es espera declarada, no fallo.
+        Snapshot g0;
+        g0.id = PROV_IRTAM;
+        g0.error = "gate: 15 s (courtesy)";
+        check_bool("6c: gate sin datos -> degraded",
+                   classify(g0, now) == State::Degraded);
         // (7) stale por kStaleSec.
         Snapshot st;
         st.id = PROV_TEC;
@@ -138,13 +155,83 @@ int main() {
             "12: buildRows determinista",
             buildRows(&dx, 1, now)[(int)PROV_AURORA].stateText ==
                 buildRows(&dx, 1, now)[(int)PROV_AURORA].stateText);
-        // (13) board vacio -> 14 filas off.
+        // (13) umbrales de las fuentes del lote 3 (2x su cadencia nominal).
+        Snapshot w;
+        w.id = PROV_WSPR;
+        w.hasData = true;
+        w.dataEpoch = now - 700.0;
+        check_bool("13: WSPR 700 s > 600 -> stale",
+                   classify(w, now) == State::Stale);
+        Snapshot en;
+        en.id = PROV_ENLIL;
+        en.hasData = true;
+        en.dataEpoch = now - 3700.0;
+        check_bool("13b: ENLIL 3700 s > 3600 -> stale",
+                   classify(en, now) == State::Stale);
+        Snapshot nw;
+        nw.id = PROV_NWS;
+        nw.hasData = true;
+        nw.dataEpoch = now - 700.0;
+        check_bool("13c: NWS 700 s > 600 -> stale",
+                   classify(nw, now) == State::Stale);
+        // (13d) umbrales del lote 4.
+        Snapshot tl;
+        tl.id = PROV_TLE;
+        tl.hasData = true;
+        tl.dataEpoch = now - 22000.0;
+        check_bool("13d: TLE 22000 s > 21600 -> stale",
+                   classify(tl, now) == State::Stale);
+        Snapshot ls;
+        ls.id = PROV_LASCO;
+        ls.hasData = true;
+        ls.dataEpoch = now - 1900.0;
+        check_bool("13e: LASCO 1900 s > 1800 -> stale",
+                   classify(ls, now) == State::Stale);
+        Snapshot fl;
+        fl.id = PROV_FLR;
+        fl.hasData = true;
+        fl.dataEpoch = now - 3700.0;
+        check_bool("13f: DONKI flares 3700 s > 3600 -> stale",
+                   classify(fl, now) == State::Stale);
+        // (13g) frescos -> ok (los cuatro del lote 4).
+        Snapshot fresh[4];
+        fresh[0].id = PROV_TLE;
+        fresh[1].id = PROV_LASCO;
+        fresh[2].id = PROV_DRAP;
+        fresh[3].id = PROV_FLR;
+        bool freshOk = true;
+        for (Snapshot& f : fresh) {
+            f.hasData = true;
+            f.dataEpoch = now - 60.0;
+            if (classify(f, now) != State::Ok) freshOk = false;
+        }
+        check_bool("13g: lote 4 fresco -> ok", freshOk);
+        // (13h) umbrales del lote 5.
+        Snapshot aex;
+        aex.id = PROV_AE;
+        aex.hasData = true;
+        aex.dataEpoch = now - 1000.0;
+        check_bool("13h: AE 1000 s > 900 -> stale",
+                   classify(aex, now) == State::Stale);
+        Snapshot vy;
+        vy.id = PROV_VOYAGER;
+        vy.hasData = true;
+        vy.dataEpoch = now - 44000.0;
+        check_bool("13i: Voyager 44000 s > 43200 -> stale",
+                   classify(vy, now) == State::Stale);
+        Snapshot rb;
+        rb.id = PROV_RBE;
+        rb.hasData = true;
+        rb.dataEpoch = now - 3700.0;
+        check_bool("13j: DONKI RBE 3700 s > 3600 -> stale",
+                   classify(rb, now) == State::Stale);
+        // (14) board vacio -> todas off.
         std::vector<Row> e = buildRows(nullptr, 0, now);
         bool allOff = e.size() == (size_t)PROV_COUNT;
         for (const Row& r : e)
             if (r.state != State::Off) allOff = false;
-        check_bool("13: vacio -> 14 off", allOff);
-        // (14) labels 14 unicos no vacios.
+        check_bool("14: vacio -> todas off", allOff);
+        // (15) labels unicos no vacios.
         bool uniq = true;
         for (int i = 0; i < (int)PROV_COUNT; i++) {
             const char* l = providerLabel((ProviderId)i);
@@ -153,7 +240,7 @@ int main() {
                 if (std::string(l) == providerLabel((ProviderId)j))
                     uniq = false;
         }
-        check_bool("14: 14 labels unicos", uniq);
+        check_bool("15: labels unicos", uniq);
     }
 
     std::printf("[test_provider_status] %d OK, %d FAIL\n", g_ok, g_fail);

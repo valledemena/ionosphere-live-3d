@@ -31,6 +31,22 @@ enum ProviderId {
     PROV_EBRO,
     PROV_ESA,
     PROV_NOAA_STUB,
+    // Lote 3 del port web: fuentes con adaptador y fetch propios (solo
+    // descargan con su capa visible o el panel Geospace abierto; hasta
+    // entonces la fila queda "off", que es el estado real).
+    PROV_WSPR,
+    PROV_ENLIL,
+    PROV_NWS,
+    // Lote 4: satelites (TLE), imagenes solares (LASCO C2, D-RAP) y
+    // fulguraciones DONKI. Igual que el lote 3: off hasta que se usan.
+    PROV_TLE,
+    PROV_LASCO,
+    PROV_DRAP,
+    PROV_FLR,
+    // Lote 5: AE real de Kyoto, Voyager (Horizons) y RBE de DONKI.
+    PROV_AE,
+    PROV_VOYAGER,
+    PROV_RBE,
     PROV_COUNT
 };
 

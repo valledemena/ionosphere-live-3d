@@ -7,8 +7,8 @@
 // SolarWindLayer: capa 3D de flechas sobre el globo que representa el viento
 // solar. Cada flecha es un segmento (GL_LINES) orientado segun el flujo del
 // viento (desde el subsolar hacia el antisol), con longitud proporcional a la
-// velocidad y color por magnitud (speed con colormap) o por Bz (rojo=norte,
-// azul=sur). 
+// velocidad y color por magnitud (rampa web: velocidad + Bz sur + densidad) o
+// por Bz (rojo=norte, azul=sur).
 //
 // Convencion de coordenadas (coincide con la esfera del GridLayer/IonosondeLayer):
 //   phi = (90 - lat) en rad, theta = lon en rad
@@ -21,9 +21,12 @@ public:
     void init();
     // Reconstruye las flechas a partir del estado del viento solar.
     //   speed, bz   : magnitudes actuales (para escala/color).
+    //   density     : densidad de protones (cm^-3); modula el brillo.
     //   sunWorld    : direccion del sol en espacio de mundo (normalizada).
-    //   mode        : 0 = color por velocidad; 1 = color por Bz (divergente rojo/azul).
-    void updateArrowData(float speed, float bz, const glm::vec3& sunWorld, int mode);
+    //   mode        : 0 = rampa velocidad/Bz/densidad (demo web);
+    //                 1 = color por Bz (divergente rojo/azul).
+    void updateArrowData(float speed, float bz, float density,
+                         const glm::vec3& sunWorld, int mode);
     void render(const glm::mat4& view, const glm::mat4& projection);
     void destroy();
 
@@ -53,6 +56,7 @@ private:
     float arrowScale_ = 1.0f;
     float speed_ = 380.0f;
     float bz_ = 0.0f;
+    float density_ = 5.0f;
     glm::vec3 sunWorld_ = glm::vec3(1.0f, 0.0f, 0.0f);
     int mode_ = 0;
     bool rebuild_ = true;

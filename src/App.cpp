@@ -64,6 +64,25 @@
 #include "Data/ProviderStatus.h"  // M-prov-matrix (048): matriz de estado (puro)
 #include "Ionosphere/FaradayLayer.h"
 #include "Ionosphere/RefShells.h"
+#include "Ionosphere/GeospaceOverlays.h"   // port web: Dst ring + electrojets + grey line
+#include "Ionosphere/MagnetosphereLayer.h" // port web: magnetopausa Shue + dipolo
+#include "Ionosphere/VanAllenBelts.h"      // port web: cinturones de radiacion
+#include "Ionosphere/WestFordRing.h"       // port web: anillo West Ford 1963
+#include "Data/WsprAdapter.h"              // port web: spots WSPRnet (red)
+#include "Data/CmeAdapter.h"               // port web: ENLIL WSA (red)
+#include "Data/StormAdapter.h"             // port web: avisos NWS (red)
+#include "Data/FlareAdapter.h"             // Lote 4C: fulguraciones DONKI (red)
+#include "Data/SolImageAdapter.h"          // Lote 4B: LASCO C2 / D-RAP (red)
+#include "Data/TleAdapter.h"               // Lote 4A: catalogo TLE (red)
+#include "Ionosphere/SatellitesLayer.h"    // Lote 4A: satelites sobre el globo
+#include "Ionosphere/WsprArcs.h"           // port web: arcos WSPR
+#include "Ionosphere/CmeLayer.h"           // port web: frente CME
+#include "Ionosphere/WhistlerLayer.h"      // port web: sprites + whistlers
+#include "UI/GeospacePanel.h"              // Lote 3: panel de datos externos
+#include "UI/SolarImagesPanel.h"           // Lote 4B: ventana Solar imagery
+#include "UI/ParkerPanel.h"                // Lote 5D: espiral de Parker (2D)
+#include "UI/VoyagerPanel.h"               // Lote 5B: Voyager 1/2 (Horizons)
+#include "Data/AeAdapter.h"                // Lote 5A: AE real (Kyoto WDC)
 #include "Ionosphere/VolumeRenderer.h"
 #include "Ionosphere/SliceLayer.h"
 #include "Ionosphere/HFTraceLayer.h"    // M8 (plan 11): capa HF multi-salto
@@ -84,6 +103,9 @@ struct App::Impl {
     struct WindBundle {
         SolarWindSample latest;
         std::vector<SolarWindHistoryPoint> bzHist;
+        // Bx GSE (nT) de la misma ventana, para el panel de la espiral de
+        // Parker. Vacio si el feed no publica bx: no se rellena con ceros.
+        std::vector<SolarWindHistoryPoint> bxHist;
         bool simulated = true;
         std::string error;
     };
@@ -165,6 +187,67 @@ struct App::Impl {
     FaradayLayer faradayLayer;
     RefShells refShells;
     bool refShellsVisible = false;
+    // Port de la demo web: capas geospace con datos ya presentes en el motor.
+    GeospaceOverlays geospace;
+    bool dstRingVisible = false;      // anillo Dst (indice de tormenta)
+    bool electrojetVisible = false;   // bucles aurorales coloreados por AE
+    bool greylineVisible = false;     // cinta del terminador (+/-7.5 grados)
+    // Lote 2 del port web: cavidad magnetosferica, cinturones y anillo 1963.
+    MagnetosphereLayer magnetosphere;  // magnetopausa Shue-1998 + lineas dipolares
+    VanAllenBelts vanAllen;            // tori L=1.5 y L=4.2+0.08*Kp
+    WestFordRing westFord;             // banda de dipolos de 1963 (estatica)
+    bool magnetosphereVisible = false;
+    bool vanAllenVisible = false;
+    bool westFordVisible = false;
+    // Lote 3 del port web: capas con datos externos propios (red). Solo
+    // descargan mientras su capa esta visible.
+    WsprAdapter wsprAdapter;
+    CmeAdapter cmeAdapter;
+    StormAdapter stormAdapter;
+    // Lote 4: imagenes solares y fulguraciones (fetch propio, off por defecto).
+    FlareAdapter flareAdapter;
+    FlareSnapshot flareSnap;
+    double flareSnapTime = -1.0;
+    double flareNextFetch = 0.0;
+    // Lote 5C: catalogo RBE de DONKI (eventos del cinturon externo).
+    RbeAdapter rbeAdapter;
+    RbeSnapshot rbeSnap;
+    double rbeSnapTime = -1.0;
+    double rbeNextFetch = 0.0;
+    // Lote 5A: AE real de Kyoto WDC (sustituye el proxy por Kp cuando llega).
+    AeAdapter aeAdapter;
+    AeSnapshot aeSnap;
+    double aeSnapTime = -1.0;
+    double aeNextFetch = 0.0;
+    SolImageAdapter solImages;
+    std::atomic<bool> solKick{false};   // Refresh del panel Solar imagery
+    double solNextFetch = 0.0;
+    // Lote 4A: satelites (TLE). Solo descarga con la capa visible.
+    TleAdapter satAdapter;
+    SatellitesLayer satLayer;
+    TleSnapshot satSnap;
+    double satSnapTime = -1.0;
+    double satNextFetch = 0.0;
+    unsigned long satGeneration = 0;
+    bool satVisible = false;
+    WsprArcs wsprArcs;
+    CmeLayer cme;
+    WhistlerLayer whistlers;
+    WsprSnapshot wsprSnap;
+    CmeSnapshot cmeSnap;
+    StormSnapshot stormSnap;
+    double wsprSnapTime = -1.0, cmeSnapTime = -1.0, stormSnapTime = -1.0;
+    double wsprNextFetch = 0.0, cmeNextFetch = 0.0, stormNextFetch = 0.0;
+    bool wsprVisible = false;         // arcos WSPR (10 min TTL)
+    bool cmeVisible = false;          // frente CME segun ETA ENLIL
+    bool whistlerVisible = false;     // sprites + whistlers (avisos NWS)
+    // Bordes de visibilidad: encender una casilla (menu o panel) fuerza el
+    // primer fetch sin esperar al intervalo.
+    bool wsprWasVisible = false, cmeWasVisible = false, whistlerWasVisible = false;
+    bool geoPanelWasOpen = false;
+    // El bloque "Provider status" abierto tambien mantiene vivas las tres
+    // fuentes con fetch propio (matriz = vista de estado, no solo diagnostico).
+    bool provStatusOpen = false, provStatusWasOpen = false;
     GridLayer auroraLayer;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
@@ -374,6 +457,32 @@ struct App::Impl {
     double sunImgTime[2] = {-1.0, -1.0};  // epoch mostrada por producto
     SunPanel sunPanel;              // M11: ventana (UI/SunPanel.h)
     SunGeom sunGeom;                // persistente (settings sunWin*)
+    // Lote 3: panel Geospace (datos WSPR / ENLIL / NWS resumidos).
+    GeospacePanel geoPanel;
+    GeospaceGeom geoGeom;           // persistente (settings geoWin*)
+    bool geoPanelOpen = false;      // ventana cerrada por defecto
+    // Lote 4B: ventana "Solar imagery" (LASCO C2 + D-RAP).
+    SolarImagesPanel solarPanel;
+    SolImagesGeom solGeom;          // persistente (settings solWin*)
+    bool solarPanelOpen = false;    // ventana cerrada por defecto
+    // La cache de imagenes se restaura al arrancar, pero la matriz de
+    // proveedores no la anuncia como "usada" hasta que la ventana se abre.
+    bool solUsed = false;
+    // Lote 5D: espiral de Parker (panel 2D cenital). Sin red propia: lee el
+    // viento solar y el Bx reales que ya descarga el worker.
+    ParkerPanel parkerPanel;
+    ParkerGeom parkGeom;            // persistente (settings parkWin*)
+    bool parkerPanelOpen = false;   // ventana cerrada por defecto
+    // Lote 5B: Voyager 1/2 (JPL Horizons). Fetch propio, solo con la ventana
+    // abierta o la matriz de proveedores desplegada; cache de 6 h.
+    VoyagerAdapter voyagerAdapter;
+    VoyagerPanel voyagerPanel;
+    VoyagerGeom voyagerGeom;          // persistente (settings voyWin*)
+    VoyagerSnapshot voyagerSnap;
+    double voyagerSnapTime = -1.0;
+    double voyagerNextFetch = 0.0;
+    bool voyagerPanelOpen = false;    // ventana cerrada por defecto
+    std::atomic<bool> voyagerKick{false};   // Refresh del panel
     // Volumen + shells de referencia.
     VolumeRenderer volumeLayer;
     bool volumeVisible = false;
@@ -1712,6 +1821,42 @@ bool App::init(int width, int height, const char* title) {
     impl->refShells.init();
     impl->refShells.setVisible(false);
 
+    // Capas geospace del port web (ocultas por defecto).
+    impl->geospace.init();
+    impl->geospace.setDstRingVisible(false);
+    impl->geospace.setElectrojetVisible(false);
+    impl->geospace.setGreylineVisible(false);
+
+    // Lote 2 del port web (ocultas por defecto).
+    impl->magnetosphere.init();
+    impl->magnetosphere.setVisible(false);
+    impl->vanAllen.init();
+    impl->vanAllen.setVisible(false);
+    impl->westFord.init();
+    impl->westFord.setVisible(false);
+
+    // Lote 3: adaptadores de red + capas (ocultas por defecto).
+    impl->wsprAdapter.init();
+    impl->cmeAdapter.init();
+    impl->stormAdapter.init();
+    // Lote 4: adaptador de imagenes solares (restaura cache si existe) y de
+    // fulguraciones DONKI (sin cache hasta el primer fetch).
+    impl->flareAdapter.init();
+    impl->rbeAdapter.init();   // Lote 5C: catalogo RBE (cache si existe)
+    impl->aeAdapter.init();    // Lote 5A: AE real de Kyoto (cache si existe)
+    impl->solImages.init();
+    // Lote 5: Voyager (Horizons) con cache de 6 h si existe.
+    impl->voyagerAdapter.init();
+    // Lote 4A: catalogo TLE (cache en disco si existe) + capa de satelites.
+    impl->satAdapter.init();
+    impl->satLayer.init();
+    impl->wsprArcs.init();
+    impl->wsprArcs.setVisible(false);
+    impl->cme.init();
+    impl->cme.setVisible(false);
+    impl->whistlers.init();
+    impl->whistlers.setVisible(false);
+
     // Ovalo auroral (NOAA Ovation): overlay verde (datos via worker).
     impl->auroraLayer.init();
     impl->auroraLayer.setColormap("aurora");
@@ -1803,6 +1948,16 @@ bool App::init(int width, int height, const char* title) {
     impl->tecColShell.setVisible(impl->tecColVisible);
     impl->sliceLayer.setVisible(impl->sliceOn);
     impl->refShells.setVisible(impl->refShellsVisible);
+    impl->geospace.setDstRingVisible(impl->dstRingVisible);
+    impl->geospace.setElectrojetVisible(impl->electrojetVisible);
+    impl->geospace.setGreylineVisible(impl->greylineVisible);
+    impl->magnetosphere.setVisible(impl->magnetosphereVisible);
+    impl->vanAllen.setVisible(impl->vanAllenVisible);
+    impl->westFord.setVisible(impl->westFordVisible);
+    impl->wsprArcs.setVisible(impl->wsprVisible);
+    impl->cme.setVisible(impl->cmeVisible);
+    impl->whistlers.setVisible(impl->whistlerVisible);
+    impl->satLayer.setVisible(impl->satVisible);
     applyColorLayer();
     applyRelief();
     applyAltitudes();
@@ -2506,7 +2661,8 @@ void App::update(float dt) {
     if (impl->swArrowsVisible && (lastArrow < 0 || (now - lastArrow) > 2.0)) {
         static const SolarWindSample kNoWind{};
         const SolarWindSample& sw = impl->lastWind ? impl->lastWind->latest : kNoWind;
-        impl->solarWindLayer.updateArrowData(sw.speed, sw.bz, impl->sunDirection, impl->swArrowMode);
+        impl->solarWindLayer.updateArrowData(sw.speed, sw.bz, sw.density,
+                                             impl->sunDirection, impl->swArrowMode);
         impl->solarWindLayer.setArrowScale(impl->swArrowScale);
         lastArrow = now;
     }
@@ -2520,6 +2676,213 @@ void App::update(float dt) {
                                       impl->sunDirection, impl->faradayMode);
         impl->faradayLayer.setScale(impl->faradayScale);
         lastFaraday = now;
+    }
+
+    // Geospace (port web): alimentar Dst/AE/Sol y reconstruir si cambiaron.
+    // Los setters llevan throttle interno; update() solo rehace el VBO sucio.
+    if (impl->geospace.hasVisible()) {
+        const IndexSnapshot& snap = impl->lastIndices ? impl->lastIndices->snap
+                                                      : IndexSnapshot{};
+        impl->geospace.setDst(snap.valid ? snap.dst : 0.0f);
+        const float aeProxy = (impl->lastRadio && impl->lastRadio->latest.valid)
+                                  ? impl->lastRadio->latest.ae
+                                  : 0.0f;
+        // Lote 5A: si el AE real de Kyoto esta disponible se usa tal cual
+        // (el ultimo minuto publicado, con su retraso declarado en la matriz de
+        // proveedores). Sin el, se conserva el proxy por Kp ya existente.
+        float aeNow = aeProxy;
+        if (impl->aeSnap.valid && !impl->aeSnap.samples.empty())
+            aeNow = impl->aeSnap.samples.back().ae;
+        impl->geospace.setAe(aeNow);
+        impl->geospace.setSunDirection(impl->sunDirection);
+        impl->geospace.update();
+    }
+
+    // Lote 2: magnetosfera. Shue-1998 necesita viento solar + direccion del
+    // Sol; sin muestra valida se dejan los defaults del modulo (400 km/s,
+    // 5 cm^-3, Bz 0), porque Dp = 0 daria una cavidad absurda.
+    if (impl->magnetosphere.visible()) {
+        static const SolarWindSample kNoWindMag{};
+        const SolarWindSample& swMag = impl->lastWind ? impl->lastWind->latest : kNoWindMag;
+        if (swMag.valid && swMag.speed > 0.0f) {
+            impl->magnetosphere.setSolarWind(swMag.speed, swMag.density, swMag.bz);
+        }
+        impl->magnetosphere.setSunDirection(impl->sunDirection);
+        impl->magnetosphere.update();
+    }
+
+    // Lote 2: cinturones de radiacion. Kp mueve el toro externo y el reloj
+    // arrastra la fase de deriva (protones al oeste, electrones al este).
+    // Lote 5C trae el catalogo DONKI RBE (eventos), no una serie de flujo de
+    // electrones: el brillo del cinturon externo sigue en 0 porque no hay
+    // medida de flujo que lo justifique (un evento del catalogo no es un
+    // valor de intensidad).
+    if (impl->vanAllen.visible()) {
+        const IndexSnapshot& snapVa = impl->lastIndices ? impl->lastIndices->snap
+                                                        : IndexSnapshot{};
+        impl->vanAllen.setKp(snapVa.valid ? snapVa.kp : 0.0f);
+        impl->vanAllen.setRbeGlow(0.0f);
+        impl->vanAllen.setTimeSeconds((float)now);
+        impl->vanAllen.update();
+    }
+
+    // Lote 3: capas con datos externos. Descarga mientras la capa esta visible
+    // O el panel Geospace esta abierto (el panel necesita los snapshots aunque
+    // la capa 3D este apagada) y respeta su intervalo (WSPR 5 min, avisos NWS
+    // 5 min, ENLIL 30 min). Al encender una casilla o abrir el panel se fuerza
+    // el primer fetch. Sin red el adaptador conserva el ultimo snapshot real o
+    // queda vacio: la UI lo declara y la capa no dibuja nada.
+    const double tNow = (double)std::time(nullptr);
+    // Abrir el panel Geospace o desplegar "Provider status" cuenta como
+    // interes en las tres fuentes: fuerza el primer fetch y mantiene el
+    // refresco mientras sigan abiertos.
+    const bool justOpened = (impl->geoPanelOpen && !impl->geoPanelWasOpen) ||
+                            (impl->provStatusOpen && !impl->provStatusWasOpen);
+
+    if ((impl->wsprVisible && !impl->wsprWasVisible) || justOpened)
+        impl->wsprNextFetch = 0.0;
+    if ((impl->cmeVisible && !impl->cmeWasVisible) || justOpened)
+        impl->cmeNextFetch = 0.0;
+    if ((impl->whistlerVisible && !impl->whistlerWasVisible) || justOpened)
+        impl->stormNextFetch = 0.0;
+    impl->wsprWasVisible = impl->wsprVisible;
+    impl->cmeWasVisible = impl->cmeVisible;
+    impl->whistlerWasVisible = impl->whistlerVisible;
+    impl->geoPanelWasOpen = impl->geoPanelOpen;
+    impl->provStatusWasOpen = impl->provStatusOpen;
+
+    if (impl->wsprVisible || impl->geoPanelOpen || impl->provStatusOpen) {
+        if (now >= impl->wsprNextFetch && !impl->wsprAdapter.isFetching()) {
+            impl->wsprAdapter.fetchAsync(tNow);
+            impl->wsprNextFetch = now + 300.0;
+        }
+        if (impl->wsprAdapter.getLastFetchTime() != impl->wsprSnapTime) {
+            impl->wsprSnap = impl->wsprAdapter.getSnapshot();
+            impl->wsprSnapTime = impl->wsprAdapter.getLastFetchTime();
+        }
+    }
+    if (impl->wsprVisible) {
+        impl->wsprArcs.setSnapshot(impl->wsprSnap.spots, tNow);
+        impl->wsprArcs.update();
+    }
+
+    if (impl->cmeVisible || impl->geoPanelOpen || impl->provStatusOpen) {
+        if (now >= impl->cmeNextFetch && !impl->cmeAdapter.isFetching()) {
+            impl->cmeAdapter.fetchAsync(tNow);
+            impl->cmeNextFetch = now + 1800.0;
+        }
+        if (impl->cmeAdapter.getLastFetchTime() != impl->cmeSnapTime) {
+            impl->cmeSnap = impl->cmeAdapter.getSnapshot();
+            impl->cmeSnapTime = impl->cmeAdapter.getLastFetchTime();
+        }
+    }
+    if (impl->cmeVisible) {
+        const CmeEvent& ev = impl->cmeSnap.event;
+        impl->cme.setEvent(ev, impl->cmeSnap.hasEvent);
+        impl->cme.setSunDirection(impl->sunDirection);
+        impl->cme.setProgress(CmeAdapter::cmeProgress(ev.startUtc, ev.arrivalUtc, tNow));
+        impl->cme.update();
+    }
+
+    if (impl->whistlerVisible || impl->geoPanelOpen || impl->provStatusOpen) {
+        if (now >= impl->stormNextFetch && !impl->stormAdapter.isFetching()) {
+            impl->stormAdapter.fetchAsync(tNow);
+            impl->stormNextFetch = now + 300.0;
+        }
+        if (impl->stormAdapter.getLastFetchTime() != impl->stormSnapTime) {
+            impl->stormSnap = impl->stormAdapter.getSnapshot();
+            impl->stormSnapTime = impl->stormAdapter.getLastFetchTime();
+        }
+    }
+    if (impl->whistlerVisible) {
+        impl->whistlers.setCells(impl->stormSnap.cells);
+        impl->whistlers.update();
+    }
+
+    // Lote 4C: fulguraciones DONKI. Igual que el lote 3: solo se pide red
+    // mientras el panel Geospace o la matriz de proveedores estan abiertos.
+    if (impl->geoPanelOpen || impl->provStatusOpen) {
+        if (justOpened) impl->flareNextFetch = 0.0;
+        if (now >= impl->flareNextFetch && !impl->flareAdapter.isFetching()) {
+            impl->flareAdapter.fetchAsync(tNow);
+            impl->flareNextFetch = now + 1800.0;
+        }
+        if (impl->flareAdapter.getLastFetchTime() != impl->flareSnapTime) {
+            impl->flareSnap = impl->flareAdapter.getSnapshot();
+            impl->flareSnapTime = impl->flareAdapter.getLastFetchTime();
+        }
+    }
+    // Lote 5C: catalogo RBE (DONKI). Misma regla que las fulguraciones: red
+    // solo con el panel Geospace o la matriz desplegados.
+    if (impl->geoPanelOpen || impl->provStatusOpen) {
+        if (justOpened) impl->rbeNextFetch = 0.0;
+        if (now >= impl->rbeNextFetch && !impl->rbeAdapter.isFetching()) {
+            impl->rbeAdapter.fetchAsync(tNow);
+            impl->rbeNextFetch = now + 1800.0;
+        }
+        if (impl->rbeAdapter.getLastFetchTime() != impl->rbeSnapTime) {
+            impl->rbeSnap = impl->rbeAdapter.getSnapshot();
+            impl->rbeSnapTime = impl->rbeAdapter.getLastFetchTime();
+        }
+    }
+    // Lote 5A: AE real de Kyoto. Solo se pide con los electrojets encendidos o
+    // los paneles de estado abiertos. Cadencia lenta (30 min): el fichero
+    // publicado cambia como mucho una vez al dia y el walk-back puede tardar
+    // ~16 s. Sin dato, la capa sigue con el proxy por Kp ya existente.
+    if (impl->electrojetVisible || impl->geoPanelOpen || impl->provStatusOpen) {
+        if (justOpened) impl->aeNextFetch = 0.0;
+        if (now >= impl->aeNextFetch && !impl->aeAdapter.isFetching()) {
+            impl->aeAdapter.fetchAsync(tNow);
+            impl->aeNextFetch = now + 1800.0;
+        }
+        if (impl->aeAdapter.getLastFetchTime() != impl->aeSnapTime) {
+            impl->aeSnap = impl->aeAdapter.getSnapshot();
+            impl->aeSnapTime = impl->aeAdapter.getLastFetchTime();
+        }
+    }
+    // Lote 4B: imagenes solares (LASCO C2 + D-RAP). Solo con la ventana
+    // abierta; Refresh adelanta el siguiente intento.
+    if (impl->solKick.exchange(false)) impl->solNextFetch = 0.0;
+    if (impl->solarPanelOpen) {
+        impl->solUsed = true;
+        if (now >= impl->solNextFetch && !impl->solImages.isFetching()) {
+            impl->solImages.fetchAsync(tNow);
+            impl->solNextFetch = now + 900.0;
+        }
+    }
+    // Lote 4A: satelites TLE. Solo con la capa visible. El adaptador reutiliza
+    // el catalogo 6 h (TTL) y sirve cache si CelesTrak/SatNOGS fallan; pedir
+    // cada hora no golpea la red. getGeneration() evita copiar 16k filas por
+    // frame: solo al instalar un snapshot valido nuevo.
+    if (impl->satVisible) {
+        if (now >= impl->satNextFetch && !impl->satAdapter.isFetching()) {
+            impl->satAdapter.fetchAsync(tNow);
+            impl->satNextFetch = now + 3600.0;
+        }
+        const unsigned long gen = impl->satAdapter.getGeneration();
+        if (gen != impl->satGeneration) {
+            impl->satGeneration = gen;
+            impl->satSnap = impl->satAdapter.getSnapshot();
+            impl->satSnapTime = impl->satAdapter.getLastFetchTime();
+            impl->satLayer.setSnapshot(impl->satSnap, tNow);
+        }
+        impl->satLayer.update(tNow);
+    }
+
+    // Lote 5B: Voyager (JPL Horizons). Solo con la ventana abierta o la matriz
+    // desplegada; 6 h entre intentos (la deriva es ~0.01 AU/dia) y el Refresh
+    // del panel adelanta el siguiente. Un fallo no borra el ultimo rango real.
+    if (impl->voyagerKick.exchange(false)) impl->voyagerNextFetch = 0.0;
+    if (impl->voyagerPanelOpen || impl->provStatusOpen) {
+        if (justOpened) impl->voyagerNextFetch = 0.0;
+        if (now >= impl->voyagerNextFetch && !impl->voyagerAdapter.isFetching()) {
+            impl->voyagerAdapter.fetchAsync(tNow);
+            impl->voyagerNextFetch = now + 21600.0;
+        }
+        if (impl->voyagerAdapter.getLastFetchTime() != impl->voyagerSnapTime) {
+            impl->voyagerSnap = impl->voyagerAdapter.getSnapshot();
+            impl->voyagerSnapTime = impl->voyagerAdapter.getLastFetchTime();
+        }
     }
 
     // Slice QTH-DX: seguir cambios de endpoints (el volumen va cada 5 s).
@@ -2583,6 +2946,16 @@ void App::saveSettings() {
     fprintf(f, "shellOpacity %g\n", (double)impl->shellOpacity);
     fprintf(f, "shellColormap %d\n", impl->shellColormap);
     fprintf(f, "refShellsVisible %d\n", impl->refShellsVisible ? 1 : 0);
+    fprintf(f, "dstRingVisible %d\n", impl->dstRingVisible ? 1 : 0);
+    fprintf(f, "electrojetVisible %d\n", impl->electrojetVisible ? 1 : 0);
+    fprintf(f, "greylineVisible %d\n", impl->greylineVisible ? 1 : 0);
+    fprintf(f, "magnetosphereVisible %d\n", impl->magnetosphereVisible ? 1 : 0);
+    fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
+    fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
+    fprintf(f, "wsprArcsVisible %d\n", impl->wsprVisible ? 1 : 0);
+    fprintf(f, "cmeLayerVisible %d\n", impl->cmeVisible ? 1 : 0);
+    fprintf(f, "whistlerVisible %d\n", impl->whistlerVisible ? 1 : 0);
+    fprintf(f, "satellitesVisible %d\n", impl->satVisible ? 1 : 0);   // Lote 4A
     fprintf(f, "swArrowsVisible %d\n", impl->swArrowsVisible ? 1 : 0);
     fprintf(f, "swArrowMode %d\n", impl->swArrowMode);
     fprintf(f, "swArrowScale %g\n", (double)impl->swArrowScale);
@@ -2621,6 +2994,26 @@ void App::saveSettings() {
     fprintf(f, "sunWinY %g\n", (double)impl->sunGeom.y);   // M11
     fprintf(f, "sunWinW %g\n", (double)impl->sunGeom.w);   // M11
     fprintf(f, "sunWinH %g\n", (double)impl->sunGeom.h);   // M11
+    fprintf(f, "geoPanelOpen %d\n", impl->geoPanelOpen ? 1 : 0);   // Lote 3
+    fprintf(f, "geoWinX %g\n", (double)impl->geoGeom.x);   // Lote 3
+    fprintf(f, "geoWinY %g\n", (double)impl->geoGeom.y);
+    fprintf(f, "geoWinW %g\n", (double)impl->geoGeom.w);
+    fprintf(f, "geoWinH %g\n", (double)impl->geoGeom.h);
+    fprintf(f, "solarPanelOpen %d\n", impl->solarPanelOpen ? 1 : 0);   // Lote 4B
+    fprintf(f, "solWinX %g\n", (double)impl->solGeom.x);
+    fprintf(f, "solWinY %g\n", (double)impl->solGeom.y);
+    fprintf(f, "solWinW %g\n", (double)impl->solGeom.w);
+    fprintf(f, "solWinH %g\n", (double)impl->solGeom.h);
+    fprintf(f, "parkerPanelOpen %d\n", impl->parkerPanelOpen ? 1 : 0);   // Lote 5D
+    fprintf(f, "parkWinX %g\n", (double)impl->parkGeom.x);
+    fprintf(f, "parkWinY %g\n", (double)impl->parkGeom.y);
+    fprintf(f, "parkWinW %g\n", (double)impl->parkGeom.w);
+    fprintf(f, "parkWinH %g\n", (double)impl->parkGeom.h);
+    fprintf(f, "voyagerPanelOpen %d\n", impl->voyagerPanelOpen ? 1 : 0);   // Lote 5B
+    fprintf(f, "voyWinX %g\n", (double)impl->voyagerGeom.x);
+    fprintf(f, "voyWinY %g\n", (double)impl->voyagerGeom.y);
+    fprintf(f, "voyWinW %g\n", (double)impl->voyagerGeom.w);
+    fprintf(f, "voyWinH %g\n", (double)impl->voyagerGeom.h);
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
     fclose(f);
@@ -2686,6 +3079,16 @@ void App::loadSettings() {
         else if (k == "shellOpacity") impl->shellOpacity = glm::clamp((float)v, 0.0f, 2.0f);
         else if (k == "shellColormap") impl->shellColormap = glm::clamp((int)v, 0, 3);
         else if (k == "refShellsVisible") impl->refShellsVisible = clB(v);
+        else if (k == "dstRingVisible") impl->dstRingVisible = clB(v);
+        else if (k == "electrojetVisible") impl->electrojetVisible = clB(v);
+        else if (k == "greylineVisible") impl->greylineVisible = clB(v);
+    else if (k == "magnetosphereVisible") impl->magnetosphereVisible = clB(v);
+    else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
+    else if (k == "westFordVisible") impl->westFordVisible = clB(v);
+    else if (k == "wsprArcsVisible") impl->wsprVisible = clB(v);
+    else if (k == "cmeLayerVisible") impl->cmeVisible = clB(v);
+    else if (k == "whistlerVisible") impl->whistlerVisible = clB(v);
+    else if (k == "satellitesVisible") impl->satVisible = clB(v);   // Lote 4A
         else if (k == "swArrowsVisible") impl->swArrowsVisible = clB(v);
         else if (k == "swArrowMode") impl->swArrowMode = glm::clamp((int)v, 0, 1);
         else if (k == "swArrowScale") impl->swArrowScale = glm::clamp((float)v, 0.2f, 4.0f);
@@ -2700,6 +3103,26 @@ void App::loadSettings() {
         else if (k == "sunWinY") impl->sunGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);   // M11
         else if (k == "sunWinW") impl->sunGeom.w = glm::clamp((float)v, 200.0f, 700.0f);   // M11
         else if (k == "sunWinH") impl->sunGeom.h = glm::clamp((float)v, 200.0f, 700.0f);   // M11
+        else if (k == "geoPanelOpen") impl->geoPanelOpen = clB(v);   // Lote 3
+        else if (k == "geoWinX") impl->geoGeom.x = glm::clamp((float)v, -100.0f, 3840.0f);
+        else if (k == "geoWinY") impl->geoGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);
+        else if (k == "geoWinW") impl->geoGeom.w = glm::clamp((float)v, 260.0f, 700.0f);
+        else if (k == "geoWinH") impl->geoGeom.h = glm::clamp((float)v, 260.0f, 900.0f);
+        else if (k == "solarPanelOpen") impl->solarPanelOpen = clB(v);   // Lote 4B
+        else if (k == "solWinX") impl->solGeom.x = glm::clamp((float)v, -100.0f, 3840.0f);
+        else if (k == "solWinY") impl->solGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);
+        else if (k == "solWinW") impl->solGeom.w = glm::clamp((float)v, 420.0f, 1400.0f);
+        else if (k == "solWinH") impl->solGeom.h = glm::clamp((float)v, 260.0f, 1000.0f);
+    else if (k == "parkerPanelOpen") impl->parkerPanelOpen = clB(v);   // Lote 5D
+    else if (k == "parkWinX") impl->parkGeom.x = glm::clamp((float)v, -100.0f, 3840.0f);
+    else if (k == "parkWinY") impl->parkGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);
+    else if (k == "parkWinW") impl->parkGeom.w = glm::clamp((float)v, 380.0f, 1400.0f);
+    else if (k == "parkWinH") impl->parkGeom.h = glm::clamp((float)v, 240.0f, 1000.0f);
+    else if (k == "voyagerPanelOpen") impl->voyagerPanelOpen = clB(v);   // Lote 5B
+    else if (k == "voyWinX") impl->voyagerGeom.x = glm::clamp((float)v, -100.0f, 3840.0f);
+    else if (k == "voyWinY") impl->voyagerGeom.y = glm::clamp((float)v, 0.0f, 2160.0f);
+    else if (k == "voyWinW") impl->voyagerGeom.w = glm::clamp((float)v, 380.0f, 1400.0f);
+    else if (k == "voyWinH") impl->voyagerGeom.h = glm::clamp((float)v, 220.0f, 1000.0f);
         else if (k == "tecCacheEnabled") impl->tecCacheEnabled = clB(v);   // M10
         else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
@@ -2788,7 +3211,7 @@ void App::fetchWorker() {
                 ss.id = provstatus::PROV_SDO;
                 ss.hasData = rim.valid;
                 ss.dataEpoch = rim.timeUtc;
-                ss.data = SdoImageAdapter::nameFor((SdoProduct)p);
+                ss.data = rim.valid ? SdoImageAdapter::nameFor((SdoProduct)p) : "";
                 ss.error = sdo.getErrorMessage();
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_SDO] = ss; }
         }
@@ -2797,6 +3220,23 @@ void App::fetchWorker() {
 
     auto noteDone = [&]() {
         if (firstPass) impl->loadDone.store(impl->loadDone.load() + 1);
+    };
+
+    // Un fetch fallido no debe dejar la fila en "off" (indistinguible de
+    // "fuente sin usar"): si aun no hay dato, failed con el motivo; si lo hay,
+    // se conserva el dato y su edad y solo se anota el error. Un skip/throttle
+    // (error vacio) no toca la fila.
+    auto publishFailure = [&](provstatus::ProviderId id, const std::string& err) {
+        if (err.empty()) return;
+        std::lock_guard<std::mutex> lk(impl->bundleMutex);
+        provstatus::Snapshot& s = impl->provBoard[id];
+        s.id = id;
+        s.error = err;
+        if (!s.hasData) {
+            s.dataEpoch = 0.0;
+            s.data.clear();
+            s.fetching = false;
+        }
     };
 
     double lastDataPassUtc = -1e18;  // M12/N1: ultimo pase de datos completo
@@ -2832,10 +3272,12 @@ void App::fetchWorker() {
                     ss.id = provstatus::PROV_SDO;
                     ss.hasData = im.valid;
                     ss.dataEpoch = im.timeUtc;
-                    ss.data = SdoImageAdapter::nameFor(seq[i]);
+                    ss.data = im.valid ? SdoImageAdapter::nameFor(seq[i]) : "";
                     ss.error = sdo.getErrorMessage();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_SDO] = ss; }
                 }
+            } else {
+                publishFailure(provstatus::PROV_SDO, sdo.getErrorMessage());
             }
         }
     };
@@ -2888,12 +3330,15 @@ void App::fetchWorker() {
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_TEC] = st; }
                     haveTec = true;
                     if (!sim) impl->liveTecArrived.store(true);
+                } else {
+                    publishFailure(provstatus::PROV_TEC, glo.getErrorMessage());
                 }
             }
             noteDone();
 
             // 2) Indices (Kp/Dst/F10.7/Ap/SSN).
-            if (sidx.fetch(epoch) && sidx.getSnapshot().valid) {
+            const bool idxOk = sidx.fetch(epoch) && sidx.getSnapshot().valid;
+            if (idxOk) {
                 auto b = std::make_shared<Impl::IndicesBundle>();
                 b->snap = sidx.getSnapshot();
                 b->kp = sidx.getKpHistory();
@@ -2907,17 +3352,26 @@ void App::fetchWorker() {
                 si.id = provstatus::PROV_INDICES;
                 si.hasData = b->snap.valid;
                 si.dataEpoch = b->snap.timeUtc;
-                si.data = b->snap.simulated ? ("mock: " + b->snap.error) : "5/5 real";
+                si.data = si.hasData
+                              ? (b->snap.simulated ? ("mock: " + b->snap.error)
+                                                   : std::string("5/5 real"))
+                              : std::string();
                 si.error = b->snap.error;
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_INDICES] = si; }
+            } else {
+                // Sin ningun campo real el adapter cae a mock: la fila lo dice
+                // en vez de quedarse en "off" como si nadie la hubiera pedido.
+                publishFailure(provstatus::PROV_INDICES, sidx.getSnapshot().error);
             }
             noteDone();
 
             // 3) Viento solar.
-            if (sw.fetch(epoch) && sw.getLatest().valid) {
+            const bool windOk = sw.fetch(epoch);
+            if (windOk && sw.getLatest().valid) {
                 auto b = std::make_shared<Impl::WindBundle>();
                 b->latest = sw.getLatest();
                 b->bzHist = sw.getBzHistory();
+                b->bxHist = sw.getBxHistory();   // lote 5D: polaridad real
                 b->simulated = sw.isSimulated();
                 b->error = sw.getErrorMessage();
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->wind = b; }
@@ -2929,6 +3383,8 @@ void App::fetchWorker() {
                 sws.data = b->simulated ? "simulated" : "live";
                 sws.error = b->error;
                 { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_WIND] = sws; }
+            } else {
+                publishFailure(provstatus::PROV_WIND, sw.getErrorMessage());
             }
             noteDone();
 
@@ -2975,7 +3431,8 @@ void App::fetchWorker() {
                 // 300 s; stale <= 5 min, irrelevante para fulguraciones — sello).
                 float xrFlux = (xr.getLatest().valid ? xr.getLatest().flux : 0.0f);
                 rp.fetch(epoch, samples, xrFlux);
-                if (rp.getLatest().valid && (rp.usedGiroReal() || !impl->getRadio())) {
+                const bool hfOk = rp.getLatest().valid;
+                if (hfOk && (rp.usedGiroReal() || !impl->getRadio())) {
                     auto b = std::make_shared<Impl::RadioBundle>();
                     b->latest = rp.getLatest();
                     b->aeHist = rp.getAeHistory();
@@ -2984,14 +3441,20 @@ void App::fetchWorker() {
                     b->usedGiro = rp.usedGiroReal();
                     b->error = rp.getErrorMessage();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->radio = b; }
-                    // M-prov-matrix: fila Kp/HF.
+                }
+                // M-prov-matrix: fila Kp/HF. Se publica con el resultado del
+                // fetch aunque la capa de radio no consuma el bundle: la
+                // matriz mide la fuente, no el panel abierto.
+                if (hfOk) {
                     provstatus::Snapshot sr;
                     sr.id = provstatus::PROV_KPHF;
-                    sr.hasData = b->latest.valid;
-                    sr.dataEpoch = b->latest.timeUtc;
-                    sr.data = b->usedGiro ? "GIRO real" : "model";
-                    sr.error = b->error;
+                    sr.hasData = true;
+                    sr.dataEpoch = rp.getLatest().timeUtc;
+                    sr.data = rp.usedGiroReal() ? "GIRO real" : "model";
+                    sr.error = rp.getErrorMessage();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_KPHF] = sr; }
+                } else {
+                    publishFailure(provstatus::PROV_KPHF, rp.getErrorMessage());
                 }
             }
             noteDone();
@@ -3008,10 +3471,12 @@ void App::fetchWorker() {
                     sx.id = provstatus::PROV_XRAY;
                     sx.hasData = b->latest.valid;
                     sx.dataEpoch = b->latest.timeUtc;
-                    sx.data = "GOES";
+                    sx.data = b->latest.valid ? "GOES" : "";
                     sx.error = xr.getErrorMessage();
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_XRAY] = sx; }
                     haveXray = true;
+                } else if (!real) {
+                    publishFailure(provstatus::PROV_XRAY, xr.getErrorMessage());
                 }
             }
             noteDone();
@@ -3090,6 +3555,7 @@ void App::consumeBundles() {
         ++impl->watchBundles;
         if (w->latest.valid)
             impl->solarWindLayer.updateArrowData(w->latest.speed, w->latest.bz,
+                                                 w->latest.density,
                                                  impl->sunDirection, impl->swArrowMode);
     }
     auto au = impl->getAurora();
@@ -3362,6 +3828,93 @@ void App::drawSunPanel() {
         snprintf(xbuf, sizeof(xbuf), "%c%.1f", xB->latest.fclass, (double)xB->latest.fsub);
     in.xrayText = xbuf;
     impl->sunPanel.draw(in, impl->sunGeom);
+}
+
+// Lote 3: panel Geospace. Reune los snapshots reales de las tres capas
+// externas (WSPRnet, ENLIL, avisos NWS) y los resume. No inventa nada: si un
+// adaptador aun no ha respondido, el panel muestra su nota de estado.
+void App::drawGeospacePanel() {
+    if (!impl->geoPanelOpen) return;
+    const double nowUtc = (double)std::time(nullptr);
+
+    GeospacePanelInput in;
+    in.wspr = &impl->wsprSnap;
+    in.cme = &impl->cmeSnap;
+    in.storm = &impl->stormSnap;
+    in.flares = &impl->flareSnap;
+    in.rbe = &impl->rbeSnap;   // Lote 5C
+    in.utc = nowUtc;
+    in.wsprFetching = impl->wsprAdapter.isFetching();
+    in.cmeFetching = impl->cmeAdapter.isFetching();
+    in.stormFetching = impl->stormAdapter.isFetching();
+    in.flaresFetching = impl->flareAdapter.isFetching();
+    in.rbeFetching = impl->rbeAdapter.isFetching();
+    if (impl->cmeSnap.hasEvent) {
+        const CmeEvent& ev = impl->cmeSnap.event;
+        in.cmeProgress = CmeAdapter::cmeProgress(ev.startUtc, ev.arrivalUtc, nowUtc);
+        // frontRadius() es funcion pura del progreso (compresion declarada):
+        // se sincroniza aunque la capa este oculta, para que el panel diga el
+        // radio que se dibujaria al encenderla.
+        impl->cme.setProgress(in.cmeProgress);
+        in.cmeFrontR = impl->cme.frontRadius();
+    }
+    in.pWsprVisible = &impl->wsprVisible;
+    in.pCmeVisible = &impl->cmeVisible;
+    in.pStormVisible = &impl->whistlerVisible;
+    in.pVisible = &impl->geoPanelOpen;
+    impl->geoPanel.draw(in, impl->geoGeom);
+}
+
+// Lote 4B: ventana "Solar imagery". El panel sube sus propias texturas y no
+// toca el estado GL global; App solo le pasa el adaptador y el kick.
+void App::drawSolarImagesPanel() {
+    if (!impl->solarPanelOpen) return;
+    SolarImagesInput in;
+    in.adapter = &impl->solImages;
+    in.utc = (double)std::time(nullptr);
+    in.pKick = &impl->solKick;
+    in.pVisible = &impl->solarPanelOpen;
+    impl->solarPanel.draw(in, impl->solGeom);
+}
+
+// Lote 5D: ventana "Parker spiral". Solo lee lo que el worker ya descargo
+// (viento solar + Bx); no pide red. El panel dibuja un esquema 2D cenital
+// porque 1 AU no cabe en la vista 3D en radios terrestres.
+void App::drawParkerPanel() {
+    if (!impl->parkerPanelOpen) return;
+    ParkerPanelInput in;
+    const bool windOk = impl->lastWind && impl->lastWind->latest.valid;
+    if (windOk) {
+        in.speedKms = impl->lastWind->latest.speed;
+        in.bxNt = impl->lastWind->latest.bx;
+        in.hasBx = impl->lastWind->latest.hasBx;
+        in.hasWind = in.speedKms > 0.0f;
+    }
+    // Conversion a la serie del modulo puro (misma ventana de 24 h que Bz).
+    // Se reutiliza el buffer entre frames para no asignar por frame.
+    static std::vector<parker::BxSample> bxSeries;
+    bxSeries.clear();
+    if (impl->lastWind && !impl->lastWind->bxHist.empty()) {
+        bxSeries.reserve(impl->lastWind->bxHist.size());
+        for (const auto& h : impl->lastWind->bxHist)
+            bxSeries.push_back({h.timeUtc, h.value});
+    }
+    in.bxHistory = &bxSeries;
+    in.utc = (double)std::time(nullptr);
+    in.pVisible = &impl->parkerPanelOpen;
+    impl->parkerPanel.draw(in, impl->parkGeom);
+}
+
+// Lote 5B: ventana Voyager. El panel solo lee (getSnapshot devuelve copia) y
+// el Refresh adelanta el siguiente fetch. Nada de esto toca la escena 3D.
+void App::drawVoyagerPanel() {
+    if (!impl->voyagerPanelOpen) return;
+    VoyagerPanelInput in;
+    in.adapter = &impl->voyagerAdapter;
+    in.utc = (double)std::time(nullptr);
+    in.pKick = &impl->voyagerKick;
+    in.pVisible = &impl->voyagerPanelOpen;
+    impl->voyagerPanel.draw(in, impl->voyagerGeom);
 }
 
 void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = derivados Radio. 8-9 = IRTAM retrospectivo (P4: sin dato no se dibuja).
@@ -3662,7 +4215,9 @@ void App::render() {
     bool showFar = impl->faradayLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showAur = impl->auroraLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showSlice = impl->sliceOn && impl->sliceLayer.isVisible() && solo == Impl::SoloTarget::None;
-    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible()) {
+    if (impl->showAtmosphere || impl->terminatorVisible || showTec || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible() || impl->geospace.hasVisible() ||
+        impl->magnetosphere.visible() || impl->vanAllen.visible() || impl->westFord.visible() ||
+        impl->wsprArcs.visible() || impl->cme.visible() || impl->whistlers.visible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
         glEnable(GL_DEPTH_TEST);
@@ -3713,6 +4268,18 @@ void App::render() {
             impl->terminator.render();
         }
         if (impl->refShells.isVisible()) impl->refShells.render(view, proj);
+        // Port web: grey line (bajo las capas de datos) + anillo Dst + electrojets.
+        if (impl->geospace.hasVisible()) impl->geospace.render(view, proj);
+        // Lote 2: magnetosfera (escala real), cinturones y anillo West Ford.
+        if (impl->magnetosphere.visible()) impl->magnetosphere.render(view, proj);
+        if (impl->vanAllen.visible()) impl->vanAllen.render(view, proj);
+        if (impl->westFord.visible()) impl->westFord.render(view, proj);
+        // Lote 3: datos externos (arcos WSPR, frente CME, whistlers).
+        if (impl->wsprArcs.visible()) impl->wsprArcs.render(view, proj);
+        if (impl->cme.visible()) impl->cme.render(view, proj);
+        if (impl->whistlers.visible()) impl->whistlers.render(view, proj);
+        // Lote 4A: satelites (puntos por regimen + anillos instantaneos).
+        if (impl->satLayer.visible()) impl->satLayer.render(view, proj);
         // (showPts: pase de escena pre-bloom desde release-prep)
         if (showSW) impl->solarWindLayer.render(view, proj);
         if (showFar) impl->faradayLayer.render(view, proj);
@@ -3858,6 +4425,10 @@ void App::render() {
 
     // UI-091: barra de menus (particion 090) — System/Globe/Ionosphere/Space/Radio + Windows.
     if (ImGui::BeginMainMenuBar()) {
+        // Lote 3: el estado se recalcula cada frame; solo la rama que dibuja
+        // "Provider status" lo pone a true. Asi cerrar el menu detiene los
+        // fetch de las fuentes con capa (no quedan descargas huerfanas).
+        impl->provStatusOpen = false;
         if (ImGui::BeginMenu("System")) {
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Frames per second. Below ~30 the view feels sluggish (try disabling Bloom).");
@@ -3932,6 +4503,7 @@ void App::render() {
     }
     // M-prov-matrix (048): seccion viva dentro de Data sources (thin glue).
     if (ImGui::CollapsingHeader("Provider status (live)")) {
+        impl->provStatusOpen = true;   // mantiene vivas las fuentes con fetch propio
         static double lastProvGate = -1.0;
         const double nowUtcPS = (double)std::time(nullptr);
         if (lastProvGate < 0.0 || nowUtcPS - lastProvGate >= 1.0) {
@@ -3950,7 +4522,9 @@ void App::render() {
             s0.rateLimited = (mode == Impl::SRC_KC2G_FALLBACK) ||
                              provstatus::hard429(gs.roundAttempts, gs.roundOk);
             s0.retryInMin = gs.retryInMin;
-            s0.data = std::to_string(gs.withData) + "/" + std::to_string(gs.polled) + " st";
+            if (gs.polled > 0)
+                s0.data = std::to_string(gs.withData) + "/" +
+                          std::to_string(gs.polled) + " st";
             if (gs.histHours > 0.0) {
                 const int th = (int)(gs.histHours * 10.0);
                 char hb[32];
@@ -3965,13 +4539,17 @@ void App::render() {
             s1.hasData = ks.rows > 0;
             s1.dataEpoch = ks.lastOkUtc;
             s1.fetching = impl->kc2g.isFetching();
-            s1.data = std::to_string(ks.rows) + " rows";
+            // Sin filas no hay dato que anunciar: "0 rows" con la fila en off
+            // se leia como si hubiera una descarga vacia (fuente nunca usada).
+            if (s1.hasData) s1.data = std::to_string(ks.rows) + " rows";
+            s1.error = impl->kc2g.getErrorMessage();
             const int nDias = impl->dias.getStationCount();
             provstatus::Snapshot s2;
             s2.id = provstatus::PROV_DIAS;
             s2.hasData = nDias > 0;
+            s2.dataEpoch = impl->dias.getLastFetchTime();   // ultimo pase correcto
             s2.fetching = impl->dias.isFetching();
-            s2.data = std::to_string(nDias) + " st";
+            if (s2.hasData) s2.data = std::to_string(nDias) + " st";
             s2.error = impl->dias.getErrorMessage();
             const EbroSample ebLatest = impl->ebro.getLatest();
             provstatus::Snapshot s3;
@@ -3979,13 +4557,185 @@ void App::render() {
             s3.hasData = ebLatest.valid;
             s3.dataEpoch = ebLatest.timeUtc;
             s3.fetching = impl->ebro.isFetching();
+            if (ebLatest.valid && std::isfinite(ebLatest.foF2)) {
+                char eb[32];
+                std::snprintf(eb, sizeof(eb), "foF2 %.1f", (double)ebLatest.foF2);
+                s3.data = eb;
+            }
             s3.error = impl->ebro.getErrorMessage();
+
+            // Lote 3: las tres fuentes con fetch propio. dataEpoch es el
+            // instante del ultimo fetch CORRECTO (no la fecha del evento
+            // ENLIL, que puede ser de dias atras): mide frescura de la fuente,
+            // no edad del dato modelado. Mientras su capa y el panel Geospace
+            // esten apagados no hay fetch: la fila queda "off", su estado real.
+            provstatus::Snapshot s4;
+            s4.id = provstatus::PROV_WSPR;
+            s4.hasData = impl->wsprSnap.valid;
+            s4.dataEpoch = impl->wsprSnap.valid ? impl->wsprSnap.timeUtc : 0.0;
+            s4.fetching = impl->wsprAdapter.isFetching();
+            if (s4.hasData)
+                s4.data = std::to_string((int)impl->wsprSnap.spots.size()) + " spots";
+            s4.error = impl->wsprAdapter.getErrorMessage();
+
+            provstatus::Snapshot s5;
+            s5.id = provstatus::PROV_ENLIL;
+            s5.hasData = impl->cmeSnap.valid;
+            s5.dataEpoch = impl->cmeSnap.valid ? impl->cmeSnap.timeUtc : 0.0;
+            s5.fetching = impl->cmeAdapter.isFetching();
+            if (s5.hasData) {
+                // cmeCountdown ya empieza por "arrived ..."/"in ...": el "ETA"
+                // delante solo alargaba la celda hasta recortarla.
+                s5.data = impl->cmeSnap.hasEvent
+                              ? CmeAdapter::cmeCountdown(
+                                    impl->cmeSnap.event.arrivalUtc, nowUtcPS)
+                              : std::string("sin ETA");
+                char nb[40];
+                std::snprintf(nb, sizeof(nb), " - %d sims",
+                              impl->cmeSnap.event.simCount);
+                s5.data += nb;
+            }
+            s5.error = impl->cmeAdapter.getErrorMessage();
+
+            provstatus::Snapshot s6;
+            s6.id = provstatus::PROV_NWS;
+            s6.hasData = impl->stormSnap.valid;
+            s6.dataEpoch = impl->stormSnap.valid ? impl->stormSnap.timeUtc : 0.0;
+            s6.fetching = impl->stormAdapter.isFetching();
+            if (s6.hasData)
+                s6.data = std::to_string((int)impl->stormSnap.cells.size()) + " cells";
+            s6.error = impl->stormAdapter.getErrorMessage();
+
+            // Lote 4: fulguraciones DONKI y las dos imagenes solares. Las
+            // imagenes no dibujan si no hay dato valido; su sello es el del
+            // ultimo fetch correcto (o del cache servido, declarado).
+            provstatus::Snapshot s7;
+            s7.id = provstatus::PROV_FLR;
+            s7.hasData = impl->flareSnap.valid;
+            s7.dataEpoch = impl->flareSnap.valid ? impl->flareSnap.timeUtc : 0.0;
+            s7.fetching = impl->flareAdapter.isFetching();
+            if (s7.hasData) {
+                s7.data = std::to_string((int)impl->flareSnap.events.size()) +
+                          " flares";
+                if (impl->flareSnap.fromCache) s7.data += " (cache)";
+            }
+            s7.error = impl->flareAdapter.getErrorMessage();
+
+            const SolImage lascoImg =
+                impl->solImages.getImage(SolProduct::LascoC2);
+            provstatus::Snapshot s8;
+            s8.id = provstatus::PROV_LASCO;
+            s8.hasData = lascoImg.valid && impl->solUsed;
+            s8.dataEpoch = lascoImg.valid ? lascoImg.timeUtc : 0.0;
+            s8.fetching = impl->solImages.isFetching();
+            if (s8.hasData) {
+                char ib[40];
+                std::snprintf(ib, sizeof(ib), "%dx%d", lascoImg.w, lascoImg.h);
+                s8.data = ib;
+                if (lascoImg.fromCache) s8.data += " (cache)";
+            }
+            s8.error = impl->solImages.getErrorMessage(SolProduct::LascoC2);
+
+            const SolImage drapImg =
+                impl->solImages.getImage(SolProduct::DrapGlobal);
+            provstatus::Snapshot s9;
+            s9.id = provstatus::PROV_DRAP;
+            s9.hasData = drapImg.valid && impl->solUsed;
+            s9.dataEpoch = drapImg.valid ? drapImg.timeUtc : 0.0;
+            s9.fetching = impl->solImages.isFetching();
+            if (s9.hasData) {
+                char ib[40];
+                std::snprintf(ib, sizeof(ib), "%dx%d", drapImg.w, drapImg.h);
+                s9.data = ib;
+                if (drapImg.fromCache) s9.data += " (cache)";
+            }
+            s9.error = impl->solImages.getErrorMessage(SolProduct::DrapGlobal);
+
+            provstatus::Snapshot s10;
+            s10.id = provstatus::PROV_TLE;
+            s10.hasData = impl->satSnap.valid;
+            s10.dataEpoch = impl->satSnap.valid ? impl->satSnap.timeUtc : 0.0;
+            s10.fetching = impl->satAdapter.isFetching();
+            if (s10.hasData) {
+                s10.data = std::to_string((int)impl->satSnap.sats.size()) + " sats";
+                if (impl->satSnap.source == TleSource::Cache) s10.data += " (cache)";
+            }
+            s10.error = impl->satAdapter.getErrorMessage();
+
+            // Lote 5B: Voyager (JPL Horizons). dataEpoch = instante del ultimo
+            // fetch correcto (el rango de la fila es de 00:00 UTC del dia).
+            provstatus::Snapshot s11;
+            s11.id = provstatus::PROV_VOYAGER;
+            s11.hasData = impl->voyagerSnap.valid;
+            s11.dataEpoch = impl->voyagerSnap.valid ? impl->voyagerSnap.timeUtc : 0.0;
+            s11.fetching = impl->voyagerAdapter.isFetching();
+            if (s11.hasData) {
+                char v1b[32];
+                v1b[0] = '\0';
+                if (impl->voyagerSnap.v1.fix.valid)
+                    std::snprintf(v1b, sizeof(v1b), "V1 %.1f AU",
+                                  impl->voyagerSnap.v1.fix.au);
+                char v2b[32];
+                v2b[0] = '\0';
+                if (impl->voyagerSnap.v2.fix.valid)
+                    std::snprintf(v2b, sizeof(v2b), "V2 %.1f AU",
+                                  impl->voyagerSnap.v2.fix.au);
+                s11.data = v1b;
+                if (v2b[0] != '\0') {
+                    if (!s11.data.empty()) s11.data += " ";
+                    s11.data += v2b;
+                }
+                if (impl->voyagerSnap.fromCache) s11.data += " (cache)";
+            }
+            s11.error = impl->voyagerAdapter.getErrorMessage();
+
+            // Lote 5C: catalogo RBE (DONKI). dataEpoch = instante del ultimo
+            // fetch correcto: los eventos de la ventana de 58 d pueden ser
+            // viejos por diseno y no miden frescura de la fuente.
+            provstatus::Snapshot s12;
+            s12.id = provstatus::PROV_RBE;
+            s12.hasData = impl->rbeSnap.valid;
+            s12.dataEpoch = impl->rbeSnap.valid ? impl->rbeSnap.timeUtc : 0.0;
+            s12.fetching = impl->rbeAdapter.isFetching();
+            if (s12.hasData) {
+                s12.data = std::to_string((int)impl->rbeSnap.events.size()) +
+                           " events";
+                if (impl->rbeSnap.fromCache) s12.data += " (cache)";
+            }
+            s12.error = impl->rbeAdapter.getErrorMessage();
+
+            // Lote 5A: AE real de Kyoto. dataEpoch = instante del ultimo FETCH
+            // correcto (la muestra publicada va con dias de retraso por diseno);
+            // la celda Data si declara el dia del fichero servido.
+            provstatus::Snapshot s13;
+            s13.id = provstatus::PROV_AE;
+            s13.hasData = impl->aeSnap.valid;
+            s13.dataEpoch = impl->aeAdapter.getLastFetchTime();
+            s13.fetching = impl->aeAdapter.isFetching();
+            if (s13.hasData) {
+                s13.data = std::to_string((int)impl->aeSnap.samples.size()) +
+                           " min";
+                if (!impl->aeSnap.sourceDay.empty())
+                    s13.data += " " + impl->aeSnap.sourceDay;
+                if (impl->aeSnap.fromCache) s13.data += " (cache)";
+            }
+            s13.error = impl->aeAdapter.getErrorMessage();
             {
                 std::lock_guard<std::mutex> lk(impl->bundleMutex);
                 impl->provBoard[provstatus::PROV_GIRO] = s0;
                 impl->provBoard[provstatus::PROV_KC2G] = s1;
                 impl->provBoard[provstatus::PROV_DIAS] = s2;
                 impl->provBoard[provstatus::PROV_EBRO] = s3;
+                impl->provBoard[provstatus::PROV_WSPR] = s4;
+                impl->provBoard[provstatus::PROV_ENLIL] = s5;
+                impl->provBoard[provstatus::PROV_NWS] = s6;
+                impl->provBoard[provstatus::PROV_FLR] = s7;
+                impl->provBoard[provstatus::PROV_LASCO] = s8;
+                impl->provBoard[provstatus::PROV_DRAP] = s9;
+                impl->provBoard[provstatus::PROV_TLE] = s10;
+                impl->provBoard[provstatus::PROV_VOYAGER] = s11;
+                impl->provBoard[provstatus::PROV_RBE] = s12;
+                impl->provBoard[provstatus::PROV_AE] = s13;
                 for (int i = 0; i < (int)provstatus::PROV_COUNT; i++)
                     impl->provCopy[i] = impl->provBoard[i];
             }
@@ -3994,21 +4744,46 @@ void App::render() {
             impl->provCopy, (size_t)provstatus::PROV_COUNT, nowUtcPS);
         if (ImGui::BeginTable("provstatus", 4,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("Provider");
-            ImGui::TableSetupColumn("State");
-            ImGui::TableSetupColumn("Data");
-            ImGui::TableSetupColumn("Reason");
+            // Anchos fijos para Provider/State/Data: con el autoajuste el
+            // encabezado "Provider" se recortaba (el ancho lo fijaban las
+            // celdas, no el titulo) y la columna Data bailaba al cambiar la
+            // edad. El motivo se queda con el resto.
+            ImGui::TableSetupColumn("Provider", ImGuiTableColumnFlags_WidthFixed,
+                                    95.0f);
+            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed,
+                                    140.0f);
+            // Data y Reason se reparten el resto: con Data fija, el ETA del
+            // ENLIL ("arrived 1 d 18 h ago - 20 sims · 20 s") se recortaba.
+            ImGui::TableSetupColumn("Data", ImGuiTableColumnFlags_WidthStretch,
+                                    0.45f);
+            ImGui::TableSetupColumn("Reason", ImGuiTableColumnFlags_WidthStretch,
+                                    0.55f);
             ImGui::TableHeadersRow();
             for (size_t i = 0; i < prows.size(); i++) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::TextUnformatted(prows[i].provider.c_str());
                 ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(prows[i].stateText.c_str());
+                // Color por estado (mismo criterio que los badges del resto de
+                // la UI): verde ok, ambar espera, naranja viejo, rojo fallo.
+                ImVec4 col(0.70f, 0.70f, 0.70f, 1.0f);
+                switch (prows[i].state) {
+                    case provstatus::State::Ok: col = ImVec4(0.60f, 0.90f, 0.60f, 1.0f); break;
+                    case provstatus::State::Degraded: col = ImVec4(0.95f, 0.80f, 0.35f, 1.0f); break;
+                    case provstatus::State::Stale: col = ImVec4(1.00f, 0.65f, 0.30f, 1.0f); break;
+                    case provstatus::State::Failed: col = ImVec4(1.00f, 0.45f, 0.45f, 1.0f); break;
+                    case provstatus::State::RateLimited: col = ImVec4(1.00f, 0.40f, 0.70f, 1.0f); break;
+                    case provstatus::State::Off: break;
+                }
+                ImGui::TextColored(col, "%s", prows[i].stateText.c_str());
                 ImGui::TableSetColumnIndex(2);
                 ImGui::TextUnformatted(prows[i].data.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetItemTooltip("%s", prows[i].data.c_str());
                 ImGui::TableSetColumnIndex(3);
                 ImGui::TextUnformatted(prows[i].reason.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetItemTooltip("%s", prows[i].reason.c_str());
             }
             ImGui::EndTable();
         }
@@ -4507,11 +5282,11 @@ void App::render() {
         impl->solarWindLayer.setVisible(showSW);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed.");
-    const char* swModes[] = { "color: velocity", "color: Bz (red N / blue S)" };
+    const char* swModes[] = { "color: speed+Bz+density", "color: Bz (red N / blue S)" };
     if (ImGui::Combo("Arrow color", &impl->swArrowMode, swModes, 2)) {
-        impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, impl->sunDirection, impl->swArrowMode);
+        impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, swl.density, impl->sunDirection, impl->swArrowMode);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow color: by speed (blue->red) or by Bz (red=north, blue=south/geoeffective).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Arrow color: web ramp (speed drives the hue, southward Bz pushes it warmer, density raises the brightness) or Bz only (red=north, blue=south/geoeffective).");
     if (ImGui::SliderFloat("Arrow scale", &impl->swArrowScale, 0.2f, 4.0f)) {
         impl->solarWindLayer.setArrowScale(impl->swArrowScale);
     }
@@ -4564,6 +5339,171 @@ void App::render() {
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Aurora: %s", aurB->error.c_str());
     } else {
         ImGui::TextDisabled("Aurora: waiting for data...");
+    }
+        ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Geospace")) {
+    ImGui::TextWrapped("Dst ring / electrojets / grey line");
+    HelpMarker("Three overlays ported from the web demo. They reuse data the app already downloads (Dst, AE and the solar ephemeris): no extra network calls. All start OFF.");
+    auto rpGeo = impl->getRadio();
+    static const RadioPropSample kNoRpGeo{};
+    // Lote 5A: el AE de Kyoto (real) manda cuando esta disponible; si no, se
+    // declara el proxy por Kp que ya existia.
+    const bool aeRealGeo = impl->aeSnap.valid && !impl->aeSnap.samples.empty();
+    const float aeGeo = aeRealGeo
+                            ? impl->aeSnap.samples.back().ae
+                            : ((rpGeo && rpGeo->latest.valid) ? rpGeo->latest.ae : 0.0f);
+
+    bool showDstRing = impl->dstRingVisible;
+    if (ImGui::Checkbox("Dst ring", &showDstRing)) {
+        impl->dstRingVisible = showDstRing;
+        impl->geospace.setDstRingVisible(showDstRing);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Equatorial ring whose radius closes as Dst drops (web formula: 5.5 + Dst/100, clamped 3.5-6 R_E) and whose color goes blue -> amber -> red with the storm band. The true radius is compressed to 1.25-1.80 R_E so it stays on screen at the default camera distance; the ordering is preserved.");
+    ImGui::Text("Dst: %.0f nT  (true r %.1f R_E, drawn %.2f)",
+                sw.dst, GeospaceOverlays::dstTrueRadius(sw.dst),
+                impl->geospace.getDstDrawnRadius());
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Current Dst and the ring radius before/after the on-screen compression. Dst: >-30 quiet, -50..-30 unsettled, -100..-50 storm, <-100 intense.");
+
+    bool showElectrojet = impl->electrojetVisible;
+    if (ImGui::Checkbox("Electrojets", &showElectrojet)) {
+        impl->electrojetVisible = showElectrojet;
+        impl->geospace.setElectrojetVisible(showElectrojet);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Two loops at +/-67 deg latitude (~110 km) standing in for the auroral electrojet ovals. Color follows AE: <=100 blue, 100-500 amber, 500-1500 towards white. Radial ticks suggest the current filaments. Geographic latitude (dipole tilt ignored).");
+    ImGui::Text("AE: %.0f nT%s", aeGeo, aeRealGeo ? " (Kyoto)" : " (Kp proxy)");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("AE auroral electrojet index: real Kyoto WDC quicklook when available, otherwise the Kp-derived proxy from the Radio Propagation bundle. Kyoto publishes with a lag of days to ~3 weeks by design; the Provider matrix shows the day served. <100 quiet, >300 substorm, >700 storm.");
+
+    bool showGrey = impl->greylineVisible;
+    if (ImGui::Checkbox("Grey line", &showGrey)) {
+        impl->greylineVisible = showGrey;
+        impl->geospace.setGreylineVisible(showGrey);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Soft band +/-7.5 deg around the day/night terminator (solar zenith 82.5-97.5 deg), rebuilt from the live sun direction. It marks the twilight highway for HF: paths crossing it can ride the grey line. Purely geometric overlay; the Earth shader is untouched.");
+    ImGui::TextDisabled("Band follows the live terminator");
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Batch 2 - space-weather geometry");
+    HelpMarker("Three more overlays ported from the web demo. Same rules: options start OFF, nothing is downloaded, and anything that is a model rather than a measurement says so in its tooltip. The magnetosphere and the outer radiation belt are drawn at TRUE scale (R_E), so they only fit when the camera is pulled back.");
+
+    bool showMag = impl->magnetosphereVisible;
+    if (ImGui::Checkbox("Magnetosphere", &showMag)) {
+        impl->magnetosphereVisible = showMag;
+        impl->magnetosphere.setVisible(showMag);
+        // Primer encendido con la camara cerca: la magnetopausa arranca en
+        // 6-12 R_E y no se veria nada. Se aleja sola (la rueda lo deshace).
+        if (showMag && impl->camera.distance < 10.0f) impl->camera.distance = 20.0f;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Shue-1998 magnetopause wireframe, r0 = [10.22 + 1.29*tanh(0.184*(Bz+8.14))] / Dp^(1/6.6) with Dp = 1.6726e-6*n*v^2, plus IGRF-14 degree-1 dipole field lines at L = 1.5, 2.5, 4.0 and 6.0 (epoch 2025.0, 9.2 deg tilt). Driven by the live solar wind. TRUE scale: the subsolar standoff sits at 6-12 R_E, so turning it on from a close view pulls the camera back automatically. The wireframe stops at theta = 105 deg (the edge of the dayside cavity) and the night-side stretch is a declared v1 parameterisation, not Tsyganenko; the real tail is longer than 20 R_E and is out of scope.");
+    ImGui::Text("r0 %.1f R_E  alpha %.2f  tail x%.2f",
+                impl->magnetosphere.subsolarR0(), impl->magnetosphere.alpha(),
+                impl->magnetosphere.tailStretch());
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar standoff r0, flaring alpha and night-side stretch factor of the current Shue fit. r0 shrinks with dynamic pressure and with southward Bz.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Fit##mag")) impl->camera.distance = 20.0f;
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Pull the camera back to the 20 R_E limit. That fits the dayside cavity and the L <= 6 shells; the real tail is longer than 20 R_E, so its far end always runs off screen.");
+
+    bool showVa = impl->vanAllenVisible;
+    if (ImGui::Checkbox("Van Allen belts", &showVa)) {
+        impl->vanAllenVisible = showVa;
+        impl->vanAllen.setVisible(showVa);
+        // El cinturon externo llega a 4.2-4.9 R_E: con la camara pegada solo
+        // se veria el interno. Se aleja sola al encender.
+        if (showVa && impl->camera.distance < 6.0f) impl->camera.distance = 8.0f;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Two wireframe tori: inner protons at L = 1.5 (stable, silver) and outer electrons at L = 4.2 + 0.08*Kp (amber). Brightness knots drift WEST for protons and EAST for electrons (0.05 rad/s). Torus axis is the geographic equator (dipole tilt ignored). The outer belt reaches 4.2-4.9 R_E, so use Fit. No live RBE feed: the outer-belt glow term stays at 0.");
+    ImGui::Text("Kp %.1f  outer L %.2f R_E", sw.valid ? sw.kp : 0.0f, impl->vanAllen.outerL());
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Kp from the NOAA index bundle and the resulting outer-belt L shell. Kp <= 3 quiet, >= 5 storm: the electron belt moves outward as Kp rises.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Fit##va")) impl->camera.distance = 8.0f;
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Zoom the camera out to 8 R_E so both belts fit on screen.");
+
+    bool showWf = impl->westFordVisible;
+    if (ImGui::Checkbox("West Ford 1963 ring", &showWf)) {
+        impl->westFordVisible = showWf;
+        impl->westFord.setVisible(showWf);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Static reconstruction of the May 1963 West Ford copper-dipole belt: 4096 deterministic samples in a single orbital plane (87.4 deg inclination, 3600-3680 km altitude, declared +/-0.6 deg thickness). Illustrative only - the node is a fixed declared value, with no propagation, no simulated rotation and no live data.");
+    ImGui::TextDisabled("%d samples - declared reconstruction", impl->westFord.particleCount());
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Live data layers (own network fetches)");
+    HelpMarker("These four download their own data while their layer is visible, the Geospace panel (Windows menu) is open, or the Provider status section is expanded: WSPRnet every 5 min, NWS alerts every 5 min, CCMC WSA-ENLIL every 30 min, CelesTrak TLE hourly (catalogue reused for 6 h). Offline or empty means the layer draws nothing - there is no synthetic fallback - and the status line below says why.");
+    const double tNowUi = (double)std::time(nullptr);
+
+    bool showWspr = impl->wsprVisible;
+    if (ImGui::Checkbox("WSPR arcs", &showWspr)) {
+        impl->wsprVisible = showWspr;
+        impl->wsprArcs.setVisible(showWspr);
+        if (showWspr) impl->wsprNextFetch = 0.0;   // primer fetch inmediato
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("One great-circle arc per live WSPRnet spot, TX to RX, based at ~190 km with a display-only bulge. Colour is the band (160m violet ... 6m magenta) and arcs fade out over the declared 10-minute TTL, capped at 40 spots. Source: the wsprnet.org volunteer network - this is reported data, not ours. No spots, no arcs.");
+    if (impl->wsprAdapter.isFetching()) {
+        ImGui::TextDisabled("WSPR: fetching...");
+    } else if (impl->wsprSnap.valid) {
+        ImGui::TextDisabled("WSPR: %d arcs (newest %.0f min old)", impl->wsprArcs.arcCount(),
+                            tNowUi > impl->wsprSnap.timeUtc ? (tNowUi - impl->wsprSnap.timeUtc) / 60.0 : 0.0);
+    } else {
+        ImGui::TextDisabled("WSPR: %s", impl->wsprSnap.note.empty() ? "waiting for first fetch"
+                                                                   : impl->wsprSnap.note.c_str());
+    }
+
+    bool showSat = impl->satVisible;
+    if (ImGui::Checkbox("Satellites (TLE)", &showSat)) {
+        impl->satVisible = showSat;
+        impl->satLayer.setVisible(showSat);
+        if (showSat) impl->satNextFetch = 0.0;   // primer fetch inmediato
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak (active objects), fallback SatNOGS, then the on-disk cache - the source label says which one is drawn. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (impl->satAdapter.isFetching()) {
+        ImGui::TextDisabled("Satellites: fetching...");
+    } else if (impl->satSnap.valid) {
+        ImGui::TextDisabled("Satellites: %d drawn / %d (%s, %d rings)", impl->satLayer.satCount(),
+                            (int)impl->satSnap.sats.size(),
+                            impl->satAdapter.getSourceLabel().c_str(),
+                            impl->satLayer.ringCount());
+    } else {
+        ImGui::TextDisabled("Satellites: %s", impl->satSnap.note.empty()
+                                                    ? "waiting for first fetch"
+                                                    : impl->satSnap.note.c_str());
+    }
+
+    bool showCme = impl->cmeVisible;
+    if (ImGui::Checkbox("CME front (ENLIL)", &showCme)) {
+        impl->cmeVisible = showCme;
+        impl->cme.setVisible(showCme);
+        if (showCme) impl->cmeNextFetch = 0.0;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Shock front of the newest WSA-ENLIL simulation that publishes an Earth arrival time, drawn as a spherical cap (ENLIL half-angle) around the Sun-Earth axis. The 1 AU transit is ~215 R_E and cannot fit the camera, so the radius is a DECLARED linear compression of the model progress (1.8 -> 19.5 R_E): position in that range is not physical, the ETA and speed are. ENLIL forecasts an arrival, not a Dp. No event, nothing drawn.");
+    if (impl->cmeSnap.hasEvent) {
+        const CmeEvent& ev = impl->cmeSnap.event;
+        ImGui::TextDisabled("ENLIL %s: %s (%.0f km/s, +/-%.0f deg%s)",
+                            ev.simId.c_str(),
+                            CmeAdapter::cmeCountdown(ev.arrivalUtc, tNowUi).c_str(),
+                            (double)ev.speedKms, (double)ev.halfAngleDeg,
+                            ev.earthGB ? ", Earth-directed" : "");
+    } else if (impl->cmeAdapter.isFetching()) {
+        ImGui::TextDisabled("ENLIL: fetching...");
+    } else {
+        ImGui::TextDisabled("ENLIL: %s", impl->cmeSnap.note.empty()
+                                             ? "waiting for first fetch"
+                                             : impl->cmeSnap.note.c_str());
+    }
+
+    bool showWhistler = impl->whistlerVisible;
+    if (ImGui::Checkbox("Storm sprites + whistlers", &showWhistler)) {
+        impl->whistlerVisible = showWhistler;
+        impl->whistlers.setVisible(showWhistler);
+        if (showWhistler) impl->stormNextFetch = 0.0;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("A sprite marker on each active NWS Severe Thunderstorm Warning centroid (CONUS only), plus the whistler duct through that point: the REAL IGRF dipole field line of the cell (Helliwell 1965 ducting), not an animation. No flash counts are claimed - the GLM granules are NetCDF and out of scope here - so this shows warned storms, not measured lightning. No warnings, nothing drawn.");
+    if (impl->stormAdapter.isFetching()) {
+        ImGui::TextDisabled("NWS: fetching...");
+    } else if (impl->stormSnap.valid) {
+        ImGui::TextDisabled("NWS: %d cells (CONUS warnings)", impl->whistlers.cellCount());
+    } else {
+        ImGui::TextDisabled("NWS: %s", impl->stormSnap.note.empty() ? "waiting for first fetch"
+                                                                    : impl->stormSnap.note.c_str());
     }
         ImGui::EndMenu();
         }
@@ -4765,13 +5705,16 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("S4: ionospheric scintillation index 0-1 (fading). <0.2 slight, >0.3 moderate (GPS/HF suffer), >0.6 severe. Peaks at night near the equator.");
     ImGui::ProgressBar(glm::clamp(showS4, 0.0f, 1.0f), ImVec2(0, 0), "scintillation");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("S4 normalized 0-1.");
-    // AE gauge 0..1000 nT (global index)
+    // AE gauge 0..1000 nT (global index). Lote 5A: Kyoto real si llego.
+    const bool aeRealHud = impl->aeSnap.valid && !impl->aeSnap.samples.empty();
+    const float aeShow = aeRealHud ? impl->aeSnap.samples.back().ae : rp.ae;
     ImVec4 aeCol(0.3f, 0.9f, 0.3f, 1.0f);
-    if (rp.ae > 300) aeCol = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
-    if (rp.ae > 700) aeCol = ImVec4(0.9f, 0.2f, 0.2f, 1.0f);
-    ImGui::TextColored(aeCol, "AE: %.0f nT (global)", rp.ae);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("AE: auroral electrojet (nT, Kp proxy; authoritative: Kyoto WDC). <100 quiet, >300 substorm, >700 storm. Auroras and degraded polar HF. Global index, not per station.");
-    ImGui::ProgressBar(glm::clamp(rp.ae / 1000.0f, 0.0f, 1.0f), ImVec2(0, 0), "auroral");
+    if (aeShow > 300) aeCol = ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+    if (aeShow > 700) aeCol = ImVec4(0.9f, 0.2f, 0.2f, 1.0f);
+    ImGui::TextColored(aeCol, "AE: %.0f nT (global%s)", aeShow,
+                       aeRealHud ? ", Kyoto" : ", Kp proxy");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("AE: auroral electrojet (nT). Real Kyoto WDC quicklook when available; otherwise a Kp proxy (authoritative source: Kyoto WDC). Kyoto lags by days to ~3 weeks by design. <100 quiet, >300 substorm, >700 storm. Auroras and degraded polar HF. Global index, not per station.");
+    ImGui::ProgressBar(glm::clamp(aeShow / 1000.0f, 0.0f, 1.0f), ImVec2(0, 0), "auroral");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("AE normalized 0-1000 nT.");
     ImGui::Text("TAI: %.1f / 3 (global)", rp.tai);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("TAI: TEC activity 0-3 (Kp proxy). 0 quiet, 3 heavily disturbed. Anticipates GPS errors. Global index, not per station.");
@@ -4810,6 +5753,14 @@ void App::render() {
                 if (ImGui::MenuItem("Sun", nullptr, &impl->sunVisible))
                     if (impl->sunVisible && !sunWasM) impl->sdoKick.store(true);
             }
+            // Lote 3: resumen de WSPR / ENLIL / NWS (no enciende las capas).
+            ImGui::MenuItem("Geospace", nullptr, &impl->geoPanelOpen);
+            // Lote 4B: imagenes solares (LASCO C2 + D-RAP).
+            ImGui::MenuItem("Solar imagery", nullptr, &impl->solarPanelOpen);
+            // Lote 5D: espiral de Parker (esquema 2D con el viento real).
+            ImGui::MenuItem("Parker spiral", nullptr, &impl->parkerPanelOpen);
+            // Lote 5B: Voyager 1/2 (distancia real de JPL Horizons).
+            ImGui::MenuItem("Voyager", nullptr, &impl->voyagerPanelOpen);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -4940,6 +5891,10 @@ void App::render() {
     }
 
     drawSunPanel();  // M11: ventana Sun (disco SDO + ARs)
+    drawGeospacePanel();  // Lote 3: resumen WSPR / ENLIL / NWS
+    drawSolarImagesPanel();  // Lote 4B: LASCO C2 + D-RAP
+    drawParkerPanel();  // Lote 5D: espiral de Parker (2D)
+    drawVoyagerPanel();  // Lote 5B: Voyager 1/2 (JPL Horizons)
 
     // ---- M8 (plan 11.4): panel «Circuit» (TX/RX + matriz de bandas) ----
     {
@@ -5558,8 +6513,17 @@ void App::shutdown() {
     impl->solarWindLayer.destroy();
     impl->faradayLayer.destroy();
     impl->refShells.destroy();
+    impl->geospace.destroy();
+    impl->magnetosphere.destroy();
+    impl->vanAllen.destroy();
+    impl->westFord.destroy();
+    impl->wsprArcs.destroy();
+    impl->cme.destroy();
+    impl->whistlers.destroy();
+    impl->satLayer.destroy();
     impl->auroraLayer.destroy();
     impl->hfTrace.destroy();
+    impl->solarPanel.shutdown();   // Lote 4B: texturas propias, contexto vivo
 
     if (impl->quadVAO) glDeleteVertexArrays(1, &impl->quadVAO);
     if (impl->quadVBO) glDeleteBuffers(1, &impl->quadVBO);
