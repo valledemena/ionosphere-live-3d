@@ -1,4 +1,5 @@
 #include "SolarWindLayer.h"
+#include "Data/SolarWindRamp.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <cmath>
@@ -107,37 +108,21 @@ void SolarWindLayer::rebuild() {
 
             // Color. Brillos y rampa portados de la demo web
             // (IonosphereScene.tsx: solarWindColor): la velocidad manda,
-            // Bz sur enrojece y la densidad sube el brillo.
-            const float bright = 0.86f + 0.14f * glm::clamp(density_ / 20.0f, 0.0f, 1.0f);
+            // Bz sur enrojece y la densidad sube el brillo. La rampa vive en
+            // Data/SolarWindRamp.h porque el rio de particulas pinta igual.
             glm::vec3 col;
             if (mode_ == 1) {
                 // Bz divergente: rojo = norte (Bz>0), azul = sur (Bz<0).
+                const float bright = 0.86f + 0.14f * glm::clamp(density_ / 20.0f, 0.0f, 1.0f);
                 float s = glm::clamp(bz_ / 20.0f, -1.0f, 1.0f);
                 if (s >= 0.0f) col = glm::vec3(0.2f, 0.2f, 0.2f) + glm::vec3(0.8f, 0.0f, 0.0f) * s;
                 else           col = glm::vec3(0.2f, 0.2f, 0.2f) + glm::vec3(0.0f, 0.0f, 0.9f) * (-s);
                 col *= bright;
             } else {
-                // Rampa web de 5 paradas (violeta -> magenta -> naranja ->
-                // amarillo -> blanco calido).
-                static const float stopT[5] = { 0.00f, 0.32f, 0.55f, 0.78f, 1.00f };
-                static const glm::vec3 stopC[5] = {
-                    glm::vec3(0.45f, 0.22f, 0.95f),
-                    glm::vec3(0.95f, 0.25f, 0.80f),
-                    glm::vec3(1.00f, 0.48f, 0.16f),
-                    glm::vec3(1.00f, 0.78f, 0.28f),
-                    glm::vec3(1.00f, 0.95f, 0.78f),
-                };
-                float speedN = glm::clamp((speed_ - 250.0f) / 650.0f, 0.0f, 1.0f);
-                float southN = glm::clamp(-bz_ / 15.0f, 0.0f, 1.0f);
                 // Semilla por flecha: variacion estable, sin parpadeo entre
                 // rebuilds (el original usa ruido por particula).
-                float seed = fmodf((float)i * 0.6180340f + (float)j * 0.2718281f, 1.0f);
-                float t = glm::clamp(0.28f + 0.55f * speedN - 0.16f * southN
-                                     + 0.13f * seed, 0.0f, 1.0f);
-                int k = 0;
-                while (k < 3 && t > stopT[k + 1]) k++;
-                float f = (t - stopT[k]) / (stopT[k + 1] - stopT[k] + 1e-6f);
-                col = glm::mix(stopC[k], stopC[k + 1], f) * bright;
+                const float seed = fmodf((float)i * 0.6180340f + (float)j * 0.2718281f, 1.0f);
+                col = windramp::webColor(speed_, bz_, density_, seed);
             }
 
             verts.push_back(tail.x); verts.push_back(tail.y); verts.push_back(tail.z);

@@ -53,6 +53,7 @@ set(SOURCES
     src/Ionosphere/RefShells.cpp
     src/Ionosphere/GeospaceOverlays.cpp
     src/Ionosphere/MagnetosphereLayer.cpp
+    src/Ionosphere/SolarWindRiver.cpp  # rio de viento solar (particulas del demo web)
     src/Ionosphere/VanAllenBelts.cpp
     src/Ionosphere/WestFordRing.cpp
     src/Data/WsprAdapter.cpp
@@ -408,3 +409,8 @@ if(NOT WIN32)
     target_link_libraries(test_ae_parse PRIVATE Threads::Threads)
 endif()
 add_test(NAME ae_parse COMMAND test_ae_parse)
+# Lote 5E: rio de viento solar (particulas) - llama a PRODUCCION (swriver:
+# step/respawn/obstaculo Shue y rampa de color), sin GL ni red.
+add_executable(test_solar_wind_river tests/test_solar_wind_river.cpp)
+target_include_directories(test_solar_wind_river PRIVATE src libs/glm)
+add_test(NAME solar_wind_river COMMAND test_solar_wind_river)

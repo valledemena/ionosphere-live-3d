@@ -1,4 +1,5 @@
 #include "MagnetosphereLayer.h"
+#include "Data/ShueMath.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <cmath>
@@ -37,35 +38,16 @@ constexpr float kDeg2Rad = kPi / 180.0f;
 // real (r0 ~ 6-12 R_E) y la camara debe alejarse para verla entera.
 constexpr float kEarthRadiusUnits = 1.0f;
 
-// ---- Coeficientes Shue-1998 [S98] (nT, nPa, R_E) ----
-constexpr float kR0C0 = 10.22f;      // r0 = (c0 + c1*tanh(k*(Bz+off))) / Dp^exp
-constexpr float kR0C1 = 1.29f;
-constexpr float kR0K = 0.184f;
-constexpr float kR0Offset = 8.14f;
-constexpr float kR0ExpInv = 6.6f;    // exponente 1/6.6
-constexpr float kAlpha0 = 0.58f;     // alpha = (a0 + a1*Bz) * (1 + a2*ln Dp)
-constexpr float kAlpha1 = -0.007f;
-constexpr float kAlpha2 = 0.024f;
-constexpr float kDpMin = 0.05f;      // nPa, mismo suelo que la web
-constexpr float kDpCoef = 1.6726e-6f;  // mp * (cm^-3 / m^-3) * (km/s)^2 -> nPa
-
 // ---- IGRF-14 grado 1, epoca 2025.0 congelada (sin SV), nT ----
 constexpr float kG10 = -29350.0f;
 constexpr float kG11 = -1410.30f;
 constexpr float kH11 = 4545.50f;
 
-// Radio subsolar Shue-1998 en R_E.
-float shueR0(float bzNT, float dpNPa) {
-    const float dp = std::max(dpNPa, kDpMin);
-    return (kR0C0 + kR0C1 * std::tanh(kR0K * (bzNT + kR0Offset))) /
-           std::pow(dp, 1.0f / kR0ExpInv);
-}
-
-// Apertura (flaring) Shue-1998, adimensional.
-float shueAlpha(float bzNT, float dpNPa) {
-    const float dp = std::max(dpNPa, kDpMin);
-    return (kAlpha0 + kAlpha1 * bzNT) * (1.0f + kAlpha2 * std::log(dp));
-}
+// Los coeficientes y las formulas de Shue-1998 viven en Data/ShueMath.h porque
+// tambien los usa el rio de viento solar (SolarWindRiverSim) para desviar sus
+// particulas alrededor de la misma superficie. Aqui solo se aliasan.
+float shueR0(float bzNT, float dpNPa) { return shuemath::r0(bzNT, dpNPa); }
+float shueAlpha(float bzNT, float dpNPa) { return shuemath::alpha(bzNT, dpNPa); }
 
 // Estiramiento nocturno v1 (declarado, NO Tsyganenko): 1 sin Bz sur.
 float tailStretchFactor(float bzNT) {
@@ -99,8 +81,7 @@ MagnetosphereLayer::~MagnetosphereLayer() { destroy(); }
 
 // Dp[nPa] = 1.6726e-6 * n[cm^-3] * v[km/s]^2 (mp*n*v^2).
 float MagnetosphereLayer::dynamicPressure(float densityCm3, float speedKms) {
-    const float n = std::max(densityCm3, 0.0f);
-    return kDpCoef * n * speedKms * speedKms;
+    return shuemath::dynamicPressure(densityCm3, speedKms);
 }
 
 float MagnetosphereLayer::subsolarR0() const {

@@ -66,6 +66,7 @@
 #include "Ionosphere/RefShells.h"
 #include "Ionosphere/GeospaceOverlays.h"   // port web: Dst ring + electrojets + grey line
 #include "Ionosphere/MagnetosphereLayer.h" // port web: magnetopausa Shue + dipolo
+#include "Ionosphere/SolarWindRiver.h"     // port web: rio de particulas del viento solar
 #include "Ionosphere/VanAllenBelts.h"      // port web: cinturones de radiacion
 #include "Ionosphere/WestFordRing.h"       // port web: anillo West Ford 1963
 #include "Data/WsprAdapter.h"              // port web: spots WSPRnet (red)
@@ -194,9 +195,11 @@ struct App::Impl {
     bool greylineVisible = false;     // cinta del terminador (+/-7.5 grados)
     // Lote 2 del port web: cavidad magnetosferica, cinturones y anillo 1963.
     MagnetosphereLayer magnetosphere;  // magnetopausa Shue-1998 + lineas dipolares
+    SolarWindRiver swRiver;            // rio de particulas del viento solar (web)
     VanAllenBelts vanAllen;            // tori L=1.5 y L=4.2+0.08*Kp
     WestFordRing westFord;             // banda de dipolos de 1963 (estatica)
     bool magnetosphereVisible = false;
+    bool swRiverVisible = false;
     bool vanAllenVisible = false;
     bool westFordVisible = false;
     // Lote 3 del port web: capas con datos externos propios (red). Solo
@@ -269,7 +272,7 @@ struct App::Impl {
     float bloomStrength = 0.55f;   // composite add amount
     bool toneMap = true;           // ACES en composite (bypass exacto si off)
     float exposure = 1.12f;        // M1: calibrado para ACES+sRGB (era 1.0 a mano)
-    int msaaSamples = 4;           // M1: MSAA de escena 0/2/4 (default 4, persistible)
+    int msaaSamples = 0;           // M1: MSAA de escena 0/2/4 (default 0, persistible)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
     bool godraysEnabled = true;    // M'-2: god rays screen-space (S-2 sombra intacta)
@@ -1830,6 +1833,8 @@ bool App::init(int width, int height, const char* title) {
     // Lote 2 del port web (ocultas por defecto).
     impl->magnetosphere.init();
     impl->magnetosphere.setVisible(false);
+    impl->swRiver.init();
+    impl->swRiver.setVisible(false);
     impl->vanAllen.init();
     impl->vanAllen.setVisible(false);
     impl->westFord.init();
@@ -1952,6 +1957,7 @@ bool App::init(int width, int height, const char* title) {
     impl->geospace.setElectrojetVisible(impl->electrojetVisible);
     impl->geospace.setGreylineVisible(impl->greylineVisible);
     impl->magnetosphere.setVisible(impl->magnetosphereVisible);
+    impl->swRiver.setVisible(impl->swRiverVisible);
     impl->vanAllen.setVisible(impl->vanAllenVisible);
     impl->westFord.setVisible(impl->westFordVisible);
     impl->wsprArcs.setVisible(impl->wsprVisible);
@@ -2176,7 +2182,9 @@ void App::processInput() {
         glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS)
         impl->camera.distance += 0.02f;
 
-    impl->camera.distance = glm::clamp(impl->camera.distance, 1.5f, 20.0f);
+    // Lote 5E: el limite sube de 20 a 45 R_E para que quepa el rio de viento
+    // solar (18-28 R_E). La magnetopausa sigue igual; solo cambia el zoom maximo.
+    impl->camera.distance = glm::clamp(impl->camera.distance, 1.5f, 45.0f);
 }
 
 void App::update(float dt) {
@@ -2711,6 +2719,21 @@ void App::update(float dt) {
         impl->magnetosphere.update();
     }
 
+    // Lote 5E: rio de viento solar (400 particulas). Misma regla de datos que la
+    // magnetosfera: sin muestra valida se conservan los defaults declarados del
+    // modulo (400 km/s, 5 cm^-3, Bz 0) en vez de inventar un viento. El flujo
+    // deriva a v*60 (exageracion declarada) y se abre alrededor de la misma
+    // superficie Shue que dibuja la magnetopausa.
+    if (impl->swRiver.visible()) {
+        static const SolarWindSample kNoWindRiver{};
+        const SolarWindSample& swRiv = impl->lastWind ? impl->lastWind->latest : kNoWindRiver;
+        if (swRiv.valid && swRiv.speed > 0.0f) {
+            impl->swRiver.setSolarWind(swRiv.speed, swRiv.density, swRiv.bz);
+        }
+        impl->swRiver.setSunDirection(impl->sunDirection);
+        impl->swRiver.update(dt);
+    }
+
     // Lote 2: cinturones de radiacion. Kp mueve el toro externo y el reloj
     // arrastra la fase de deriva (protones al oeste, electrones al este).
     // Lote 5C trae el catalogo DONKI RBE (eventos), no una serie de flujo de
@@ -2950,6 +2973,7 @@ void App::saveSettings() {
     fprintf(f, "electrojetVisible %d\n", impl->electrojetVisible ? 1 : 0);
     fprintf(f, "greylineVisible %d\n", impl->greylineVisible ? 1 : 0);
     fprintf(f, "magnetosphereVisible %d\n", impl->magnetosphereVisible ? 1 : 0);
+    fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
     fprintf(f, "wsprArcsVisible %d\n", impl->wsprVisible ? 1 : 0);
@@ -3083,6 +3107,7 @@ void App::loadSettings() {
         else if (k == "electrojetVisible") impl->electrojetVisible = clB(v);
         else if (k == "greylineVisible") impl->greylineVisible = clB(v);
     else if (k == "magnetosphereVisible") impl->magnetosphereVisible = clB(v);
+    else if (k == "swRiverVisible") impl->swRiverVisible = clB(v);
     else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
     else if (k == "westFordVisible") impl->westFordVisible = clB(v);
     else if (k == "wsprArcsVisible") impl->wsprVisible = clB(v);
@@ -3145,7 +3170,7 @@ void App::loadSettings() {
         else if (k == "sliceOn") impl->sliceOn = clB(v);
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
         else if (k == "camRY") impl->camera.rotateY = (float)v;
-        else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 20.0f);
+        else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 45.0f);
         else if (k == "hfTraceVisible") impl->hfTraceVisible = clB(v);   // M8 (plan 11.4)
         else if (k == "hfFreqMHz") impl->hfFreqMHz = glm::clamp((float)v, 1.0f, 30.0f);
     }
@@ -4216,7 +4241,7 @@ void App::render() {
     bool showAur = impl->auroraLayer.isVisible() && solo == Impl::SoloTarget::None;
     bool showSlice = impl->sliceOn && impl->sliceLayer.isVisible() && solo == Impl::SoloTarget::None;
     if (impl->showAtmosphere || impl->terminatorVisible || showTec || showSW || showFar || showAur || showShell || showVolScene || showPeak || showModel || showSlice || impl->refShells.isVisible() || impl->geospace.hasVisible() ||
-        impl->magnetosphere.visible() || impl->vanAllen.visible() || impl->westFord.visible() ||
+        impl->magnetosphere.visible() || impl->swRiver.visible() || impl->vanAllen.visible() || impl->westFord.visible() ||
         impl->wsprArcs.visible() || impl->cme.visible() || impl->whistlers.visible()) {
         impl->sceneFBO.bind();
         glViewport(0, 0, winW, winH);
@@ -4272,6 +4297,13 @@ void App::render() {
         if (impl->geospace.hasVisible()) impl->geospace.render(view, proj);
         // Lote 2: magnetosfera (escala real), cinturones y anillo West Ford.
         if (impl->magnetosphere.visible()) impl->magnetosphere.render(view, proj);
+        // Lote 5E: rio de viento solar (particulas). Tamano de punto atenuado
+        // por distancia: H / (2*tan(fov/2)) con H en pixeles del framebuffer.
+        if (impl->swRiver.visible()) {
+            const float pixelScale = 0.5f * (float)winH /
+                std::tan(glm::radians(impl->camera.fov) * 0.5f);
+            impl->swRiver.render(view, proj, pixelScale);
+        }
         if (impl->vanAllen.visible()) impl->vanAllen.render(view, proj);
         if (impl->westFord.visible()) impl->westFord.render(view, proj);
         // Lote 3: datos externos (arcos WSPR, frente CME, whistlers).
@@ -5384,7 +5416,7 @@ void App::render() {
 
     ImGui::Separator();
     ImGui::TextDisabled("Batch 2 - space-weather geometry");
-    HelpMarker("Three more overlays ported from the web demo. Same rules: options start OFF, nothing is downloaded, and anything that is a model rather than a measurement says so in its tooltip. The magnetosphere and the outer radiation belt are drawn at TRUE scale (R_E), so they only fit when the camera is pulled back.");
+    HelpMarker("Four more overlays ported from the web demo. Same rules: options start OFF, nothing is downloaded, and anything that is a model rather than a measurement says so in its tooltip. The magnetosphere, the solar wind river and the outer radiation belt are drawn at TRUE scale (R_E), so they only fit when the camera is pulled back.");
 
     bool showMag = impl->magnetosphereVisible;
     if (ImGui::Checkbox("Magnetosphere", &showMag)) {
@@ -5401,7 +5433,24 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar standoff r0, flaring alpha and night-side stretch factor of the current Shue fit. r0 shrinks with dynamic pressure and with southward Bz.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Fit##mag")) impl->camera.distance = 20.0f;
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Pull the camera back to the 20 R_E limit. That fits the dayside cavity and the L <= 6 shells; the real tail is longer than 20 R_E, so its far end always runs off screen.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Pull the camera back to 20 R_E. That fits the dayside cavity and the L <= 6 shells; the real tail is longer than 20 R_E, so its far end always runs off screen. The zoom limit is 45 R_E (see the solar wind river).");
+
+    // Lote 5E: rio de viento solar (particulas). Vive entre 18 y 28 R_E del
+    // centro, asi que el primer encendido aleja la camara a 38 R_E.
+    bool showRiver = impl->swRiverVisible;
+    if (ImGui::Checkbox("Solar wind river (particles)", &showRiver)) {
+        impl->swRiverVisible = showRiver;
+        impl->swRiver.setVisible(showRiver);
+        if (showRiver && impl->camera.distance < 30.0f) impl->camera.distance = 38.0f;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("400 particles streaming antisunward, exactly like the web demo (IonosphereScene, 400 points, core + glow). They are born on the dayside, travel at v*60 (declared x60 exaggeration so the flow is visible in real time), get pushed sideways out of the Shue-1998 magnetopause and recycle at x = -28 R_E. Colour is the same ramp as the arrows: speed + southward Bz + density from the live NOAA RTSW wind. TRUE scale (1 unit = 1 R_E), so it only fits with the camera pulled back; the first toggle does that automatically. Animation only - no synthetic wind sample.");
+    ImGui::Text("river: %.0f km/s  n %.1f cm^-3  Bz %+.1f nT  (%d particles)",
+                impl->swRiver.currentSpeed(), impl->swRiver.currentDensity(),
+                impl->swRiver.currentBz(), impl->swRiver.particleCount());
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Wind values currently driving the river. Until a valid sample arrives it keeps the declared module defaults (400 km/s, 5 cm^-3, Bz 0), the same as the magnetosphere.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Fit##river")) impl->camera.distance = 38.0f;
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Pull the camera back to 38 R_E, where the whole 18-28 R_E river fits at 45 deg FOV.");
 
     bool showVa = impl->vanAllenVisible;
     if (ImGui::Checkbox("Van Allen belts", &showVa)) {
