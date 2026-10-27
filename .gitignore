@@ -54,3 +54,13 @@ imgui.ini
 # Logs de evidencia de sesiones (leccion 040): artefactos locales con timestamp.
 /ev*.log
 /ev*.png
+
+# Artefactos de test y del demo web, nunca versionados:
+# ctest escribe Testing/, el demo web deja node_modules/.vitest-cache y los
+# smoke tests numerados dejan capturas sueltas en la raiz.
+# Nota: las capturas versionadas (screenshot-globe.png, etc.) llevan guion, no
+# digito, asi que el patron numerado no las caza.
+/Testing/
+/node_modules/
+/screenshot[0-9]*.png
+*.log
