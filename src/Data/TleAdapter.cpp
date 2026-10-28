@@ -31,6 +31,8 @@ const char* const kUserAgent = "IonosphereLive3D/1.0";
 
 // Claves del sidecar: una puerta por endpoint (C2b anadira amateur/stations).
 const char* const kKeyActive = "celestrak.active";
+const char* const kKeyAmateur = "celestrak.amateur";
+const char* const kKeyStations = "celestrak.stations";
 const char* const kKeySatnogs = "celestrak.satnogs";
 
 constexpr double kFutureSlackSec = 10.0 * 60.0;
