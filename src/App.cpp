@@ -3333,15 +3333,16 @@ void App::fetchWorker() {
             //    Si falla y no hay nada todavia, mock Esa offline marcado simulated.
             {
                 static double gloLastAttemptUtc = 0.0;
-                static double gloLastOkBannerUtc = 0.0;
+                static bool gloLastAttemptOk = false;
                 GridData g;
                 bool ok;
-                if (epoch - gloLastAttemptUtc < 600.0) {
-                    ok = glo.getGrid().valid;  // puerta caller: no repetir backfill cada 5 min
+                long long gloDt = (long long)(epoch - gloLastAttemptUtc);
+                if (gloDt >= 0 && (double)gloDt < 600.0) {
+                    ok = (gloLastAttemptOk && glo.getGrid().valid);
                 } else {
                     ok = glo.fetchTEC(epoch);
-                    gloLastAttemptUtc = epoch;  // puerta por intento, no por exito
-                    if (ok) gloLastOkBannerUtc = epoch;
+                    gloLastAttemptOk = ok;
+                    gloLastAttemptUtc = epoch;
                 }
                 bool sim = false;
                 if (ok) {
