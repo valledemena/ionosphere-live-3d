@@ -5,6 +5,14 @@ A textured Earth with day/night terminator, city lights and animated clouds,
 wrapped in live data shells: TEC, GIRO ionosondes, HF propagation, solar wind,
 auroral oval and more — all switchable, with a time-travel replay mode.
 
+On top of the ionosphere it also carries **bonus extras that are not
+ionospheric data**: the live satellite catalogue, the Voyager probes, the
+Parker spiral, the Shue-1998 magnetopause, the Van Allen belts, the 1963 West
+Ford ring and solar imagery. They share the same rules as everything else —
+off by default, persisted, labelled with their real source, and empty rather
+than invented when the source fails. See
+[docs/bonus-extras.md](docs/bonus-extras.md) for the per-feature detail.
+
 ![Screenshot](screenshot-globe.png)
 
 | ![UI + IRTAM](screenshot-irtam.png) | ![Sun + limb](screenshot-sun.png) |
@@ -12,6 +20,15 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 | Full UI with honest-state badge | SDO Sun panel + limb zoom |
 | ![Replay + shells](screenshot-replay.png) | ![Night close-up](screenshot-night.png) |
 | Timeline replay with E/F1/F2 reference shells | Black Marble HiRes city lights, close-up |
+
+## What's inside
+
+| Area | Contents |
+|---|---|
+| **Ionosphere (core)** | TEC, foF2/MUF/hmF2/NmF2, LUF/FOT/Spread-F, IRTAM foF2/hmF2/B0/B1, volumetric Ne, path slice, F2-peak shell, model TEC, GIRO stations, Faraday rotation |
+| **Radio** | HF trace layer, WSPR arcs, D-RAP absorption map, Ebro SAO profile, legend + timeline |
+| **Space weather** | Kp/Dst/F10.7/Ap/SSN, GOES X-ray, solar-wind arrows, aurora oval, AE electrojets, Dst ring, grey line, CME shock front |
+| **Bonus extras (not ionosphere)** | Magnetopause + IGRF field lines, solar-wind river, Van Allen belts, West Ford 1963 ring, satellites (TLE), Parker spiral panel, Voyager 1/2 panel, LASCO C2 + D-RAP window, storm sprites + whistlers |
 
 ## Features
 
@@ -26,7 +43,8 @@ auroral oval and more — all switchable, with a time-travel replay mode.
   "breathes" with Kp (storm swell), plus a nested outer shell with its own
   opacity/colormap controls.
 - Reference altitude rings E/F1/F2 (E fixed, F1/F2 follow measured hmF2).
-  Cinema mode (auto-rotate, `C`) and full UI hide (`H`).
+  Cinema mode (auto-rotate, `C`), guided tour in English or Spanish (`T`) and
+  full UI hide (`H`).
 
 **Ionosphere layers** (spherical color shell, 12 variables)
 - **TEC** (TECU, NOAA GloTEC, 10-min cadence) with session replay + history preload.
@@ -49,6 +67,9 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 - **F2 peak shell**: floats at the real measured hmF2 per column, colored by
   peak log-density (derived from the volume, always consistent with it).
 - **Model TEC**: TEC integrated from the volume (compare vs measured GloTEC).
+- **HF trace layer** (`Windows > Circuit`): the HF ray path for the selected
+  frequency drawn as a camera-facing ribbon (green = hop open, amber =
+  marginal, red = closed) with a pulse travelling along the arc.
 
 **Stations & radio**
 - GIRO points colored by metric, hover tooltips with foF2 sparkline (~2 h),
@@ -61,88 +82,111 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 - Kp/Dst/F10.7/Ap/SSN (all live NOAA SWPC, per-field mock fallback), GOES
   X-ray flux/class for flares, solar-wind arrows colored by speed, Bz and
   density (web ramp) + 24 h plots, Carrington rotation + sun disk.
-- **Geospace overlays (ported from the web demo)**: live **Dst ring** whose
-  radius closes with the storm (true 3.5–6 R_E, compressed on screen to
-  1.25–1.80 R_E so it stays visible), **electrojet loops** at ±67° colored by
-  AE, and a **±7.5° grey-line ribbon** around the live terminator. All off by
-  default and persisted in `settings.cfg`.
-- **Batch 2 of the same port (true R_E scale)**: **Shue-1998 magnetopause**
-  wireframe driven by the live solar wind (Bz + dynamic pressure) with
-  **IGRF-14 degree-1 dipole field lines** at L = 1.5/2.5/4.0/6.0, **Van Allen
-  belts** as two tori (inner protons L = 1.5, outer electrons
-  L = 4.2 + 0.08·Kp, drift knots west/east), and a static **West Ford 1963**
-  ring reconstruction (4096 deterministic samples, single orbital plane).
-  Off by default, persisted, with `Fit` buttons because the cavity reaches
-  6-12 R_E.
-- **Batch 3 - live data layers (each fetches its own source, while the layer
-  is visible, the Geospace panel is open, or the Provider status section is
-  expanded)**: **WSPR arcs** from the
-  wsprnet.org volunteer network (one great-circle arc per spot, coloured by
-  band, 10 min TTL, 40-arc cap); **CME shock front** from the newest
-  WSA-ENLIL simulation with an Earth arrival time (spherical cap at the
-  ENLIL half-angle, radius a declared linear compression of the transit
-  progress); **storm sprites + whistlers** from NWS Severe Thunderstorm
-  Warning polygons (sprite on the warning centroid plus the real IGRF dipole
-  duct through it). No data means nothing is drawn - there are no synthetic
-  fallbacks, and no flash counts are claimed (the GLM granules are NetCDF and
-  out of scope).
-- **Batch 4 - satellites, solar imagery and flares**: **satellite layer**
-  from the live TLE catalogue (CelesTrak active objects → SatNOGS → on-disk
-  cache, the source label says which one is drawn) with a declared
-  **visual-grade** propagation (TLE mean elements + J2 secular drift, GMST to
-  ECEF; no SGP4/SDP4, not for tracking), regime colours (LEO cyan, MEO
-  yellow, GEO magenta, HEO orange) and instantaneous orbit rings for a
-  deterministic subset (max 150); **LASCO C2** coronagraph and **NOAA SWPC
-  D-RAP** absorption map in a dedicated `Windows > Solar imagery` window (own
-  GL textures, live/cached label, age and pixel size, disk cache); **DONKI
-  FLR** flares (72 h, class C/M/X, peak time, active region) listed in the
-  Geospace panel. No data means nothing is drawn and no image is ever
-  synthetic.
-- **Batch 5 - real AE, Voyager, radiation-belt events and the Parker spiral**:
-  **AE** from the Kyoto WDC quicklook files (real auroral electrojet index,
-  used by the electrojet overlay; Kyoto publishes with a lag of days to ~3
-  weeks by design, so the adapter
-  walks back up to 35 days, keeps 24 h of minute values and declares the day
-  served; the Kp-derived proxy is only used while there is no real file);
-  **Voyager 1/2** range from JPL Horizons (172.8 AU and 144.5 AU at the last
-  check) with light time and a declared Friis link budget in a `Windows >
-  Voyager` window (`No range, no claim - no synthetic distance`);
-  **DONKI RBE** radiation-belt enhancement events (58-day window, newest
-  first) listed in the Geospace panel; **Parker spiral** in a 2D top-down
-  `Windows > Parker spiral` window: Parker 1958 geometry driven by the live
-  solar wind, sector polarity from the measured Bx GSE (declared convention:
-  +X = toward), and the last real sector crossing within 6 h - no crossing, no
-  notice. The 1 AU scale does not fit the 3D view in Earth radii, so Parker is
-  a schematic panel, not a 3D layer.
-- **Geospace panel** (`Windows > Geospace`, off by default, position and
-  size persisted): the data view for the three batch-3 layers above - WSPR
-  spots per band with mean SNR and a 60 s-sampled sparkline of the spot count,
-  the live ENLIL event (countdown, transit progress, speed, half-angle, Kp,
-  drawn front radius) plus the bulletin history, the active NWS storm cells,
-  the DONKI flare list (class-coloured, peak time, AR/location) and the DONKI
-  RBE events (time + instrument, newest first). It keeps
-  fetching while open even with the 3D layers off, and shows the adapter's own
-  note when a source is empty or offline.
+- **Aurora oval**: NOAA Ovation forecast shell at ~110 km over both poles,
+  opacity slider, expands and brightens with storms.
+- **AE electrojets**: two loops at ±67° coloured by the real Kyoto AE when the
+  quicklook file is available, otherwise by the declared Kp proxy (the label
+  says which one). See the port log below for the Kyoto lag.
+- **Dst ring**: equatorial ring whose radius closes with the storm
+  (web formula `5.5 + Dst/100`, clamped to 3.5–6 R_E), compressed on screen to
+  1.25–1.80 R_E so it stays visible at the default camera distance.
+- **Grey line**: ±7.5° ribbon around the live terminator (solar zenith
+  82.5–97.5°), the twilight band that matters for HF paths.
+- **CME shock front**: spherical cap at the ENLIL half-angle around the
+  Sun–Earth axis, scaled by the transit progress.
 
-**Time & UX**
-- Timeline: LIVE vs REPLAY (TEC frames + GIRO history scrub, loop, 0.5–8 fps);
-  union window 168 h (IRTAM [T−168,T−72] + TEC [T−72,T]) with per-layer loop
-  mode; DATA line reports staleness with delay magnitude when clamped.
-- Provider status matrix (`System > Data sources & attribution > Provider
-  status (live)`): one row per source (24: GIRO, kc2g, IRTAM, GloTEC, indices,
-  solar wind, aurora, Kp/HF, X-ray, SDO, DIAS, Ebro, ESA, NOAA stub, WSPRnet,
-  ENLIL, NWS, satellites, LASCO C2, D-RAP, DONKI flares, AE (Kyoto), Voyager,
-  DONKI RBE). State is `off` until
-  the source is actually used (so an unused
-  failover like kc2g stays off), then `ok` / `stale` (2x its nominal cadence)
-  / `degraded` (declared wait: retry or LGDC courtesy gate) / `rate-limited` /
-  `failed` (with the adapter's own error), always read from the real fetch
-  outcome - failures never overwrite the last good data or its age. The Data
-  column shows the last fetch age; Reason shows error + pending retry, with a
-  tooltip when it is clipped. Expanding the section counts as interest, so it
-  also refreshes the batch-3/4/5 sources.
-- Every variable has an English tooltip (`(?)` markers); UTC clock + subsolar
-  readout; GUI values persist to `settings.cfg` (window layout in `imgui.ini`).
+## Bonus extras (not ionosphere)
+
+Everything in this section is deliberately *outside* the ionospheric data
+contract: it is space physics, heliophysics or historical hardware. Same
+house rules though — each one starts **off**, persists in `settings.cfg`, and
+draws nothing (rather than a synthetic placeholder) when its source is
+unavailable.
+
+| Extra | What you see | Data | Scale / status |
+|---|---|---|---|
+| **Magnetopause + field lines** | Shue-1998 wireframe plus IGRF-14 degree-1 dipole lines at L = 1.5 / 2.5 / 4.0 / 6.0 | live RTSW wind (n, v, Bz) | true R_E, standoff 6–12 R_E, θ ≤ 105° |
+| **Solar-wind river** | 400 particles born dayside, pushed around the cavity, recycled at x = −28 R_E | live RTSW wind | true R_E, v×60 declared, obstacle = 0.98·r_Shue |
+| **Van Allen belts** | Two tori: inner protons L = 1.5 (silver), outer electrons L = 4.2 + 0.08·Kp (amber), drift knots west/east | Kp (NOAA) | 1–4.9 R_E, geographic equator |
+| **West Ford 1963 ring** | 4096 deterministic samples in one orbital plane (87.4° incl, 3600–3680 km) | none (static) | declared reconstruction, fixed node |
+| **Satellites (TLE)** | Live catalogue points coloured by regime + instantaneous orbit rings | CelesTrak → SatNOGS → disk cache | **visual-grade**, TLE mean elements + J2, no SGP4 |
+| **Parker spiral** | 2D top-down panel: Parker 1958 spiral with the live wind, sector polarity from Bx GSE | live RTSW speed + 25.38 d sidereal | panel only (1 AU does not fit the R_E view) |
+| **Voyager 1/2** | Range, one-way light time and a declared Friis link budget (8.42 GHz X-band, 23 W, 3.7 m / 70 m dishes) | JPL Horizons (−31 / −32) | 6 h cache; *no range, no claim* |
+| **LASCO C2 + D-RAP** | Coronagraph and absorption map in their own `Windows > Solar imagery` window | SOHO realtime JPEG, NOAA SWPC | 15 min, disk cached, live/cached label + age |
+| **Storm sprites + whistlers** | Marker on each active NWS Severe Thunderstorm Warning centroid + the real IGRF duct through it | NWS warnings | warned storms, **no flash counts claimed** |
+
+**Why the extras are honest, not decorative**
+- The magnetopause, the river and the outer belt are drawn at **true R_E
+  scale**. They do not fit a camera parked on the globe, so each toggle pulls
+  the camera back once (20 / 38 / 8 R_E) and every one of them has a `Fit`
+  button. Zoom is clamped at 45 R_E.
+- The river's `v·60` is a **declared visual exaggeration** (at 400 km/s the real
+  flow would cross 43 R_E in 11 minutes); the physics is in the Shue surface
+  that decides the deflection, and the colour uses the real speed, Bz and
+  density. The obstacle scales only `(y, z)`, which is the web behaviour, not a
+  port bug. Determinism comes from a seeded mulberry32 (the web used
+  `Math.random`).
+- The CME front compresses the ~215 R_E transit into 1.8 → 19.5 R_E (declared
+  linear compression): **position is not physical, the ETA and speed are**.
+- The West Ford ring's node is a fixed declared value — no propagation, no
+  simulated rotation, no live data.
+- Satellites use TLE mean elements + J2 secular drift (no SGP4/SDP4), so they
+  are **not for tracking**; the source label says which catalogue was drawn.
+- Voyager publishes only what Horizons returned for the row it served.
+
+## Port log — what came from the `ionosphere-web` demo
+
+The geospace overlays and the data layers below were ported from
+[`ionosphere-web`](https://github.com/valledemena/ionosphere-web)
+(`IonosphereScene.tsx`) with matching defaults, tooltips and persistence.
+Every module keeps the web behaviour and adds the same honesty rules: no
+synthetic fallback, `off` until the source is actually used.
+
+- **Batch 1 — geospace overlays**: live **Dst ring** (true 3.5–6 R_E, drawn at
+  1.25–1.80 R_E), **electrojet loops** at ±67° coloured by AE, and a
+  **±7.5° grey-line ribbon**. No network calls of their own.
+- **Batch 2 — space-weather geometry at true scale**: **Shue-1998
+  magnetopause** (r0 = [10.22 + 1.29·tanh(0.184·(Bz + 8.14))] / Dp^(1/6.6),
+  Dp = 1.6726e-6·n·v²) with **IGRF-14 degree-1 dipole field lines** (epoch
+  2025.0, 9.2° tilt), **Van Allen belts** and the static **West Ford 1963**
+  ring. Wireframe stops at θ = 105°; the night-side stretch is a declared v1
+  parameterisation, not Tsyganenko.
+- **Batch 3 — live data layers** (each fetches while its layer is visible, the
+  Geospace panel is open, or Provider status is expanded): **WSPR arcs** from
+  wsprnet.org (one great-circle arc per spot, band colour, 10 min TTL, 40-arc
+  cap); **CME shock front** from the newest WSA-ENLIL run with an Earth
+  arrival time; **storm sprites + whistlers** from NWS Severe Thunderstorm
+  Warning polygons (sprite on the centroid + the real IGRF dipole duct).
+  No data means nothing is drawn — no synthetic fallbacks, and no flash
+  counts are claimed (GLM granules are NetCDF and out of scope).
+- **Batch 4 — satellites, solar imagery and flares**: **satellite layer**
+  (CelesTrak active catalogue → SatNOGS → disk cache, label says which),
+  declared **visual-grade** propagation, regime colours (LEO cyan, MEO
+  yellow, GEO magenta, HEO orange) and instantaneous orbit rings for a
+  deterministic subset (max 150); **LASCO C2** and **NOAA SWPC D-RAP** in the
+  `Windows > Solar imagery` window (own GL textures, live/cached label, age,
+  pixel size, disk cache); **DONKI FLR** flares (72 h, class C/M/X, peak time,
+  active region) in the Geospace panel.
+- **Batch 5 — real AE, Voyager, radiation-belt events, Parker spiral**:
+  **AE** from the Kyoto WDC quicklook files (real index, used by the
+  electrojet overlay; Kyoto publishes with a lag of days to ~3 weeks by
+  design, so the adapter walks back up to 35 days, keeps 24 h of minute values
+  and declares the day served; the Kp-derived proxy is only used while there
+  is no real file); **Voyager 1/2** range from JPL Horizons (172.8 AU and
+  144.5 AU at the last check) with light time and the declared Friis budget in
+  a `Windows > Voyager` window; **DONKI RBE** events (58-day window, newest
+  first) in the Geospace panel; **Parker spiral** in a 2D `Windows > Parker
+  spiral` window driven by the live wind, sector polarity from the measured Bx
+  GSE (declared convention: +X = toward) and the last real sector crossing
+  within 6 h — no crossing, no notice. At 1 AU and 400 km/s the spiral lags
+  61.4°, so the panel is schematic by construction.
+- **Batch 5E — solar-wind river (W-4 #4)**: the 400-particle flow ported as
+  its **own layer with its own toggle**, independent from the magnetopause
+  layer and from the arrows. Birth at 18 R_E on the dayside, antisolar drift
+  at `v·60`, Shue-1998 obstacle at 98 % of the cavity radius, recycle at
+  x = −28 R_E, two additive passes (core 0.17 R_E / α 0.9, glow 0.38 R_E /
+  α 0.16) with distance attenuation, and the same colour ramp as the arrows.
+  Deterministic (`mulberry32`, fixed seed) and unit-tested (46 checks).
 
 ## Data sources
 
@@ -169,6 +213,18 @@ auroral oval and more — all switchable, with a time-travel replay mode.
 | Radiation belt enhancements | CCMC DONKI RBE (58-day window) | 30 min, disk cache |
 | Night lights | NASA Black Marble 2016 | static texture |
 
+**Model / derived layers** — these reuse the fetches above and never issue a
+request of their own:
+
+| Layer | Derived from |
+|---|---|
+| Magnetopause, solar-wind river, solar-wind arrows | RTSW wind (speed, density, Bz) |
+| Van Allen belts, storm swell | Kp from the NOAA index bundle |
+| Dst ring, electrojets, grey line | Dst / AE / solar ephemeris |
+| Parker spiral | RTSW speed + pinned 25.38 d sidereal rotation |
+| West Ford 1963 ring | static reconstruction (no data) |
+| Volume, F2-peak shell, model TEC | the station profiles already loaded |
+
 Any unreachable source degrades gracefully (per-field mock/offline badges,
 stale-data warnings). GIRO data: CC BY-NC-SA 4.0 (non-commercial).
 Please cite: Reinisch, B. W., and I. A. Galkin, Global ionospheric radio
@@ -179,11 +235,25 @@ it — we have measured 429/504 under load, which is why the kc2g failover exist
 LGDC traffic (catalog/getbest/gambit) shares one 15 s pacing gate with
 timestamped `stderr` trace lines (`[LGDC …] launch / gate-consult / result`).
 
+## Honest states
+
+- Every adapter publishes its own status. A source stays `off` until it is
+  actually used, then goes `ok` / `stale` (2× its nominal cadence) /
+  `degraded` (declared wait) / `rate-limited` / `failed` with the real error.
+- Failures never overwrite the last good data or its age; the UI says how old
+  the data is instead of pretending it is fresh.
+- Nothing is invented to fill a gap: no synthetic satellites, no made-up
+  Voyager range, no fake CME, no mock river wind, no lightning counts. When a
+  layer has nothing to draw, it draws nothing and the status line says why.
+
 ## Controls
 
 - Drag: orbit · wheel / `+`–`-`: zoom · `Esc`: quit
-- `C`: cinema mode · `H`: hide UI
+- `C`: cinema mode · `H`: hide UI · `T`: guided tour (ES/EN) · `E`: export
+  `iono-YYYYMMDD-HHMMSSZ.png`
 - Panels: Layers · Space Weather · Radio Propagation · Legend · Timeline
+- Windows: `Circuit`, `Legend`, `Altitude`, `Limb x3`, `Timeline`, `Sun`,
+  `Geospace`, `Solar imagery`, `Parker spiral`, `Voyager`
 
 ## Build (MSYS2 UCRT64)
 
@@ -196,15 +266,26 @@ cmake --build build -j
 Requires: `glfw`, `curl` (MSYS2), vendored glad/imgui/glm/stb in `libs/`.
 Textures and shaders are copied next to the binary automatically.
 
+Tests (no GPU needed): `ctest --test-dir build --output-on-failure`.
+
 ## Layout
 
 ```
 src/App.cpp          # composition, timeline, replay, all panels, persistence
-src/Data/            # one adapter per source (fetch + parse + fallback)
-src/Ionosphere/      # GridLayer, IonosondeLayer, SolarWindLayer,
-                     #   FaradayLayer, RefShells, VolumeRenderer, SliceLayer,
+src/Data/            # one adapter per source (fetch + parse + fallback), plus
+                     #   pure math: ShueMath, SolarWindRamp, ParkerMath,
+                     #   OrbitProp (TLE + J2), ProviderStatus
+src/Ionosphere/      # GridLayer, IonosondeLayer, SolarWindLayer, SolarWindRiver
+                     #   (+ SolarWindRiverSim), MagnetosphereLayer, VanAllenBelts,
+                     #   WestFordRing, GeospaceOverlays, SatellitesLayer, WsprArcs,
+                     #   CmeLayer, WhistlerLayer, HfTraceLayer, FaradayLayer,
+                     #   RefShells, VolumeRenderer, SliceLayer,
                      #   LayerProfile/DensityVolume (pure profile math)
 src/Globe/           # Earth (+night HiRes), Stars, Atmosphere, Terminator
-src/Render/  src/UI/  src/Utils/   # camera/shaders/FBO, stubs, sun math, colormaps
-shaders/  textures/  data/  docs/
+src/Render/          # camera, shaders, framebuffers (MSAA optional)
+src/UI/              # SidePanel, StationPanel, GeospacePanel, SolarImagesPanel,
+                     #   ParkerPanel, VoyagerPanel, SunPanel, TimelineBar
+src/Utils/           # sun math, IGRF, colormaps, exporter, tour, god rays
+docs/                # design notes + bonus-extras.md (this repo's extras)
+shaders/  textures/  data/
 ```
