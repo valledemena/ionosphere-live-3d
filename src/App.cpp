@@ -3332,8 +3332,17 @@ void App::fetchWorker() {
             // 1) TEC GloTEC primero (es la capa principal; asi aparece en segundos).
             //    Si falla y no hay nada todavia, mock Esa offline marcado simulated.
             {
+                static double gloLastAttemptUtc = 0.0;
+                static double gloLastOkBannerUtc = 0.0;
                 GridData g;
-                bool ok = glo.fetchTEC(epoch);
+                bool ok;
+                if (epoch - gloLastAttemptUtc < 600.0) {
+                    ok = glo.getGrid().valid;  // puerta caller: no repetir backfill cada 5 min
+                } else {
+                    ok = glo.fetchTEC(epoch);
+                    gloLastAttemptUtc = epoch;  // puerta por intento, no por exito
+                    if (ok) gloLastOkBannerUtc = epoch;
+                }
                 bool sim = false;
                 if (ok) {
                     g = glo.getGrid();
