@@ -1,5 +1,5 @@
 ﻿// =============================================================================
-// test_solar_wind_river Ã¢â‚¬â€ Lote 5 / modulo E: rio de viento solar (logica pura).
+// test_solar_wind_river - Lote 5 / modulo E: rio de viento solar (logica pura).
 //
 // Test sin GL y sin red: llama a PRODUCCION y comprueba
 //   (i)   shuemath (Shue-1998): Dp, r0 pineado, flaring, suelo de Dp y Bz sur;

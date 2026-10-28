@@ -252,7 +252,7 @@ static float sampleGridBilinear(const GridData& g, float u, float v) {
 void GridLayer::updateTexture() {
     if (grid_.width == 0 || grid_.height == 0) return;
 
-    // NormalizaciÃ³n: rango fijo si se configurÃ³, si no min/max de los datos.
+    // Normalizacion: rango fijo si se configuro, si no min/max de los datos.
     float minVal, maxVal;
     if (hasFixedRange_) {
         minVal = rangeMin_;
