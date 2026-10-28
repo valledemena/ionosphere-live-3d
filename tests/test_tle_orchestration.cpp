@@ -50,7 +50,7 @@ static void checkNear(const char* what, double got, double want, double tol = 1.
 }
 
 // Instante de referencia fijo: la puerta y la cache trabajan en epoch UTC.
-static const double T0 = 1790000000.0;
+static const double T0 = tlefixture::kCatalogEpochUtc;
 static const double kBlock = 7200.0;   // fetchgate::kBlockSec
 
 // -----------------------------------------------------------------------------
@@ -102,6 +102,10 @@ struct Mock {
             TleAdapter::HttpResult r;
             const bool isCelestrak = url.find("celestrak") != std::string::npos;
             if (isCelestrak) {
+                // C2b: la URL debe llevar FORMAT=csv (y el grupo, cuando existan
+                // amateur/stations). Esto es parte del contrato del adaptador.
+                checkBool("Celestrak pide FORMAT=csv",
+                          url.find("FORMAT=csv") != std::string::npos);
                 ++celestrakCalls;
                 if (onCelestrak) onCelestrak();
                 r.http = celestrakHttp;
