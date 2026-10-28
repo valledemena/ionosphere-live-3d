@@ -13,6 +13,19 @@ off by default, persisted, labelled with their real source, and empty rather
 than invented when the source fails. See
 [docs/bonus-extras.md](docs/bonus-extras.md) for the per-feature detail.
 
+## Companion repository
+
+This is the native half of a two-repository project:
+
+| Repository | What it is |
+|---|---|
+| **`ionosphere-live-3d`** (this one) | Native C++17 / OpenGL 4.0 desktop app. It re-implements the ported layers with their original names, defaults, scales and declared approximations. |
+| [`ionosphere-live-3d-web`](https://github.com/valledemena/ionosphere-live-3d-web) | Browser reference app (Next.js + Three.js). It is where the layers, data sources and visual language are prototyped first. |
+
+They are complementary by design, not duplicates: **the web app explores, this
+one re-implements natively.** Both draw only real data, both keep an explicit
+`off` / `degraded` / `failed` state, and neither ships a synthetic fallback.
+
 ![Screenshot](screenshot-globe.png)
 
 | ![UI + IRTAM](screenshot-irtam.png) | ![Sun + limb](screenshot-sun.png) |
@@ -139,10 +152,10 @@ unavailable.
   are **not for tracking**; the source label says which catalogue was drawn.
 - Voyager publishes only what Horizons returned for the row it served.
 
-## Port log — what came from the `ionosphere-web` demo
+## Port log — what came from the `ionosphere-live-3d-web` demo
 
 The geospace overlays and the data layers below were ported from
-[`ionosphere-web`](https://github.com/valledemena/ionosphere-web)
+[`ionosphere-live-3d-web`](https://github.com/valledemena/ionosphere-live-3d-web)
 (`IonosphereScene.tsx`) with matching defaults, tooltips and persistence.
 Every module keeps the web behaviour and adds the same honesty rules: no
 synthetic fallback, `off` until the source is actually used.
