@@ -49,11 +49,11 @@ int toInt(const std::string& v, int fallback) {
 
 }  // namespace
 
-bool save(const std::string& path, const std::string& key, const fetchgate::State& st) {
+bool save(const std::filesystem::path& path, const std::string& key,
+          const fetchgate::State& st) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path p = fs::u8path(path);
-    if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
+    if (path.has_parent_path()) fs::create_directories(path.parent_path(), ec);
     if (ec) return false;
 
     const std::string prefix = key.empty() ? std::string() : (key + ".");
@@ -64,7 +64,7 @@ bool save(const std::string& path, const std::string& key, const fetchgate::Stat
     // entero borraria la otra puerta.
     std::vector<std::string> keep;
     {
-        std::ifstream in(p, std::ios::binary);
+        std::ifstream in(path, std::ios::binary);
         std::string line;
         while (std::getline(in, line)) {
             if (line.empty() || line[0] == '#') continue;
@@ -75,7 +75,8 @@ bool save(const std::string& path, const std::string& key, const fetchgate::Stat
         }
     }
 
-    const std::string tmp = path + ".tmp";
+    fs::path tmp = path;
+    tmp += ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return false;
@@ -92,23 +93,22 @@ bool save(const std::string& path, const std::string& key, const fetchgate::Stat
         f << prefix << "retry_fails=" << st.retryFails << '\n';
         if (!f.good()) return false;
     }
-    fs::rename(fs::u8path(tmp), p, ec);
+    fs::rename(tmp, path, ec);
     if (ec) {
         // Windows no sobrescribe en rename: borrar y reintentar.
-        fs::remove(p, ec);
+        fs::remove(path, ec);
         ec.clear();
-        fs::rename(fs::u8path(tmp), p, ec);
+        fs::rename(tmp, path, ec);
         if (ec) {
-            fs::remove(fs::u8path(tmp), ec);
+            fs::remove(tmp, ec);
             return false;
         }
     }
     return true;
 }
 
-bool load(const std::string& path, const std::string& key, fetchgate::State& out) {
-    namespace fs = std::filesystem;
-    std::ifstream f(fs::u8path(path), std::ios::binary);
+bool load(const std::filesystem::path& path, const std::string& key, fetchgate::State& out) {
+    std::ifstream f(path, std::ios::binary);
     if (!f) return false;
 
     const std::string prefix = key.empty() ? std::string() : (key + ".");

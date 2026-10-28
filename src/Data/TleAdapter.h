@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -14,8 +15,8 @@
 //    2 671 704 bytes = 47 709 lineas = 15 903 objetos. Texto plano, 3 lineas
 //    por objeto: nombre, linea 1, linea 2 (TLE clasico de 69 columnas).
 //
-// 2) Cache de disco "satellites.tle" en el directorio de datos de usuario
-//    (C2a: absoluta, no relativa al CWD). Primera linea
+// 2) Cache de disco de CelesTrak, "satellites.tle" en el directorio de datos
+//    de usuario (C2a: absoluta, no relativa al CWD). Primera linea
 //    "# tle-cache v1 epoch=<segundos UTC> count=<n>" y despues el volcado TLE
 //    en el mismo formato de 3 lineas. Se sirve etiquetada como TleSource::Cache
 //    y su edad va en la nota. Admite hasta kMaxFallbackAgeSec (72 h) cuando la
@@ -29,10 +30,10 @@
 //    sin cabecera Link). Array de objetos con los campos tle0 ("0 NOMBRE"),
 //    tle1, tle2, tle_source, sat_id, norad_cat_id, updated (ISO-8601).
 //    Solo cubre satelites con emisor registrado: es un subconjunto, no el
-//    catalogo activo completo. Si responde, su resultado se guarda en la cache
-//    con el mismo formato de 3 lineas (asi el siguiente arranque no repite la
-//    peticion), pero solo se consulta cuando la cache no sirve y con su propia
-//    puerta en el sidecar.
+//    catalogo activo completo. Tiene su PROPIA cache ("satellites-satnogs.tle")
+//    y su propia puerta en el sidecar: guardar el subconjunto en la cache de
+//    CelesTrak lo haria pasar por catalogo completo durante 6 h. Orden:
+//    cache CelesTrak (<=72 h) -> cache SatNOGS (<=72 h) -> red SatNOGS.
 //
 // HONESTIDAD: solo TLEs reales parseados. Si las tres fuentes fallan el
 // snapshot queda invalido (valid == false) con el motivo en
@@ -118,12 +119,13 @@ public:
     static bool parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out);
 
     // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad
-    // contra maxAgeSec (por defecto el TTL vivo de 6 h).
-    static bool loadCache(const std::string& path, double nowUtc, TleSnapshot& out,
+    // contra maxAgeSec (por defecto el TTL vivo de 6 h). `path` es fs::path
+    // para que un perfil con caracteres no ASCII no rompa el tmp+rename.
+    static bool loadCache(const std::filesystem::path& path, double nowUtc, TleSnapshot& out,
                           double maxAgeSec = fetchgate::kLiveTtlSec);
-    static bool saveCache(const std::string& path, const TleSnapshot& snap);
+    static bool saveCache(const std::filesystem::path& path, const TleSnapshot& snap);
     // Lee solo la cabecera de la cache (epoch). 0 si no hay o no se entiende.
-    static double cacheEpoch(const std::string& path);
+    static double cacheEpoch(const std::filesystem::path& path);
 
     static const char* sourceLabel(TleSource s);
 
@@ -144,13 +146,16 @@ private:
     // SatNOGS tiene su propia puerta: un bloqueo de CelesTrak no debe
     // silenciar otro proveedor (revision C2a).
     bool fetchSatnogs(double utc, TleSnapshot& out, std::string& err);
+    // Sirve SatNOGS (cache propia o red) e instala el snapshot. Devuelve false
+    // y deja el motivo en error_ si tampoco hay nada.
+    bool serveSatnogs(double utc, const std::string& why);
 
     // Sirve cache (si la hay) y deja el motivo en status_/error_.
     bool serveCache(double utc, double maxAgeSec, const std::string& why);
     // Persiste el sidecar de una puerta (best-effort).
     void persistState(const std::string& key, const fetchgate::State& st);
-    // Edad de la cache en segundos, o -1 si no hay.
-    double cacheAgeSec(double utc) const;
+    // Edad de una cache en segundos, o -1 si no hay.
+    static double cacheAgeOf(const std::filesystem::path& path, double utc);
 
     mutable std::mutex mutex_;
     TleSnapshot latest_;
@@ -158,8 +163,9 @@ private:
     fetchgate::State gate_;        // puerta de CelesTrak (grupo active)
     fetchgate::State gateSatnogs_; // puerta de SatNOGS (proveedor distinto)
     double snapshotEpoch_ = 0.0;
-    std::string cachePath_;
-    std::string statePath_;
+    std::filesystem::path cachePath_;
+    std::filesystem::path satnogsCachePath_;   // cache PROPIA de SatNOGS
+    std::filesystem::path statePath_;
     bool dirFallback_ = false;
     unsigned long generation_ = 0;
     std::string error_;

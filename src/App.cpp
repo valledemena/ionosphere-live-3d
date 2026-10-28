@@ -5527,6 +5527,15 @@ void App::render() {
     // programado, bloqueo). No es un error: va en gris, no en rojo.
     const std::string satStatus = impl->satAdapter.getStatusNote();
     if (!satStatus.empty()) ImGui::TextDisabled("  %s", satStatus.c_str());
+    // La etiqueta dice DE DONDE vino el catalogo (celestrak/satnogs/cache); la
+    // edad se calcula aqui, sin mutar el snapshot. Pasado el TTL de 6 h se
+    // declara, aunque el origen siga siendo la descarga original.
+    if (impl->satSnap.valid && impl->satSnapTime > 0.0) {
+        const double ageH = ((double)std::time(nullptr) - impl->satSnapTime) / 3600.0;
+        if (ageH >= 6.0) {
+            ImGui::TextDisabled("  catalog is %.1f h old (refresh pending)", ageH);
+        }
+    }
 
     bool showCme = impl->cmeVisible;
     if (ImGui::Checkbox("CME front (ENLIL)", &showCme)) {

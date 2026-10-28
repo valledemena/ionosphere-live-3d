@@ -165,10 +165,11 @@ bool jsonInt(const std::string& obj, const char* key, int& out) {
 void TleAdapter::init() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    const std::string dir = paths::userDataDir();
+    const std::filesystem::path dir = paths::userDataDir();
     dirFallback_ = paths::userDataDirFallback();
-    cachePath_ = paths::join(dir, "satellites.tle");
-    statePath_ = paths::join(dir, "tle-state");
+    cachePath_ = dir / "satellites.tle";
+    satnogsCachePath_ = dir / "satellites-satnogs.tle";
+    statePath_ = dir / "tle-state";
 
     const double now = (double)std::time(nullptr);
     fetchgate::State st;
@@ -365,14 +366,16 @@ bool TleAdapter::parseSatNogsJson(const std::string& json, double nowUtc, TleSna
     return out.valid;
 }
 
-bool TleAdapter::saveCache(const std::string& path, const TleSnapshot& snap) {
+bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot& snap) {
     if (!snap.valid || snap.sats.empty()) return false;   // nunca guardar vacio
     namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path p(path);
-    if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
+    if (path.has_parent_path()) fs::create_directories(path.parent_path(), ec);
 
-    const std::string tmp = path + ".tmp";
+    // tmp hermana del destino (fs::path, no std::string): con un perfil no
+    // ASCII el nombre debe viajar intacto hasta el rename.
+    fs::path tmp = path;
+    tmp += ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return false;
@@ -388,10 +391,10 @@ bool TleAdapter::saveCache(const std::string& path, const TleSnapshot& snap) {
         }
         if (!f.good()) return false;
     }
-    fs::rename(tmp, p, ec);
+    fs::rename(tmp, path, ec);
     if (ec) {
-        fs::remove(p, ec);
-        fs::rename(tmp, p, ec);
+        fs::remove(path, ec);
+        fs::rename(tmp, path, ec);
         if (ec) {
             fs::remove(tmp, ec);
             return false;
@@ -400,7 +403,7 @@ bool TleAdapter::saveCache(const std::string& path, const TleSnapshot& snap) {
     return true;
 }
 
-double TleAdapter::cacheEpoch(const std::string& path) {
+double TleAdapter::cacheEpoch(const std::filesystem::path& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return 0.0;
     std::string header;
@@ -412,7 +415,7 @@ double TleAdapter::cacheEpoch(const std::string& path) {
     return (epoch > 0.0) ? epoch : 0.0;
 }
 
-bool TleAdapter::loadCache(const std::string& path, double nowUtc, TleSnapshot& out,
+bool TleAdapter::loadCache(const std::filesystem::path& path, double nowUtc, TleSnapshot& out,
                            double maxAgeSec) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return false;
@@ -441,8 +444,8 @@ bool TleAdapter::loadCache(const std::string& path, double nowUtc, TleSnapshot& 
     return true;
 }
 
-double TleAdapter::cacheAgeSec(double utc) const {
-    const double epoch = cacheEpoch(cachePath_);
+double TleAdapter::cacheAgeOf(const std::filesystem::path& path, double utc) {
+    const double epoch = cacheEpoch(path);
     if (!(epoch > 0.0)) return -1.0;
     const double age = utc - epoch;
     // Reloj adelantado (o cache "del futuro"): tratarla como fresca, nunca
@@ -458,8 +461,9 @@ void TleAdapter::persistState(const std::string& key, const fetchgate::State& st
 bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why) {
     // Camino rapido: si el snapshot instalado YA es esta misma cache, no hay
     // que releer ni parsear 16k filas. Se compara solo el epoch (con
-    // tolerancia de 0.5 s: la cabecera guarda %.1f) y no la fuente, porque
-    // tras un fetch vivo del mismo instante el dato es identico.
+    // tolerancia de 0.5 s: la cabecera guarda %.1f) y no la fuente: el
+    // snapshot no se muta, la etiqueta sigue diciendo de donde vino el dato y
+    // la edad se calcula en la UI.
     const double onDiskEpoch = cacheEpoch(cachePath_);
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -468,22 +472,17 @@ bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why
         if (sameEpoch) {
             // 72 h estricto: una cache que envejece en el sitio deja de valer.
             if (utc - snapshotEpoch_ <= maxAgeSec) {
-                // Si venia de un fetch vivo con el mismo epoch, el dato es
-                // identico pero ya no es "live": se reetiqueta para que el
-                // panel no siga diciendo celestrak.
-                if (latest_.source != TleSource::Cache) {
-                    latest_.source = TleSource::Cache;
-                    char buf[96];
-                    std::snprintf(buf, sizeof(buf), "cache: %d sats (edad %.1f h)",
-                                  (int)latest_.sats.size(), (utc - snapshotEpoch_) / 3600.0);
-                    latest_.note = buf;
-                    ++generation_;
-                }
                 status_ = why;
                 error_.clear();
                 return true;
             }
-            latest_.valid = false;   // caducada: se recarga o no se dibuja
+            // Caducada: se invalida y se sube la generacion, porque App solo
+            // recopia el snapshot cuando cambia la generacion. Sin esto se
+            // seguirian dibujando datos de mas de 72 h.
+            latest_.valid = false;
+            latest_.sats.clear();
+            latest_.note = "cache caducada (>72 h)";
+            ++generation_;
         }
     }
     TleSnapshot cached;
@@ -515,17 +514,32 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
         std::lock_guard<std::mutex> lk(mutex_);
         st = gateSatnogs_;
     }
-    // SatNOGS no tiene cache propia en disco, asi que solo importan las ramas
-    // de bloqueo y de backoff.
-    const fetchgate::Decision d = fetchgate::decide(utc, st, -1.0, 0.0);
-    if (d.action == fetchgate::Action::Blocked || d.action == fetchgate::Action::CacheOnly) {
+    // Cache PROPIA de SatNOGS: el subconjunto de ~1.7k satelites nunca se
+    // guarda en satellites.tle, o pasaria por catalogo completo durante 6 h.
+    const double age = cacheAgeOf(satnogsCachePath_, utc);
+    const double jitter = jitterFor(cacheEpoch(satnogsCachePath_));
+    const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
+
+    const bool networkAllowed =
+        d.action == fetchgate::Action::FetchNow ||
+        (d.action == fetchgate::Action::FetchJittered && d.fetchAtUtc <= utc);
+    if (!networkAllowed) {
+        TleSnapshot cached;
+        if (loadCache(satnogsCachePath_, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
+            out = cached;
+            err += "; satnogs: servido de cache";
+            return true;
+        }
         err += "; satnogs: " + std::string(d.reason);
         return false;
     }
 
-    // Write-ahead: si la app se cierra durante la descarga, el reinicio ya
-    // sabe que se pidio y no repite la peticion (que gastaria la ventana).
+    // Write-ahead: el intento se persiste ANTES de la descarga con un bloqueo
+    // provisional. Si la app muere a mitad, el reinicio ve el bloqueo y no
+    // repite una peticion que el servidor ya pudo contar.
     st.lastAttemptUtc = utc;
+    st.blockedUntilUtc = utc + fetchgate::kBlockSec;
+    st.lastHttp = -1;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         gateSatnogs_ = st;
@@ -555,10 +569,12 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
         st.lastCurl = res.curl;
         st.retryFails = 0;
     } else if (outcome.transport || !ok) {
+        st.blockedUntilUtc = 0.0;   // se retira el provisional
         st.retryFails = std::min(st.retryFails + 1, 6);
         st.lastHttp = (int)res.http;
         st.lastCurl = res.curl;
     } else {
+        st.blockedUntilUtc = 0.0;   // se retira el provisional
         st.retryFails = 0;
         st.lastHttp = 200;
         st.lastCurl = 0;
@@ -569,6 +585,8 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
         gateSatnogs_ = st;
     }
     persistState(kKeySatnogs, st);
+
+    if (ok) saveCache(satnogsCachePath_, out);
     return ok;
 }
 
@@ -579,29 +597,38 @@ bool TleAdapter::fetch(double utc) {
         st = gate_;
     }
 
-    const double age = cacheAgeSec(utc);
+    const double age = cacheAgeOf(cachePath_, utc);
     const double cacheEp = cacheEpoch(cachePath_);
     const double jitter = jitterFor(cacheEp);
     const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
 
+    // SatNOGS es OTRO proveedor y tiene su propia puerta: si la cache de
+    // CelesTrak no sirve, se prueba aunque CelesTrak este bloqueado.
     if (d.action == fetchgate::Action::Blocked) {
-        return serveCache(utc, fetchgate::kMaxFallbackAgeSec,
-                          std::string("celestrak: ") + d.reason);
+        const std::string why = std::string("celestrak: ") + d.reason;
+        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        return serveSatnogs(utc, why);
     }
     if (d.action == fetchgate::Action::CacheOnly) {
-        return serveCache(utc, fetchgate::kMaxFallbackAgeSec,
-                          std::string("red: ") + d.reason);
+        const std::string why = std::string("red: ") + d.reason;
+        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        return serveSatnogs(utc, why);
     }
     if (d.action == fetchgate::Action::FetchJittered && d.fetchAtUtc > utc) {
-        return serveCache(utc, fetchgate::kMaxFallbackAgeSec,
-                          std::string("red: ") + d.reason);
+        const std::string why = std::string("red: ") + d.reason;
+        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        return serveSatnogs(utc, why);
     }
 
     // --- A partir de aqui se toca la red: un unico intento por pase. ---
-    // Write-ahead: el intento se persiste ANTES de la descarga. Si la app se
-    // cierra a mitad, el reinicio no repite la peticion y no gasta la ventana
-    // de actualizacion de 2 h.
+    // Write-ahead: el intento se persiste ANTES de la descarga como bloqueo
+    // PROVISIONAL. lastAttempt solo no sirve: decide() lo ignora si
+    // retryFails == 0, asi que un cierre a mitad volvia a pedir y gastaba la
+    // ventana de 2 h. El provisional se retira al terminar (exito o fallo
+    // blando) y se sustituye por el bloqueo real si la respuesta no es 200.
     st.lastAttemptUtc = utc;
+    st.blockedUntilUtc = utc + fetchgate::kBlockSec;
+    st.lastHttp = -1;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         gate_ = st;
@@ -638,11 +665,13 @@ bool TleAdapter::fetch(double utc) {
         err += std::string(" [") + outcome.label + "]";
     } else if (outcome.transport || !ok) {
         // Transporte: no es una violacion de politica, solo un fallo blando
-        // con backoff 5 -> 60 min.
+        // con backoff 5 -> 60 min. Se retira el bloqueo provisional.
+        st.blockedUntilUtc = 0.0;
         st.retryFails = std::min(st.retryFails + 1, 6);
         st.lastHttp = (int)res.http;
         st.lastCurl = res.curl;
     } else {
+        st.blockedUntilUtc = 0.0;   // se retira el provisional
         st.retryFails = 0;
         st.lastHttp = 200;
         st.lastCurl = 0;
@@ -657,44 +686,66 @@ bool TleAdapter::fetch(double utc) {
             snap = cached;
             ok = true;
             err += "; servido de cache";
-        } else {
-            err += "; cache: sin fichero utilizable";
-            // SatNOGS es otro proveedor y tiene su propia puerta: un bloqueo
-            // de CelesTrak no lo silencia.
-            ok = fetchSatnogs(utc, snap, err);
         }
     }
 
-    if (ok && snap.source != TleSource::Cache) {
+    // El estado de la puerta de CelesTrak se guarda antes de cualquier salida.
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        gate_ = st;
+    }
+    persistState(kKeyActive, st);
+
+    if (!ok) {
+        err += "; cache: sin fichero utilizable";
+        return serveSatnogs(utc, err);
+    }
+
+    // Solo el catalogo completo de CelesTrak va a satellites.tle. El
+    // subconjunto de SatNOGS tiene su propia cache: guardarlo aqui lo haria
+    // pasar por catalogo activo durante 6 h y taparia el reintento.
+    if (snap.source == TleSource::Celestrak) {
         saveCache(cachePath_, snap);   // best-effort: fallar aqui no es fatal
     }
 
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        gate_ = st;
-        if (ok) {
-            if (snapshotEpoch_ != snap.timeUtc || !latest_.valid) ++generation_;
-            latest_ = snap;
-            snapshotEpoch_ = snap.timeUtc;
-            // Un catalogo vivo y completo no deja aviso; cache o SatNOGS si
-            // (el dato no es "live" y el panel debe poder decirlo).
-            if (snap.source == TleSource::Celestrak) {
-                error_.clear();
-                status_.clear();
-            } else {
-                error_ = err;
-                status_.clear();
-            }
+        if (snapshotEpoch_ != snap.timeUtc || !latest_.valid) ++generation_;
+        latest_ = snap;
+        snapshotEpoch_ = snap.timeUtc;
+        // Un catalogo vivo y completo no deja aviso; cache o SatNOGS si
+        // (el dato no es "live" y el panel debe poder decirlo).
+        if (snap.source == TleSource::Celestrak) {
+            error_.clear();
+            status_.clear();
         } else {
-            error_ = err;               // el snapshot anterior no se toca
+            error_ = err;
             status_.clear();
         }
     }
-    persistState(kKeyActive, st);
 
-    if (!ok) {
+    printf("[Tle] %s (%s)\n", snap.note.c_str(), sourceLabel(snap.source));
+    return true;
+}
+
+bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
+    TleSnapshot snap;
+    std::string err = why;
+    if (!fetchSatnogs(utc, snap, err)) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        error_ = err;              // el snapshot de CelesTrak no se toca
+        status_.clear();
         fprintf(stderr, "[Tle] %s\n", err.c_str());
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (snapshotEpoch_ != snap.timeUtc || !latest_.valid) ++generation_;
+        latest_ = snap;
+        snapshotEpoch_ = snap.timeUtc;
+        // Catalogo parcial de otro proveedor: se dibuja, pero declarado.
+        error_ = err;
+        status_.clear();
     }
     printf("[Tle] %s (%s)\n", snap.note.c_str(), sourceLabel(snap.source));
     return true;
@@ -714,7 +765,7 @@ double TleAdapter::nextNetworkUtc(double nowUtc) const {
         std::lock_guard<std::mutex> lk(mutex_);
         st = gate_;
     }
-    const double age = cacheAgeSec(nowUtc);
+    const double age = cacheAgeOf(cachePath_, nowUtc);
     const double jitter = jitterFor(cacheEpoch(cachePath_));
     const fetchgate::Decision d = fetchgate::decide(nowUtc, st, age, jitter);
     switch (d.action) {

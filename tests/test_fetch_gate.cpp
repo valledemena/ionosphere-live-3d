@@ -7,7 +7,10 @@
 //
 // Cubre los casos que fallaron en la revision: cache joven que no debe pedir,
 // reinicio (estado persistido), bloqueo tras no-200, backoff de transporte,
-// recorte de reloj y clasificacion de 3xx/403/404/429/5xx.
+// recorte de reloj, clasificacion de 3xx/403/404/429/5xx, jitter anclado al
+// cruce del TTL (con propiedad y simulacion de 80 h), 200 ilegible como
+// bloqueo, intento en vuelo persistido (write-ahead), claves por endpoint y
+// rutas con caracteres no ASCII.
 // =============================================================================
 #include "Data/FetchGate.h"
 #include "Data/FetchState.h"
@@ -431,6 +434,95 @@ int main() {
         check_bool("403: a las 2 h vuelve a permitir",
                    fetchgate::decide(now + fetchgate::kBlockSec, st, -1.0, 0.0).action ==
                        fetchgate::Action::FetchNow);
+    }
+
+    std::printf("--- C2a-17: write-ahead: intento en vuelo y reinicio ---\n");
+    {
+        // Antes de la descarga se persiste un bloqueo PROVISIONAL (2 h,
+        // lastHttp = -1). Si la app muere a mitad, el reinicio no debe repetir
+        // la peticion. Con retryFails == 0, lastAttempt solo no basta.
+        fetchgate::State st;
+        st.lastAttemptUtc = now;
+        st.blockedUntilUtc = now + fetchgate::kBlockSec;
+        st.lastHttp = -1;
+        st.retryFails = 0;
+        check_bool("en vuelo -> Blocked aunque retryFails == 0",
+                   d_now(now, st, -1.0).action == fetchgate::Action::Blocked);
+
+        const std::string path = tmpPath("inflight", 0);
+        check_bool("estado en vuelo persistido",
+                   fetchstate::save(path, "celestrak.active", st));
+        fetchgate::State restored;
+        check_bool("estado en vuelo restaurado",
+                   fetchstate::load(path, "celestrak.active", restored));
+        restored.blockedUntilUtc =
+            fetchgate::sanitizeBlockedUntil(restored.blockedUntilUtc, now + 60.0);
+        check_bool("tras reinicio sigue bloqueado",
+                   d_now(now + 60.0, restored, -1.0).action == fetchgate::Action::Blocked);
+        check_bool("el provisional caduca a las 2 h",
+                   d_now(now + fetchgate::kBlockSec + 1.0, restored, -1.0).action ==
+                       fetchgate::Action::FetchNow);
+        std::filesystem::remove(path);
+
+        // Exito: se retira el provisional y queda libre.
+        fetchgate::State ok = st;
+        ok.blockedUntilUtc = 0.0;
+        ok.lastHttp = 200;
+        ok.lastSuccessUtc = now;
+        ok.retryFails = 0;
+        check_bool("tras exito se libera (FetchNow sin cache)",
+                   d_now(now + 1.0, ok, -1.0).action == fetchgate::Action::FetchNow);
+
+        // Fallo blando: se retira el provisional y manda el backoff.
+        fetchgate::State soft = st;
+        soft.blockedUntilUtc = 0.0;
+        soft.retryFails = 1;
+        soft.lastHttp = 0;
+        check_bool("tras fallo blando -> backoff, no bloqueo de 2 h",
+                   d_now(now + 1.0, soft, -1.0).action == fetchgate::Action::CacheOnly);
+    }
+
+    std::printf("--- C2a-18: ruta de datos con caracteres no ASCII ---\n");
+    {
+        // Regresion del caso que el arreglo de rutas pretendia cubrir: si la
+        // ruta viaja como std::string UTF-8, el .tmp se crea con otro nombre y
+        // el rename falla. Con fs::path el nombre va en wchar_t en Windows.
+        namespace fs = std::filesystem;
+#if defined(_WIN32)
+        const fs::path sub = L"fetch_gate_Caf\u00e9_\u00d1andu";
+#else
+        const fs::path sub = "fetch_gate_Caf\u00e9_\u00d1andu";
+#endif
+        const fs::path dir = fs::temp_directory_path() / sub;
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        check_bool("se crea el directorio no ASCII", fs::is_directory(dir, ec));
+
+        const fs::path state = dir / "estado";
+        fetchgate::State in;
+        in.lastAttemptUtc = now - 10.0;
+        in.lastHttp = 403;
+        in.retryFails = 3;
+        check_bool("save en ruta no ASCII", fetchstate::save(state, "celestrak.active", in));
+
+        fetchgate::State out;
+        check_bool("load en ruta no ASCII", fetchstate::load(state, "celestrak.active", out));
+        check_bool("conserva last_http", out.lastHttp == 403);
+        check_near("conserva last_attempt", out.lastAttemptUtc, in.lastAttemptUtc);
+
+        // El tmp debe haber desaparecido: si el rename hubiera fallado por el
+        // nombre, seguiria ahi y el estado no se habria persistido.
+        fs::path leftover = state;
+        leftover += ".tmp";
+        check_bool("el .tmp no queda huerfano", !fs::exists(leftover));
+
+#if defined(_WIN32)
+        const std::wstring native = state.native();
+        check_bool("la ruta de prueba no es ASCII",
+                   native.find(L'\u00e9') != std::wstring::npos);
+#endif
+        fs::remove_all(dir, ec);
     }
 
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);

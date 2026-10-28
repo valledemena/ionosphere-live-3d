@@ -242,6 +242,28 @@ int main() {
                   !TleAdapter::saveCache(path, emptySnap));
         std::error_code ec;
         std::filesystem::remove(path, ec);
+
+        // C2a: la cache viaja como fs::path, no como std::string. Con un
+        // perfil no ASCII, un .tmp creado desde un string UTF-8 no es hermano
+        // del destino y el rename falla en silencio.
+#if defined(_WIN32)
+        const std::filesystem::path sub = L"tle_cache_Caf\u00e9_\u00d1";
+#else
+        const std::filesystem::path sub = "tle_cache_Caf\u00e9_\u00d1";
+#endif
+        const std::filesystem::path dir = std::filesystem::temp_directory_path() / sub;
+        std::filesystem::remove_all(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        const std::filesystem::path tildePath = dir / "satellites.tle";
+        checkBool("38: saveCache en ruta no ASCII", TleAdapter::saveCache(tildePath, snap));
+        TleSnapshot fromTilde;
+        checkBool("39: loadCache relee la cache de una ruta no ASCII",
+                  TleAdapter::loadCache(tildePath, now + 60.0, fromTilde) &&
+                      fromTilde.valid && fromTilde.sats.size() == 2);
+        std::filesystem::path leftover = tildePath;
+        leftover += ".tmp";
+        checkBool("40: el .tmp no queda huerfano", !std::filesystem::exists(leftover));
+        std::filesystem::remove_all(dir, ec);
     }
 
     std::printf("[test_orbit_prop] %d OK, %d FAIL\n", g_ok, g_fail);

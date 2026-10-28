@@ -6,55 +6,46 @@
 #include <filesystem>
 #include <string>
 
-#if defined(_WIN32)
-#include <windows.h>
-#endif
-
 namespace paths {
 namespace {
 
+namespace fs = std::filesystem;
+
 bool g_fallback = false;
 
-std::string envOr(const char* name, const char* fallback) {
-    const char* v = std::getenv(name);
-    return (v != nullptr && v[0] != '\0') ? std::string(v) : std::string(fallback);
-}
-
 #if defined(_WIN32)
-// LOCALAPPDATA viene en CP_ACP (no UTF-8). std::filesystem de libstdc++ espera
-// UTF-8, asi que se convierte; sin esto, "C:\Users\Jose" con tilde se
-// corrompe y el directorio acaba en otro sitio.
-std::string acpToUtf8(const std::string& in) {
-    if (in.empty()) return in;
-    const int n = MultiByteToWideChar(CP_ACP, 0, in.c_str(), (int)in.size(), nullptr, 0);
-    if (n <= 0) return in;
-    std::wstring w((size_t)n, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, in.c_str(), (int)in.size(), w.data(), n);
-    const int m = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), n, nullptr, 0, nullptr, nullptr);
-    if (m <= 0) return in;
-    std::string u((size_t)m, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), n, u.data(), m, nullptr, nullptr);
-    return u;
+// _wgetenv devuelve el valor en wchar_t: el nombre del perfil puede tener
+// caracteres fuera de ASCII y no pasa por ninguna conversion de codepage.
+fs::path envDir(const wchar_t* name) {
+    const wchar_t* v = _wgetenv(name);
+    if (v == nullptr || v[0] == L'\0') return fs::path();
+    return fs::path(v);
+}
+#else
+fs::path envDir(const char* name) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || v[0] == '\0') return fs::path();
+    return fs::path(v);
 }
 #endif
 
-std::string resolveBase() {
-    std::string base;
+fs::path resolveBase() {
+    fs::path base;
 #if defined(_WIN32)
-    base = acpToUtf8(envOr("LOCALAPPDATA", ""));
-    if (base.empty()) base = acpToUtf8(envOr("APPDATA", ""));
-    if (base.empty()) base = acpToUtf8(envOr("TEMP", ""));
-    if (!base.empty()) base = join(base, "IonosphereLive3D");
+    base = envDir(L"LOCALAPPDATA");
+    if (base.empty()) base = envDir(L"APPDATA");
+    if (base.empty()) base = envDir(L"TEMP");
+    if (!base.empty()) base /= L"IonosphereLive3D";
 #elif defined(__APPLE__)
-    base = envOr("HOME", "");
-    if (!base.empty()) base = join(join(join(base, "Library"), "Caches"), "ionosphere-live-3d");
+    base = envDir("HOME");
+    if (!base.empty()) base = base / "Library" / "Caches" / "ionosphere-live-3d";
 #else
-    base = envOr("XDG_CACHE_HOME", "");
-    if (base.empty()) {
-        const std::string home = envOr("HOME", "");
-        if (!home.empty()) base = join(join(home, ".cache"), "ionosphere-live-3d");
+    base = envDir("XDG_CACHE_HOME");
+    if (!base.empty()) {
+        base /= "ionosphere-live-3d";
     } else {
-        base = join(base, "ionosphere-live-3d");
+        const fs::path home = envDir("HOME");
+        if (!home.empty()) base = home / ".cache" / "ionosphere-live-3d";
     }
 #endif
     return base;
@@ -62,33 +53,25 @@ std::string resolveBase() {
 
 }  // namespace
 
-std::string join(const std::string& dir, const std::string& name) {
-    if (dir.empty()) return name;
-    const char last = dir.back();
-    if (last == '/' || last == '\\') return dir + name;
-    return dir + "/" + name;
-}
-
 bool userDataDirFallback() { return g_fallback; }
 
-std::string userDataDir() {
-    static const std::string cached = []() {
-        const std::string base = resolveBase();
+fs::path userDataDir() {
+    static const fs::path cached = []() -> fs::path {
+        const fs::path base = resolveBase();
         if (base.empty()) {
             g_fallback = true;
-            fprintf(stderr, "[Paths] sin directorio de datos de usuario: usando el CWD\n");
-            return std::string(".");
+            std::fprintf(stderr,
+                         "[Paths] sin directorio de datos de usuario: usando el CWD\n");
+            return fs::path(".");
         }
         std::error_code ec;
-        const std::filesystem::path p = std::filesystem::u8path(base);
-        std::filesystem::create_directories(p, ec);
-        if (ec || !std::filesystem::is_directory(p, ec) || ec) {
+        fs::create_directories(base, ec);
+        if (ec || !fs::is_directory(base, ec) || ec) {
             g_fallback = true;
-            fprintf(stderr,
-                    "[Paths] no se pudo crear '%s': usando el CWD (sin persistencia "
-                    "entre carpetas)\n",
-                    base.c_str());
-            return std::string(".");
+            std::fprintf(stderr,
+                         "[Paths] no se pudo crear el directorio de datos: usando el CWD "
+                         "(sin persistencia entre carpetas)\n");
+            return fs::path(".");
         }
         return base;
     }();

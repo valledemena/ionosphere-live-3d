@@ -20,7 +20,12 @@
 //
 // Modulo PURO: solo std. Texto, una clave por linea, tolerante a lineas
 // desconocidas y a valores basura (se ignoran, nunca lanzan).
+//
+// Rutas en std::filesystem::path (no std::string): el nombre del perfil puede
+// tener caracteres no ASCII y el .tmp debe ser hermano exacto del destino para
+// que el rename funcione.
 // =============================================================================
+#include <filesystem>
 #include <string>
 
 #include "Data/FetchGate.h"
@@ -29,11 +34,12 @@ namespace fetchstate {
 
 // Escribe el estado de `key`. Crea el directorio padre si falta. Devuelve
 // false si no se pudo escribir (no es fatal para el llamante).
-bool save(const std::string& path, const std::string& key, const fetchgate::State& st);
+bool save(const std::filesystem::path& path, const std::string& key,
+          const fetchgate::State& st);
 
 // Lee el estado de `key`. `key` vacio lee el formato antiguo sin prefijo
 // (migracion de una version anterior). Devuelve false si no hay ninguna clave
 // conocida para esa puerta. Los campos ausentes conservan el default.
-bool load(const std::string& path, const std::string& key, fetchgate::State& out);
+bool load(const std::filesystem::path& path, const std::string& key, fetchgate::State& out);
 
 }  // namespace fetchstate
