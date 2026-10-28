@@ -18,8 +18,10 @@ than invented when the source fails. See
 | ![UI + IRTAM](screenshot-irtam.png) | ![Sun + limb](screenshot-sun.png) |
 |---|---|
 | Full UI with honest-state badge | SDO Sun panel + limb zoom |
-| ![Replay + shells](screenshot-replay.png) | ![Night close-up](screenshot-night.png) |
-| Timeline replay with E/F1/F2 reference shells | Black Marble HiRes city lights, close-up |
+| ![Replay + shells](screenshot-replay.png) | ![Satellite orbits](screenshot-satellites.png) |
+| Timeline replay with E/F1/F2 reference shells | TLE orbit rings + geospace overlays, with the Limb x3 inset |
+| ![Volumetric density](screenshot-volume.png) | ![Night close-up](screenshot-night-closeup.png) |
+| Volumetric Ne shell + aurora over the night side | Night close-up: Black Marble city lights, volume shell and aurora |
 
 ## What's inside
 
