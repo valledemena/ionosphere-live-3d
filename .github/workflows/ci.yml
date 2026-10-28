@@ -1,0 +1,25 @@
+name: C6 — CI Ubuntu (ctest 43/43)
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  ctest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel $(nproc)
+      - name: Test (43/43 verde obligatorio)
+        run: |
+          ctest --test-dir build --output-on-failure -V
+          # Si alguno falla, la CI debe fallar inmediatamente.
+      # Verificacion final: contar que todos pasan (43 tests registrados).
+      - name: Assert 43/43
+        run: |
+          ctest --test-dir build --output-on-failure | grep -q '100% tests passed'

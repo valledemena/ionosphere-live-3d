@@ -22,6 +22,10 @@ namespace {
 
 const char* const kCelestrakUrl =
     "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv";
+const char* const kCelestrakUrlAmateur =
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=csv";
+const char* const kCelestrakUrlStations =
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=csv";
 const char* const kSatnogsUrl = "https://db.satnogs.org/api/tle/?format=json";
 const char* const kUserAgent = "IonosphereLive3D/1.0";
 
