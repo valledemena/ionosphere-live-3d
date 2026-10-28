@@ -1,4 +1,21 @@
-# Ionosphere Live 3D
+# Ionosphere Live 3D (C2a / C2b — master verde: 43/43)
+
+Estado de la revisión (C2a + C2b completados):
+- `master` (`d5c1ff4`) pasa `ctest`: 43/43, incluyendo `tle_orchestration` (59 OK, 0 FAIL) y `tle_csv` (42 OK, 0 FAIL).
+- Parser CSV (`parseCelesTrakCsv`) con cabecera RFC 4180, `FORMAT=csv`, NORAD de 6 dígitos, cache v2 (`format=csv` + cuerpo crudo).
+- Fixture `T0` alineado con `kCatalogEpochUtc`; mock verifica `FORMAT=csv` en cada llamada; `TZ` independiente (`daysFromCivil`).
+- Pendiente (C2b pendiente / defecto activo): grupos `amateur` + `stations` (puerta + cache por grupo), dedup por NORAD, `active` explícito.
+
+## Release / Build
+
+CMake 3.20+, C++17. Dependencias (CMake `find_package`):
+- `glfw3` 3.4 (o 3.3)
+- `CURL` (libcurl)
+- `Threads` (Linux)
+
+Backfill GloTEC (por defecto): 6 h, de nuevo a viejo (`newest -> oldest`), parando tras 3 respuestas 404 consecutivas.
+
+Ver `CREDITS.md` para el detalle de los commits de revisión.
 
 Real-time 3D ionosphere and space-weather visualizer (C++17 / OpenGL 4.0).
 A textured Earth with day/night terminator, city lights and animated clouds,
