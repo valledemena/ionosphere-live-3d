@@ -3,6 +3,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "Data/FetchGate.h"
 #include "Data/OrbitProp.h"
 
 // Catalogo TLE de satelites activos. Cadena de fuentes, en orden:
@@ -13,20 +14,23 @@
 //    2 671 704 bytes = 47 709 lineas = 15 903 objetos. Texto plano, 3 lineas
 //    por objeto: nombre, linea 1, linea 2 (TLE clasico de 69 columnas).
 //
-// 2) SatNOGS (fallback, vivo):
+// 2) Cache de disco "satellites.tle" en el directorio de datos de usuario
+//    (C2a: absoluta, no relativa al CWD). Primera linea
+//    "# tle-cache v1 epoch=<segundos UTC> count=<n>" y despues el volcado TLE
+//    en el mismo formato de 3 lineas. Se sirve etiquetada como TleSource::Cache
+//    y su edad va en la nota. Admite hasta kMaxFallbackAgeSec (72 h) cuando la
+//    fuente viva falla; por debajo de kLiveTtlSec (6 h) NI SE PIDE RED.
+//    El fichero se escribe con tmp + rename (nunca a medias).
+//
+// 3) SatNOGS (ultimo recurso, vivo):
 //    https://db.satnogs.org/api/tle/?format=json
 //    Verificado en vivo el 2026-10-27: HTTP 200, "application/json",
 //    537 295 bytes, 1 735 filas, SIN paginacion (Content-Length completo y
 //    sin cabecera Link). Array de objetos con los campos tle0 ("0 NOMBRE"),
 //    tle1, tle2, tle_source, sat_id, norad_cat_id, updated (ISO-8601).
 //    Solo cubre satelites con emisor registrado: es un subconjunto, no el
-//    catalogo activo completo.
-//
-// 3) Cache de disco "cache/satellites.tle" (opcional, NUNCA "live"):
-//    primera linea "# tle-cache v1 epoch=<segundos UTC> count=<n>" y despues
-//    el volcado TLE en el mismo formato de 3 lineas. Se sirve solo si es mas
-//    joven que kCacheTtlSec; la fuente se declara TleSource::Cache y la nota
-//    lo dice. El fichero se escribe con tmp + rename (nunca a medias).
+//    catalogo activo completo. No se cachea (su formato no es nuestro formato
+//    de disco) y solo se consulta si la cache no sirve.
 //
 // HONESTIDAD: solo TLEs reales parseados. Si las tres fuentes fallan el
 // snapshot queda invalido (valid == false) con el motivo en
@@ -34,9 +38,14 @@
 // posiciones. Los TLEs con checksum roto o campos ilegibles se DESCARTAN y
 // se cuentan en la nota (no se auto-corrigen). Techo de 20 000 satelites.
 //
-// CIUDADANIA: el snapshot vivo se reutiliza kLiveTtlSec (6 h, el mismo TTL
-// que la demo web); fetchAsync() durante ese plazo no vuelve a pedir a la red.
-// User-Agent propio. Timeouts 25 s (CelesTrak) y 15 s (SatNOGS).
+// CIUDADANIA (C2a): la decision de tocar red la toma fetchgate::decide con el
+// estado persistido en un sidecar (last_attempt / last_success /
+// blocked_until). Cualquier respuesta distinta de 200 bloquea 2 h (429 respeta
+// Retry-After); los errores de transporte usan backoff 5 -> 60 min. Sin
+// FOLLOWLOCATION (los 3xx son aviso de URL obsoleta, no algo que ocultar).
+// User-Agent propio (la URL de contacto entra con C1). Timeouts 25 s
+// (CelesTrak) y 15 s (SatNOGS). La cache viva se reutiliza 6 h; un reinicio
+// ya no pide de nuevo.
 //
 // La posicion NO se calcula aqui: este modulo solo entrega elementos medios
 // (orbitprop::OrbitElements). Ver OrbitProp.h para el modelo y sus limites.
@@ -65,7 +74,7 @@ class TleAdapter {
 public:
     void init();
     // Descarga + parsea en hilo detached. No-op si ya hay una en curso.
-    // Si el snapshot vivo tiene menos de kLiveTtlSec, no toca la red.
+    // Respeta la puerta de red: con cache joven no toca la red.
     void fetchAsync(double utc);
     bool isFetching() const { return fetching_; }
 
@@ -78,7 +87,18 @@ public:
     // Copia bajo mutex: el texto lo escribe el hilo de fetch, asi que devolver
     // una referencia seria una carrera al leerla desde el hilo principal.
     std::string getErrorMessage() const;
-    double getLastFetchTime() const { return lastFetchUtc_; }
+
+    // Epoch del snapshot instalado (cambia cuando cambia el catalogo, venga de
+    // red o de cache). Es lo que usa el hilo de UI para saber si recopiarlo.
+    double getLastFetchTime() const;
+
+    // Estado de la puerta (diagnostico y panel de proveedores).
+    double getLastAttemptUtc() const;
+    double getBlockedUntilUtc() const;
+
+    // Cuando toca volver a pedir, segun el estado actual y la cache. Lo usa el
+    // scheduler de App para no despertar al adaptador hasta que sirva de algo.
+    double nextNetworkUtc(double nowUtc) const;
 
     // Sube en cada snapshot valido instalado (cambio de catalogo).
     unsigned long getGeneration() const;
@@ -89,21 +109,47 @@ public:
     static bool parseTleCatalog(const std::string& text, double nowUtc, TleSnapshot& out);
     static bool parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out);
 
-    // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad.
-    static bool loadCache(const std::string& path, double nowUtc, TleSnapshot& out);
+    // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad
+    // contra maxAgeSec (por defecto el TTL vivo de 6 h).
+    static bool loadCache(const std::string& path, double nowUtc, TleSnapshot& out,
+                          double maxAgeSec = fetchgate::kLiveTtlSec);
     static bool saveCache(const std::string& path, const TleSnapshot& snap);
+    // Lee solo la cabecera de la cache (epoch). 0 si no hay o no se entiende.
+    static double cacheEpoch(const std::string& path);
 
     static const char* sourceLabel(TleSource s);
 
 private:
+    // Info de una respuesta HTTP; la puerta decide con ella.
+    struct HttpResult {
+        bool ok = false;          // 200 con cuerpo no vacio
+        long http = 0;
+        int curl = 0;
+        double retryAfter = 0.0;
+        std::string err;
+    };
+
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
-    bool httpGet(const char* url, long timeoutSec, std::string& body, std::string& err);
+    static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
+    HttpResult httpGet(const char* url, long timeoutSec, std::string& body);
     bool fetch(double utc);
+
+    // Instala un snapshot y refresca el epoch que ve la UI.
+    void installLocked(const TleSnapshot& snap);
+    // Sirve cache (si la hay) y deja el motivo en error_.
+    bool serveCache(double utc, double maxAgeSec, const std::string& why);
+    // Persiste el sidecar de la puerta (best-effort).
+    void persistState(const fetchgate::State& st);
+    // Edad de la cache en segundos, o -1 si no hay.
+    double cacheAgeSec(double utc) const;
 
     mutable std::mutex mutex_;
     TleSnapshot latest_;
     std::atomic<bool> fetching_{false};
-    double lastFetchUtc_ = 0.0;
+    fetchgate::State gate_;
+    double snapshotEpoch_ = 0.0;
+    std::string cachePath_;
+    std::string statePath_;
     unsigned long generation_ = 0;
     std::string error_;
 };

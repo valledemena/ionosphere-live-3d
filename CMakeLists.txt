@@ -62,6 +62,9 @@ set(SOURCES
     src/Data/FlareAdapter.cpp  # Lote 4C: fulguraciones DONKI (red, sin GL)
     src/Data/SolImageAdapter.cpp  # Lote 4B: LASCO C2 / D-RAP (red + stb decode)
     src/Data/TleAdapter.cpp  # Lote 4A: catalogo TLE CelesTrak/SatNOGS (red)
+    src/Data/FetchGate.cpp  # C2a: puerta de red (puro: cache/backoff/bloqueo)
+    src/Data/FetchState.cpp  # C2a: sidecar del estado de la puerta (puro)
+    src/Utils/Paths.cpp  # C2a: directorio de datos de usuario (absoluto)
     src/Data/OrbitProp.cpp  # Lote 4A: TLE + J2 secular + ECEF (puro)
     src/Data/ParkerMath.cpp  # Lote 5D: espiral de Parker (puro, sin GL/red)
     src/UI/ParkerPanel.cpp  # Lote 5D: ventana Parker spiral (draw list)
@@ -371,12 +374,23 @@ add_test(NAME solimage COMMAND test_solimage)
 # Lote 4A: propagacion TLE (OrbitProp) y catalogo (TleAdapter) — produccion.
 add_executable(test_orbit_prop tests/test_orbit_prop.cpp)
 target_include_directories(test_orbit_prop PRIVATE src)
-target_sources(test_orbit_prop PRIVATE src/Data/OrbitProp.cpp src/Data/TleAdapter.cpp)
+target_sources(test_orbit_prop PRIVATE
+    src/Data/OrbitProp.cpp
+    src/Data/TleAdapter.cpp
+    src/Data/FetchGate.cpp
+    src/Data/FetchState.cpp
+    src/Utils/Paths.cpp
+)
 target_link_libraries(test_orbit_prop PRIVATE CURL::libcurl)
 if(NOT WIN32)
     target_link_libraries(test_orbit_prop PRIVATE Threads::Threads)
 endif()
 add_test(NAME orbit_prop COMMAND test_orbit_prop)
+# C2a: puerta de red (fetchgate) y sidecar de estado (fetchstate) - puros.
+add_executable(test_fetch_gate tests/test_fetch_gate.cpp)
+target_include_directories(test_fetch_gate PRIVATE src)
+target_sources(test_fetch_gate PRIVATE src/Data/FetchGate.cpp src/Data/FetchState.cpp)
+add_test(NAME fetch_gate COMMAND test_fetch_gate)
 # Lote 5D: espiral de Parker — llama a PRODUCCION (ParkerMath), sin red.
 add_executable(test_parker tests/test_parker.cpp)
 target_include_directories(test_parker PRIVATE src)

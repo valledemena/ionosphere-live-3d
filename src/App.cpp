@@ -2873,14 +2873,17 @@ void App::update(float dt) {
             impl->solNextFetch = now + 900.0;
         }
     }
-    // Lote 4A: satelites TLE. Solo con la capa visible. El adaptador reutiliza
-    // el catalogo 6 h (TTL) y sirve cache si CelesTrak/SatNOGS fallan; pedir
-    // cada hora no golpea la red. getGeneration() evita copiar 16k filas por
-    // frame: solo al instalar un snapshot valido nuevo.
+    // Lote 4A: satelites TLE. Solo con la capa visible. El adaptador aplica la
+    // puerta de C2a (cache <6 h = cero red; 301/403/404/5xx = bloqueo 2 h) y
+    // sirve cache hasta 72 h si la fuente viva falla. getGeneration() evita
+    // copiar 16k filas por frame: solo al instalar un snapshot valido nuevo.
     if (impl->satVisible) {
         if (now >= impl->satNextFetch && !impl->satAdapter.isFetching()) {
             impl->satAdapter.fetchAsync(tNow);
-            impl->satNextFetch = now + 3600.0;
+            // C2a: si la puerta esta bloqueada o esperando, no despertar al
+            // adaptador cada hora para que no haga nada.
+            const double nextNet = impl->satAdapter.nextNetworkUtc(now);
+            impl->satNextFetch = std::max(now + 60.0, std::min(now + 3600.0, nextNet));
         }
         const unsigned long gen = impl->satAdapter.getGeneration();
         if (gen != impl->satGeneration) {
@@ -5501,7 +5504,7 @@ void App::render() {
     if (ImGui::Checkbox("Satellites (TLE)", &showSat)) {
         impl->satVisible = showSat;
         impl->satLayer.setVisible(showSat);
-        if (showSat) impl->satNextFetch = 0.0;   // primer fetch inmediato
+        if (showSat) impl->satNextFetch = 0.0;   // evalua la puerta ya (C2a: encender no implica pedir)
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak (active objects), fallback SatNOGS, then the on-disk cache - the source label says which one is drawn. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
     if (impl->satAdapter.isFetching()) {
