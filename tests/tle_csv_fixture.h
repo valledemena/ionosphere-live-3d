@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // =============================================================================
 // Fixture compartido del GP CSV de CelesTrak (FORMAT=csv).
 //
@@ -41,14 +41,14 @@ inline std::string csvRow(const std::string& name, int norad, const std::string&
 // test_orchestration: 25544, 90001, 90002).
 inline std::string catalogCsv() {
     return std::string(csvHeader()) +
-           csvRow("ISS (ZARYA)", 25544, "2026-10-26T14:18:26.839680") +
-           csvRow("SAT-90001", 90001, "2026-10-26T14:18:26.839680") +
-           csvRow("SAT-90002", 90002, "2026-10-26T14:18:26.839680");
+           csvRow("ISS (ZARYA)", 25544, "2026-10-25T14:18:26.839680") +
+           csvRow("SAT-90001", 90001, "2026-10-25T14:18:26.839680") +
+           csvRow("SAT-90002", 90002, "2026-10-25T14:18:26.839680");
 }
 
 // Epoch de 2026-10-26T14:18:26.839680 UTC, calculado aparte (no con el codigo
 // bajo prueba): 1792972800 + 14*3600 + 18*60 + 26.83968.
-inline constexpr double kCatalogEpochUtc = 1793024306.83968;
+inline constexpr double kCatalogEpochUtc = 1792937906.839680;
 
 // --- TLE de 3 lineas para el camino SatNOGS y para ficheros v1 --------------
 // parseTle exige 69 columnas y checksum valido, asi que las lineas se generan
@@ -76,3 +76,4 @@ inline void tleLines(int norad, std::string& l1, std::string& l2) {
 }
 
 }  // namespace tlefixture
+

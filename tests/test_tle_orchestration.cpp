@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // test_tle_orchestration - C2a: la ORQUESTACION de TleAdapter::fetch().
 //
 // Los otros tests cubren las piezas puras (decide, sidecar, cache). Aqui se
@@ -73,7 +73,7 @@ static std::string satnogsJson() {
     const int ids[2] = {25544, 90003};
     for (int k = 0; k < 2; ++k) {
         std::string l1, l2;
-        satLines(ids[k], l1, l2);
+        tlefixture::tleLines(ids[k], l1, l2);
         if (k > 0) out += ",";
         out += "{\"tle0\":\"0 SAT-" + std::to_string(ids[k]) + "\",\"tle1\":\"" + l1 +
                "\",\"tle2\":\"" + l2 + "\",\"norad_cat_id\":" + std::to_string(ids[k]) + "}";
@@ -416,3 +416,4 @@ int main() {
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
+

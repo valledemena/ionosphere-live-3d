@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // test_tle_csv - C2b: GP CSV (OMM) de CelesTrak, puro y sin red.
 //
 // Por que CSV: el TLE clasico de 5 digitos se agoto el 2026-07-11 y desde
@@ -74,8 +74,8 @@ int main() {
     {
         std::string csv = tlefixture::csvHeader();
         csv += tlefixture::csvRow("\"SAT, \"\"TEST\"\" 6DIG\"", 123456,
-                                  "2026-10-26T14:18:26.840000", "26001A");
-        csv += tlefixture::csvRow("PLANO", 99999, "2026-10-26T15:18:26.000000");
+                                  "2026-10-25T14:18:26.840000", "26001A");
+        csv += tlefixture::csvRow("PLANO", 99999, "2026-10-25T15:18:26.000000");
 
         TleSnapshot snap;
         checkBool("CSV con comillas se parsea", TleAdapter::parseCelesTrakCsv(csv, kNow, snap));
@@ -96,8 +96,8 @@ int main() {
     {
         // MEAN_MOTION 0 no es un satelite terrestre: se descarta y se cuenta.
         std::string csv = tlefixture::csvHeader();
-        csv += tlefixture::csvRow("BUENO", 25544, "2026-10-26T14:18:26.000000");
-        std::string malo = tlefixture::csvRow("MALO", 90001, "2026-10-26T14:18:26.000000");
+        csv += tlefixture::csvRow("BUENO", 25544, "2026-10-25T14:18:26.000000");
+        std::string malo = tlefixture::csvRow("MALO", 90001, "2026-10-25T14:18:26.000000");
         const size_t mmAt = malo.find(",15.49065369,");
         malo.replace(mmAt, 14, ",0.00000000,");   // MEAN_MOTION = 0
         csv += malo;
@@ -176,7 +176,7 @@ int main() {
         // Un NORAD de 6 digitos tambien sobrevive a la cache (esto es lo que un
         // TLE de 5 columnas no puede hacer).
         std::string six = tlefixture::csvHeader();
-        six += tlefixture::csvRow("SEIS", 123456, "2026-10-26T14:18:26.000000");
+        six += tlefixture::csvRow("SEIS", 123456, "2026-10-25T14:18:26.000000");
         TleSnapshot s6;
         TleAdapter::parseCelesTrakCsv(six, kNow, s6);
         TleAdapter::saveCache(cache, s6, six);
@@ -222,3 +222,6 @@ int main() {
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
+
+
+
