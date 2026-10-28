@@ -1,4 +1,4 @@
-#include "App.h"
+﻿#include "App.h"
 
 #include <glad/glad.h>
 #include <imgui.h>
@@ -177,7 +177,7 @@ struct App::Impl {
     // sigue primario escalonado; kc2g entra SOLO si lgdc falla.
     Kc2gAdapter kc2g;
     // Fusion catalogo-GIRO + kc2g del modo fallback (solo hilo de
-    // render; se reconstruye al llegar batch nuevo — kc2gMergedStamp).
+    // render; se reconstruye al llegar batch nuevo â€” kc2gMergedStamp).
     std::vector<StationSample> kc2gMerged;
     double kc2gMergedStamp = -1.0;
     // Fuente ionosferica activa (badge UI GIRO-live/kc2g-fallback/model).
@@ -321,7 +321,7 @@ struct App::Impl {
     bool colormapOverride = false;
     int manualColormap = 0;   // 0=viridis,1=inferno,2=plasma,3=turbo
 
-    // Relieve 3D estilo volumetric (imagen 1): la cáscara se deforma con el valor.
+    // Relieve 3D estilo volumetric (imagen 1): la cÃ¡scara se deforma con el valor.
     bool reliefOn = true;
     float reliefAmp = 0.025f;  // amplitud base (radio planetario = 1.0)
     bool stormSwell = true;    // amp efectiva x (1 + Kp/6): respira con el evento
@@ -339,15 +339,15 @@ struct App::Impl {
     int faradayMode = 0;       // 0=longitud por valor, 1=longitud fija + color
     float faradayScale = 1.0f;
 
-    // M8 (plan 11): capa HF multi-salto + panel «Circuit».
+    // M8 (plan 11): capa HF multi-salto + panel Â«CircuitÂ».
     HFTraceLayer hfTrace;
     bool hfTraceVisible = false;   // toggle capa, off por defecto (plan 11.4, persist)
     float hfFreqMHz = 14.0f;       // slider 1-30 MHz (persist; TX/RX no - sello P6)
     std::string hfTxCode;          // "" = sigue al pin; si tampoco, DB049 (default demo)
     std::string hfRxCode;          // "" = EG931 (default demo)
-    bool hfPickRx = false;         // «Pick RX...» activo (consume el click, no toca el pin)
+    bool hfPickRx = false;         // Â«Pick RX...Â» activo (consume el click, no toca el pin)
     bool hfCircuitDirty = true;    // freq/TX/RX cambiados -> rebuild al proximo update
-    bool hfPanelOpen = false;      // panel «Circuit» desplegado (alimenta el update)
+    bool hfPanelOpen = false;      // panel Â«CircuitÂ» desplegado (alimenta el update)
     long long hfGridStamp = 0;     // identidad de los grids cacheados del circuito
     GridData hfFoF2Grid, hfHmF2Grid, hfLufGrid;   // caches (giroInterpGrid x2 + LUF M7)
 
@@ -377,7 +377,7 @@ struct App::Impl {
     double replayEpoch = -1.0;   // epoch continuo UTC (s)
     // M-irtam-replay-031 (ruling toggle) + Opcion B: bucle por capa
     // (false = union 168 h, defecto R2-023). NO se persiste en settings
-    // (lección partición).
+    // (lecciÃ³n particiÃ³n).
     bool replayLayerLoop = false;
     // Muestra IRTAM = BRACKET entregado por el worker (M-irtam-replay-028):
     // endpoints para lerp en render por cursor; pairKind 0 = F/H, 1 = B0B1.
@@ -390,7 +390,7 @@ struct App::Impl {
         bool clamped = false;
     };
     IrtamReplaySample irtamSample_;
-    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueño del
+    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueÃ±o del
     // muestreo; el render solo consume la ultima muestra lista (handoff
     // corto). Peticion idempotente {par, slot, epoch}; en miss se sigue
     // pintando la muestra anterior (stale autodeclarado por el badge).
@@ -505,7 +505,7 @@ struct App::Impl {
     // Slice QTH-DX: A = pineada, B = hover.
     SliceLayer sliceLayer;
     bool sliceOn = false;
-    int sliceSrc = 0;   // 0 = pin+hover, 1 = manual A/B, 2 = punto fijo ±2°
+    int sliceSrc = 0;   // 0 = pin+hover, 1 = manual A/B, 2 = punto fijo Â±2Â°
     float sliceLatA = 40.0f, sliceLonA = -4.0f;    // manual A / centro punto
     float sliceLatB = 40.0f, sliceLonB = -100.0f;  // manual B
     std::string sliceA, sliceB;
@@ -722,7 +722,7 @@ static void HelpMarker(const char* text) {
 // Interpola LUF/FOT/Spread-F/MUF (Fase 5, via RadioPropagationAdapter) a una
 // rejilla 72x72 con el mismo layout que GridLayer::updateFromGrid.
 // var: 0=LUF, 1=FOT, 2=Spread-F, 3=MUF. kpProxy modula Spread-F; xrayFlux
-// alimenta el termino SID del LUF (M7, plan 10 — Sauer-Wilkinson).
+// alimenta el termino SID del LUF (M7, plan 10 â€” Sauer-Wilkinson).
 static GridData radioInterpGrid(const std::vector<StationSample>& samples, int var, int w, int h,
                                 double utc, float kpProxy, float xrayFlux) {
     const int W = w, H = h;
@@ -781,7 +781,7 @@ static GridData radioInterpGrid(const std::vector<StationSample>& samples, int v
 }
 
 // Interpola perfiles de capa (IDW, patron/radio/peso como giroInterpGrid;
-// M5: la distancia pasa a gran circulo — el grid 2D conserva la plana,
+// M5: la distancia pasa a gran circulo â€” el grid 2D conserva la plana,
 // fuera del 'Archivos' del plan 8, ver P6 del sello M5). Fondo = mediana
 // por campo EXCEPTO foF2/hmF2, que mezclan el fondo climatologico
 // modelFoF2/modelHmF2 por cercania (plan 8.2/8.3).
@@ -848,7 +848,7 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
             // M5/8.3: mezcla medicion<->modelo SOLO en foF2 y hmF2 (los
             // que gobiernan volumen y MUF). cosChi con la MISMA
             // expresion que applyDayNight / buildDensityVolume
-            // (densityDir, marco del motor — P1 corregido por MUSE).
+            // (densityDir, marco del motor â€” P1 corregido por MUSE).
             double wG = smoothstep(55.0, 25.0, nearDeg);
             glm::vec3 nrm = densityDir(latG, lonG);
             double cosChi = (double)(nrm.x * sunDir.x + nrm.y * sunDir.y + nrm.z * sunDir.z);
@@ -897,7 +897,7 @@ static GridData blendGrids(const GridData& a, const GridData& b, double f) {
 }
 
 // M-irtam-replay-028: entrega del BRACKET del par (endpoints para lerp en
-// render por cursor — simetria TEC). Lee del cache (solo-lectura), no toca
+// render por cursor â€” simetria TEC). Lee del cache (solo-lectura), no toca
 // el publish. pA/pB en minusculas ("fof2"/"b0"...). Rellena el bracket
 // (GridData 45x46 + timestamp + valid en cada endpoint) + t0/t1/clamped.
 // Nunca lanza. Hilo: SOLO worker (ver sampleIrtamBracketWorker).
@@ -1003,7 +1003,7 @@ bool App::sampleIrtamBracketWorker(int pairKind, double epoch,
 
 // M-irtam-replay-028: consumo render-path (wait-free salvo handoff corto).
 // Postea peticion idempotente si el slot no esta listo; copia el BRACKET
-// (el render interpola por cursor cada frame — simetria TEC).
+// (el render interpola por cursor cada frame â€” simetria TEC).
 bool App::consumeIrtamBracket(int pairKind, IrtamBracketView& out) {
     if (!impl->replayMode || impl->replayEpoch <= 0.0) return false;
     const long long slot = (long long)std::floor(impl->replayEpoch / 900.0);
@@ -1050,10 +1050,10 @@ static GridData lerpBracketGrid(const std::vector<float>& v0,
     return g;
 }
 
-// M0.1: resize diferido. El callback solo encola el tamaño pedido (puede
+// M0.1: resize diferido. El callback solo encola el tamaÃ±o pedido (puede
 // dispararse dentro de glfwPollEvents en mitad de un frame); el bucle de
 // frames recrea los FBOs con el contexto actual. Los callbacks corren en el
-// hilo principal, pero los atómicos dejan la intención explícita.
+// hilo principal, pero los atÃ³micos dejan la intenciÃ³n explÃ­cita.
 static std::atomic<int> g_pendingResizeW{0};
 static std::atomic<int> g_pendingResizeH{0};
 
@@ -1193,7 +1193,7 @@ bool App::init(int width, int height, const char* title) {
     if (!impl->atmosphereShader.load("shaders/atmosphere.vert", "shaders/atmosphere.frag")) {
         // M6 (P7, patron M1): ESPEJO de shaders/atmosphere.{vert,frag}.
         // m6_edits.py genera estas cadenas DESDE los ficheros despues de
-        // escribirlos — sync por construccion, no copia a mano.
+        // escribirlos â€” sync por construccion, no copia a mano.
         impl->atmosphereShader.loadFromSource(
             "#version 400 core\n"
             "layout(location=0) in vec3 aPos;\n"
@@ -1212,13 +1212,13 @@ bool App::init(int width, int height, const char* title) {
             "#version 400 core\n"
             "// M6 (plan 9.1): single scattering Rayleigh/Mie con sombra dura del\n"
             "// planeta. REEMPLAZO TOTAL de la cascara Fresnel pow(3) (dos colores\n"
-            "// constantes por sunAlign, sin profundidad optica) — aceptacion 6: es\n"
+            "// constantes por sunAlign, sin profundidad optica) â€” aceptacion 6: es\n"
             "// reemplazo, no adicion. El fallback loadFromSource de App.cpp es ESPEJO\n"
             "// de este fichero (patron M1): m6_edits.py genera ambas cadenas desde el\n"
             "// mismo contenido (sync por construccion, no copia a mano).\n"
             "// Unidades normalizadas a radio terrestre = 1.0 (constantes del plan 9.1,\n"
             "// sin convertir).\n"
-            "in vec3 vWorldPos;   // P1: mundo POST-escala — rd exacto\n"
+            "in vec3 vWorldPos;   // P1: mundo POST-escala â€” rd exacto\n"
             "\n"
             "uniform vec3 u_sunDir;\n"
             "uniform vec3 u_cameraPos;\n"
@@ -1228,7 +1228,7 @@ bool App::init(int width, int height, const char* title) {
             "\n"
             "out vec4 fragColor;\n"
             "\n"
-            "// Constantes (UNIDADES R_tierra — no convertir). CRUZADAS con\n"
+            "// Constantes (UNIDADES R_tierra â€” no convertir). CRUZADAS con\n"
             "// Atmosphere.cpp (bake de la LUT) y earth.frag (aerial perspective):\n"
             "// mantener las tres copias sincronizadas.\n"
             "const float PLANET_R = 1.0;\n"
@@ -1241,8 +1241,8 @@ bool App::init(int width, int height, const char* title) {
             "\n"
             "const float PI = 3.14159265358979;\n"
             "\n"
-            "// P1: AMBOS radicales del rayo-esfera (el plan 9.1 daba el near — t de\n"
-            "// entrada; el far — t de salida de la atmosfera — es el que la marcha\n"
+            "// P1: AMBOS radicales del rayo-esfera (el plan 9.1 daba el near â€” t de\n"
+            "// entrada; el far â€” t de salida de la atmosfera â€” es el que la marcha\n"
             "// necesita).\n"
             "float raySphereNear(vec3 ro, vec3 rd, float r) {\n"
             "    float b = dot(ro, rd);\n"
@@ -1744,7 +1744,7 @@ bool App::init(int width, int height, const char* title) {
             }
         });
     }
-    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueño del
+    // M-irtam-replay-024 (ruling R2 PERF): worker asincrono dueÃ±o del
     // muestreo IRTAM al epoch (precedentes irtamBackfillThread P4 / sdoKick
     // M11). El render NUNCA muestrea: postea peticion idempotente y consume
     // la ultima muestra lista (handoff corto). En miss se pinta lo anterior.
@@ -1975,10 +1975,10 @@ bool App::init(int width, int height, const char* title) {
     return true;
 }
 
-// M0.1: recrear los recursos GL dependientes del tamaño. Se llama desde el
+// M0.1: recrear los recursos GL dependientes del tamaÃ±o. Se llama desde el
 // bucle de frames (resize diferido) y desde la UI de render (cambio de MSAA):
 // siempre en hilo principal con contexto actual. M1: recrea tambien los
-// targets MSAA/resolve del sceneFBO — sigue siendo el UNICO punto de recreacion.
+// targets MSAA/resolve del sceneFBO â€” sigue siendo el UNICO punto de recreacion.
 void App::recreateRenderTargets(int w, int h) {
     winW = w;
     winH = h;
@@ -2050,8 +2050,8 @@ void App::run() {
         update(deltaTime);
         const double tPh2 = glfwGetTime();
         // Ruling 194: con la ventana minimizada se suspende render/present
-        // (swapchain enferma tras oclusión; el pump, update e hilos siguen).
-        // Sleep para no girar en vacío; el watchdog sigue armado.
+        // (swapchain enferma tras oclusiÃ³n; el pump, update e hilos siguen).
+        // Sleep para no girar en vacÃ­o; el watchdog sigue armado.
         const bool iconicFrame = glfwGetWindowAttrib(window, GLFW_ICONIFIED) ? true : false;
         double tPh3 = tPh2, tPh4 = tPh2;
         if (!iconicFrame) {
@@ -2158,8 +2158,8 @@ void App::processInput() {
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
 
-    // No orbitar el globo cuando el ratón está sobre la interfaz (sliders, checkboxes),
-    // para que arrastrar un slider no gire la cámara.
+    // No orbitar el globo cuando el ratÃ³n estÃ¡ sobre la interfaz (sliders, checkboxes),
+    // para que arrastrar un slider no gire la cÃ¡mara.
     ImGuiIO& io = ImGui::GetIO();
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && !io.WantCaptureMouse) {
         float dx = (float)(xpos - lastMouseX);
@@ -2217,17 +2217,17 @@ void App::update(float dt) {
         lastIndexFetch = now;
     }
 
-    // ---- M4R-A (FASE A sellada): failover kc2g — lgdc primario escalonado,
+    // ---- M4R-A (FASE A sellada): failover kc2g â€” lgdc primario escalonado,
     // kc2g entra SOLO cuando lgdc falla (conmutacion automatica en ambos
     // sentidos; always-on moveria el riesgo de baneo al redistribuidor
-    // voluntario — fuera por sello). Evidencia NEGATIVA de fallo de lgdc:
+    // voluntario â€” fuera por sello). Evidencia NEGATIVA de fallo de lgdc:
     // ronda con >=3 intentos y 0 aciertos (429 duro en curso) o catalogo
     // caido (sin estaciones: sin ronda posible). Evidencia POSITIVA de
     // recuperacion: aciertos en la ronda Y datos. Histeresis anti-flap:
-    // una vez en fallback se sale SOLO con evidencia positiva — la
+    // una vez en fallback se sale SOLO con evidencia positiva â€” la
     // ventana breve de ronda recien reseteada (attempted<3) no cuenta
     // como recuperacion. La ronda escalonada sigue su curso en
-    // background — primaria sigue siendo primaria. Si kc2g tambien cae
+    // background â€” primaria sigue siendo primaria. Si kc2g tambien cae
     // (>30 min sin batch bueno), la red final es el modelo (M5). ----
     const bool kc2gMode = [&]() -> bool {
         GiroAdapter::GiroNetStatus gsF = impl->giro.getNetStatus();
@@ -2246,7 +2246,7 @@ void App::update(float dt) {
         else if (gsF.withData > 0 && !failing) mode = Impl::SRC_GIRO_LIVE;
         impl->ionSourceMode.store(mode);
         // Fetch del failover: 1 GET por ciclo (600 s, el ritmo GIRO) SOLO
-        // mientras se quiera failover — nunca en GIRO-live estable.
+        // mientras se quiera failover â€” nunca en GIRO-live estable.
         if (wantFailover && !impl->kc2g.isFetching() &&
             (ks.lastFetchUtc <= 0.0 || wallNow - ks.lastFetchUtc >= 600.0)) {
             impl->kc2g.fetchAsync(wallNow);
@@ -2400,7 +2400,7 @@ void App::update(float dt) {
     // transicion (enmienda MUSE al sello del scope: coherencia > suavidad).
     // El wrap del loop de replay tambien hace snap (el dato salta ahi igual).
     // M-irtam-replay-027 (opcion A del veredicto 026): el sol sigue al CURSOR
-    // (impl->replayEpoch), no al local TEC-clamped — si no, queda clavado en
+    // (impl->replayEpoch), no al local TEC-clamped â€” si no, queda clavado en
     // T-24h el 86% del bucle de 168 h. En live, wall-clock como siempre.
     double effEpoch = (impl->replayMode && impl->replayEpoch > 0.0)
                           ? impl->replayEpoch
@@ -2438,7 +2438,7 @@ void App::update(float dt) {
     // Fase 5: variables 5-7 (LUF/FOT/Spread-F) via RadioPropagationAdapter.
     // En replay, los grids derivados tambien siguen al tiempo de replay (gsAct).
     // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea en
-    // caliente — consumeIrtamBracket postea al worker y pinta lo listo.
+    // caliente â€” consumeIrtamBracket postea al worker y pinta lo listo.
     if (impl->mapVariable >= 1 && impl->mapVariable <= 4) {
         bool centered = (impl->mapVariable == 3);  // hmF2: relieve de alturas reales
         impl->tecLayer.setDisplaceCentered(centered);
@@ -2456,10 +2456,10 @@ void App::update(float dt) {
         updateMainGrid(radioInterpGrid(gsAct,
             impl->mapVariable - 5, 72, 72, epoch, kpProxy, xrFlux));
     } else if (impl->mapVariable == 8 || impl->mapVariable == 9) {
-        // M-IRTAM-F2 (P4, F2-R2): streaming honesto — sin valid no se dibuja.
+        // M-IRTAM-F2 (P4, F2-R2): streaming honesto â€” sin valid no se dibuja.
         // M-irtam-replay-A + TEC-ext 034: ventana de union (168 h) =
-        // [T-168,T-72] solo-IRTAM (muestreo lerp al epoch) · [T-72,T]
-        // solo-TEC (TEC-ext 034: ventana 72 h con backfill de precarga) ·
+        // [T-168,T-72] solo-IRTAM (muestreo lerp al epoch) Â· [T-72,T]
+        // solo-TEC (TEC-ext 034: ventana 72 h con backfill de precarga) Â·
         // solape TEC-IRTAM = borde T-72. En live: bundle fresco.
         // En replay: ultima muestra lista del worker (024: jamas en caliente).
         // M-irtam-replay-028: lerp por cursor sobre el bracket (simetria TEC).
@@ -2483,7 +2483,7 @@ void App::update(float dt) {
         // F2-B0B1-R1 Q3: streaming B0/B1 (misma honestidad; par ausente =
         // ausente). B0 con clamp-color via copia display-only.
         // M-irtam-replay-A: en replay, muestra al epoch (mismo cache P7).
-        // D2 (veredicto 018): else espejo de 8/9 — sin el, el bundle fresco
+        // D2 (veredicto 018): else espejo de 8/9 â€” sin el, el bundle fresco
         // pisaria la muestra cada frame.
         // M-irtam-replay-024: consume del worker (jamas en caliente).
         // M-irtam-replay-028: lerp por cursor sobre el bracket (simetria TEC).
@@ -2531,7 +2531,7 @@ void App::update(float dt) {
     // capa visible o panel abierto.
     // M8fix-2 (re-captura del bucket): el checkbox/persist gobiernan
     // hfTraceVisible, pero visible_ nace false y nadie llamaba setVisible
-    // — render() early-returnaba siempre (HFTraceLayer.cpp) => ribbon
+    // â€” render() early-returnaba siempre (HFTraceLayer.cpp) => ribbon
     // indibujable. Sync por frame antes del gate: arranque (settings.cfg),
     // toggle y cierre de panel cubiertos sin invarianza de escritores.
     impl->hfTrace.setVisible(impl->hfTraceVisible);
@@ -2575,7 +2575,7 @@ void App::update(float dt) {
             }
             hfIn.freqMHz = impl->hfFreqMHz;
             hfIn.heightExag = impl->explodeFactor;   // M9: el arco acompana la altura visual (Ionosphere/Explode)
-            hfIn.apexOffsetKm = impl->altKm - 300.0f;   // M9fix: apice = (h' + altKm-300)·exag — sigue al slider de capa (default 300 = M9 byte-exacto)
+            hfIn.apexOffsetKm = impl->altKm - 300.0f;   // M9fix: apice = (h' + altKm-300)Â·exag â€” sigue al slider de capa (default 300 = M9 byte-exacto)
             hfIn.gridStamp = impl->hfGridStamp;
             if (impl->hfFoF2Grid.valid && !impl->hfFoF2Grid.values.empty())
                 hfIn.foF2Grid = impl->hfFoF2Grid.values.data();
@@ -2591,7 +2591,7 @@ void App::update(float dt) {
 
     // Volumen Ne(h) + RefShells dinamicos: reconstruir cada ~5 s con las
     // muestras activas (sigue live, replay, sol y flares).
-    // Ruling 190 (b): guard de clave enumerada — con todos los inputs
+    // Ruling 190 (b): guard de clave enumerada â€” con todos los inputs
     // estaticos (replay en pausa) se salta el rebuild entero (cero stalls).
     static double lastVolBuild = -1.0;
     static VolumeBuildKey lastVolKey;
@@ -2888,7 +2888,7 @@ void App::update(float dt) {
             impl->satNextFetch = now + 60.0;
             impl->satSchedulePending = true;
         }
-        // Recálculo determinista: NO se depende de observar el flanco. Con una
+        // RecÃ¡lculo determinista: NO se depende de observar el flanco. Con una
         // cache joven el fetch puede terminar en microsegundos, antes de esta
         // lectura, y el flanco no se veria: el adaptador se despertaria cada
         // minuto (hilo + lectura de disco) sin necesidad.
@@ -3333,7 +3333,13 @@ void App::fetchWorker() {
             //    Si falla y no hay nada todavia, mock Esa offline marcado simulated.
             {
                 GridData g;
-                bool ok = glo.fetchTEC(epoch);
+                bool ok;
+                if (epoch - gloLastFetchUtc < 600.0) {
+                    ok = impl->haveTec.load();   // puerta caller: no repetir backfill cada 5 min
+                } else {
+                    ok = glo.fetchTEC(epoch);
+                    if (ok) gloLastFetchUtc = epoch;
+                }
                 bool sim = false;
                 if (ok) {
                     g = glo.getGrid();
@@ -3469,7 +3475,7 @@ void App::fetchWorker() {
                 // M7 (plan 10): el LUF global reacciona al flare X-ray. rp.fetch
                 // corre ANTES que xr.fetch() del mismo pase, asi que recibe el
                 // flujo del bundle del pase anterior (xr persiste entre pases de
-                // 300 s; stale <= 5 min, irrelevante para fulguraciones — sello).
+                // 300 s; stale <= 5 min, irrelevante para fulguraciones â€” sello).
                 float xrFlux = (xr.getLatest().valid ? xr.getLatest().flux : 0.0f);
                 rp.fetch(epoch, samples, xrFlux);
                 const bool hfOk = rp.getLatest().valid;
@@ -3644,7 +3650,7 @@ void App::consumeBundles() {
 }
 
 // Cortina vertical muestreada de lastVolume. Fuentes:
-//   0 = A pineada -> B hover (estaciones); 1 = A/B manual; 2 = punto fijo ±2°.
+//   0 = A pineada -> B hover (estaciones); 1 = A/B manual; 2 = punto fijo Â±2Â°.
 void App::rebuildSlice(bool force) {
     glm::vec3 da(0), db(0);
     std::string na, nb;
@@ -3797,7 +3803,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
     GridData fr = grid;
     fr.timestamp = ts;
     // M10: todo frame real persiste ANTES del cap (simulated/ESA excluidos).
-    // El pop expulsa el mas viejo — incluido el recien insertado si es viejo
+    // El pop expulsa el mas viejo â€” incluido el recien insertado si es viejo
     // (gaps viejos de preload): al guardar primero, su fichero existe cuando
     // el delete lo alcanza. Neto en disco 0 por frame (P1, particion 102).
     if (teccache::shouldCacheFrame(grid.valid, simulated, impl->tecCacheEnabled)) {
@@ -3819,7 +3825,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
 }
 
 // M11: subida GL de la imagen SDO (render thread, patron Earth.cpp:14-31
-// adaptado: GL_RGB8 — JPG sin alpha — LINEAR + CLAMP, sin mipmaps).
+// adaptado: GL_RGB8 â€” JPG sin alpha â€” LINEAR + CLAMP, sin mipmaps).
 void App::uploadSunTexture(const SdoImage& im) {
     const int p = im.product;
     if (p < 0 || p > 1 || im.rgb.empty() || im.w <= 0 || im.h <= 0) return;
@@ -3964,7 +3970,7 @@ void App::applyColorLayer() {    // 0 = TEC (GloTEC real). 1-4 = GIRO. 5-7 = der
     static const int VAR_AUTO_CM[12] = { 0, 2, 1, 3, 3, 2, 1, 3, 2, 3, 1, 2 };  // ... + IRTAM foF2=plasma, hmF2=turbo (espejo GIRO) + IRTAM B0=inferno, B1=plasma
 
     // M4R-A: fuente viva por modo (kc2g-fallback -> fusion cacheada;
-    // misma cache/estampado que usa update() — lambda dentro del metodo
+    // misma cache/estampado que usa update() â€” lambda dentro del metodo
     // porque App::Impl es private para funciones libres).
     const std::vector<StationSample>& gsSrc = [&]() -> const std::vector<StationSample>& {
         if (impl->ionSourceMode.load() != Impl::SRC_KC2G_FALLBACK)
@@ -4158,7 +4164,7 @@ void App::render() {
 
     // M9f (paridad demo): el ribbon HF se dibuja AQUI (pase de escena,
     // antes del resolve) para que alimente el bloom como el TubeGeometry
-    // de la demo — en overlays post-bloom jamas lo hacia. Estado propio
+    // de la demo â€” en overlays post-bloom jamas lo hacia. Estado propio
     // (el bloque fija el suyo despues); depth test de escena intacto.
     if (impl->hfTraceVisible) {
         glEnable(GL_BLEND);
@@ -4225,8 +4231,8 @@ void App::render() {
         glDrawArrays(GL_TRIANGLES, 0, 6);
         impl->bloomFBO[1].unbind();
 
-        // Restaurar el viewport a resolución completa: unbind() no lo restaura y el
-        // composite/ImGui se dibujarían a mitad de resolución (globo de otro tamaño + borroso).
+        // Restaurar el viewport a resoluciÃ³n completa: unbind() no lo restaura y el
+        // composite/ImGui se dibujarÃ­an a mitad de resoluciÃ³n (globo de otro tamaÃ±o + borroso).
         glViewport(0, 0, winW, winH);
 
         glEnable(GL_DEPTH_TEST);
@@ -4269,7 +4275,7 @@ void App::render() {
         if (impl->showAtmosphere) {
             // M6 (P3, plan 9.1): escala = ATM_R del shader. El literal 1.0255f va
             // CRUZADO con la constante ATM_R de shaders/atmosphere.frag y con el
-            // bake de la LUT en Atmosphere.cpp — mantener los tres sincronizados.
+            // bake de la LUT en Atmosphere.cpp â€” mantener los tres sincronizados.
             glm::mat4 atmoModel = glm::scale(glm::mat4(1.0f), glm::vec3(1.0255f));
             impl->atmosphereShader.use();
             impl->atmosphereShader.setMat4("u_model", atmoModel);
@@ -4424,7 +4430,7 @@ void App::render() {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
-    // UI-117B: Limb en modo Chapman — muestrea sceneFBO (sin categorico);
+    // UI-117B: Limb en modo Chapman â€” muestrea sceneFBO (sin categorico);
     // con Chapman se hace blit GPU->GPU del rect ya compuesto (post-3b).
     // Gate estricto: coste solo con Limb abierto Y Chapman activo.
     // Rect 1:1 con el bloque de la ventana (uvc bottom-up, flip en UV).
@@ -4471,7 +4477,7 @@ void App::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // UI-091: barra de menus (particion 090) — System/Globe/Ionosphere/Space/Radio + Windows.
+    // UI-091: barra de menus (particion 090) â€” System/Globe/Ionosphere/Space/Radio + Windows.
     if (ImGui::BeginMainMenuBar()) {
         // Lote 3: el estado se recalcula cada frame; solo la rama que dibuja
         // "Provider status" lo pone a true. Asi cerrar el menu detiene los
@@ -4577,7 +4583,7 @@ void App::render() {
                 const int th = (int)(gs.histHours * 10.0);
                 char hb[32];
                 std::snprintf(hb, sizeof(hb), "%d.%d h", th / 10, th % 10);
-                s0.data += " · hist ";
+                s0.data += " Â· hist ";
                 s0.data += hb;
             }
             s0.error = gs.degraded > 0 ? ("backoff " + std::to_string(gs.degraded) + " st") : "";
@@ -4804,7 +4810,7 @@ void App::render() {
             ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed,
                                     140.0f);
             // Data y Reason se reparten el resto: con Data fija, el ETA del
-            // ENLIL ("arrived 1 d 18 h ago - 20 sims · 20 s") se recortaba.
+            // ENLIL ("arrived 1 d 18 h ago - 20 sims Â· 20 s") se recortaba.
             ImGui::TableSetupColumn("Data", ImGuiTableColumnFlags_WidthStretch,
                                     0.45f);
             ImGui::TableSetupColumn("Reason", ImGuiTableColumnFlags_WidthStretch,
@@ -4874,7 +4880,7 @@ void App::render() {
     if (impl->sunVisible && !sunWas) impl->sdoKick.store(true);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("SDO solar disk (HMI/AIA-304) with active regions. Downloads only while open (1 JPG/15 min).");
 
-    // (Release-prep: cartoon solar retirado — 6 manchas fijas simuladas;
+    // (Release-prep: cartoon solar retirado â€” 6 manchas fijas simuladas;
     // el dato real vive en la ventana Sun M11.)
 
     ImGui::Separator();
@@ -5008,7 +5014,7 @@ void App::render() {
     if (ImGui::SliderFloat("Layer opacity", &impl->tecOpacity, 0.0f, 2.0f)) {
         impl->tecLayer.setOpacity(impl->tecOpacity);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the main color layer (TEC, foF2, MUF, hmF2, NmF2, LUF, FOT or Spread-F — whichever is selected).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the main color layer (TEC, foF2, MUF, hmF2, NmF2, LUF, FOT or Spread-F â€” whichever is selected).");
     // ---- Relieve 3D estilo volumetric (imagen 1) ----
     if (ImGui::Checkbox("3D relief", &impl->reliefOn)) {
         applyRelief();
@@ -5086,7 +5092,7 @@ void App::render() {
     const char* sliceSrcs[] = { "Pin+Hover", "Manual A/B", "Fixed point" };
     ImGui::SetNextItemWidth(130.0f);
     ImGui::Combo("Slice src", &impl->sliceSrc, sliceSrcs, 3);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Curtain endpoints: pinned+hovered stations, manual coordinates, or a fixed ±2° curtain around one point.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Curtain endpoints: pinned+hovered stations, manual coordinates, or a fixed Â±2Â° curtain around one point.");
     if (impl->sliceOn && impl->sliceSrc >= 1) {
         ImGui::SliderFloat("A lat", &impl->sliceLatA, -90.0f, 90.0f);
         ImGui::SliderFloat("A lon", &impl->sliceLonA, -180.0f, 180.0f);
@@ -5140,7 +5146,7 @@ void App::render() {
         ImGui::Text("Range: %.2f .. %.2f", minV, maxV);
     }
     if (giroStatus.degraded > 0) {
-        // M4 (7.2): estaciones en backoff (429/fallo) — reintento proximo.
+        // M4 (7.2): estaciones en backoff (429/fallo) â€” reintento proximo.
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
             "GIRO: rate-limited, retry %.0f min", giroStatus.retryInMin);
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Some stations failed (429/timeout): their refresh interval doubles up to 30 min until success. Their last good data is kept.");
@@ -5148,7 +5154,7 @@ void App::render() {
     // M4R-A (FASE A): badge de fuente + estado y atribucion del failover.
     if (impl->ionSourceMode.load() == Impl::SRC_KC2G_FALLBACK) {
         Kc2gAdapter::Kc2gStatus ks = impl->kc2g.getStatus();
-        // FASE B (P4): edad viva al pintar — now menos el timeUtc de la
+        // FASE B (P4): edad viva al pintar â€” now menos el timeUtc de la
         // fila gridUsable mas fresca (recorre samples_ bajo lock). Misma
         // enmienda semantica que cerro M12/N3-read: la edad es del DATO
         // contra el reloj de LECTURA. El status queda como metrica de
@@ -5660,7 +5666,7 @@ void App::render() {
                 ? "Station source: kc2g failover (foF2/MUF/hmF2 measured, redistributed by prop.kc2g.com; B0/B1 fall back to IRI defaults). Click the station again or empty space to unpin."
                 : "Station source: GIRO getbest (foF2/MUF/hmF2/B0 measured, rest derived). Click the station again or empty space to unpin.");
         if (rpPinned && ImGui::SmallButton("Unpin")) impl->pinnedCode.clear();
-        // M4R-A: fila del panel en banda stale (6-24 h) — marcada, honesta.
+        // M4R-A: fila del panel en banda stale (6-24 h) â€” marcada, honesta.
         if (rpStation->stale && rpStation->valid) {
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "stale (%.1f h old)",
                 (rpEpoch - rpStation->timeUtc) / 3600.0);
@@ -5711,7 +5717,7 @@ void App::render() {
         if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("No station under the cursor. Hover a GIRO dot on the globe, or click it to pin, to see per-station values.");
     }
     // FASE B (P3): la mediana global rp.* sigue al pase de datos vivo
-    // (worker, §5); en replay se etiqueta "live" — nunca ambigua. Los
+    // (worker, Â§5); en replay se etiqueta "live" â€” nunca ambigua. Los
     // valores por estacion (pinned/hover) si siguen al replay via gsAct.
     if (!rpStation && impl->replayMode)
         ImGui::Text("MUF: %.1f MHz (live)", showMuf);
@@ -5724,7 +5730,7 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("LUF: lowest usable frequency (MHz, ITU-style with daytime D-layer absorption + flare SID term, M7). Rises by day; during X-ray flares the D layer absorbs more and the LUF jumps (see the amber fadeout notice below).");
     // M7 (plan 10, P5 sellado): aviso ambar de fadeout cuando el termino de
     // flare del circuito supera 1 MHz-equivalente (~M1+). cosChi via densityDir
-    // (theta = pi - lon, marco del motor — patron sellado M5) con el sol del
+    // (theta = pi - lon, marco del motor â€” patron sellado M5) con el sol del
     // HUD (replay-coherente, M2). Solo con estacion pinned/hovered: el plan
     // habla del circuito actual.
     if (rpStation) {
@@ -5735,7 +5741,7 @@ void App::render() {
         float cosChi = glm::dot(rd, glm::normalize(impl->sunDirection));
         // Trigger con la MISMA fuente de verdad del termino flare (P4):
         // flareAbsorption. dayFactor del panel = max(0, cosChi); deriveLUF usa
-        // dayF lstH por dentro — caveat dayF-vs-cosChi del sello (ambos
+        // dayF lstH por dentro â€” caveat dayF-vs-cosChi del sello (ambos
         // monotonos en F, trigger advisory, sin falsa precision).
         if (RadioPropagationAdapter::flareAbsorption(rpFlux, fmaxf(0.0f, cosChi)) > 1.0f) {
             float dB = RadioPropagationAdapter::dRegionAbsorptionDb(cosChi, rpFlux, rpKp);
@@ -5747,7 +5753,7 @@ void App::render() {
     // S-5: semaforo de alertas sobre bundles publicados (0 red nueva).
     // El aviso ambar M7 de arriba se MANTIENE como detalle de flare: la regla
     // X del motor lee la misma fuente (rpFlux/XraySample) y el panel lleva el
-    // estado — conectado por fuente de verdad, sin duplicar logica.
+    // estado â€” conectado por fuente de verdad, sin duplicar logica.
     {
         const alerts::Engine& ae = impl->alerts_;
         auto lvlCol = [](int l) {
@@ -5866,7 +5872,7 @@ void App::render() {
         ImGui::End();
     }
 
-    // UI-081: izca incondicional por frame (082 exigencia critica) — vivia
+    // UI-081: izca incondicional por frame (082 exigencia critica) â€” vivia
     // dentro de Layers; el flag del menu la mataria con la ventana.
     // Tooltip + hover/pin: nearest station under the cursor on the globe.
     // Click (no drag) on a station pins it; click on empty space unpins.
@@ -5893,7 +5899,7 @@ void App::render() {
                     giroFmt(sp->foE, 2).c_str(), giroFmt(sp->foEs, 2).c_str(), giroFmt(sp->fmin, 2).c_str());
                 ImGui::Text("B0 %s km  B1 %s",
                     giroFmt(sp->B0, 0).c_str(), giroFmt(sp->B1, 1).c_str());
-                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) — marca.
+                // M4R-A: fila en banda stale (kc2g 6-24 h / EG931) â€” marca.
                 if (sp->stale && sp->valid)
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
                         "stale row (>6 h; maps exclude it)");
@@ -5946,7 +5952,7 @@ void App::render() {
                 if (hitIdx >= 0) {
                     const StationPoint* sp = impl->ionosondeLayer.getSample(hitIdx);
                     if (impl->hfPickRx) {
-                        // M8 (plan 11.4): «Pick RX...» — el click fija el RX del
+                        // M8 (plan 11.4): Â«Pick RX...Â» â€” el click fija el RX del
                         // circuito (consume el click, no toca el pin).
                         if (sp) {
                             impl->hfRxCode = sp->code;
@@ -5974,7 +5980,7 @@ void App::render() {
     drawParkerPanel();  // Lote 5D: espiral de Parker (2D)
     drawVoyagerPanel();  // Lote 5B: Voyager 1/2 (JPL Horizons)
 
-    // ---- M8 (plan 11.4): panel «Circuit» (TX/RX + matriz de bandas) ----
+    // ---- M8 (plan 11.4): panel Â«CircuitÂ» (TX/RX + matriz de bandas) ----
     {
         ImGui::SetNextWindowPos(ImVec2(10, 650), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(260, 400), ImGuiCond_FirstUseEver);
@@ -6065,7 +6071,7 @@ void App::render() {
         }
         if (impl->showWinCircuit) ImGui::End();
         // Marcadores + etiquetas proyectadas TX/RX (plan 11.3: discos en
-        // espacio de pantalla — proyeccion mundo->NDC->pixel del frame).
+        // espacio de pantalla â€” proyeccion mundo->NDC->pixel del frame).
         const HFCircuitResult& hfR2 = impl->hfTrace.result();
         if (impl->hfTraceVisible && hfR2.valid) {
             auto hfMarker = [&](const char* label, double lat, double lon, const ImVec4& col) {
@@ -6440,7 +6446,7 @@ void App::render() {
                                           "data at the cursor (TEC/GIRO real "
                                           "ranges; IRTAM structural band "
                                           "[T-96,T-72]). The real span floats "
-                                          "with cadence — 72 h is the nominal "
+                                          "with cadence â€” 72 h is the nominal "
                                           "download window; frames older "
                                           "than T-72 h are inherited from "
                                           "disk, not downloaded. Titles "
@@ -6454,7 +6460,7 @@ void App::render() {
                     nowUtcR - impl->replayEpoch);
                 ImGui::TextDisabled("Zone: %s", irtamstate::zoneName(rz));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetItemTooltip("Union window zones — [T-96,T-72] IRTAM-only (sampled lerp) · [T-72,T] TEC (+ GIRO 6 h).");
+                    ImGui::SetItemTooltip("Union window zones â€” [T-96,T-72] IRTAM-only (sampled lerp) Â· [T-72,T] TEC (+ GIRO 6 h).");
             }
             // M-irtam-replay-025 (ruling R2 RELOJ): hora-dato de la capa
             // ACTIVA con rangos reales (reutiliza la recogida de arriba).
@@ -6482,7 +6488,7 @@ void App::render() {
                 }
             }
         }
-        // M4 (P5a): linea de estado GIRO en ambos modos — rango real de replay
+        // M4 (P5a): linea de estado GIRO en ambos modos â€” rango real de replay
         // de estaciones y aviso de cortesia (rate-limit con reintento).
         // M4R-A (FASE A): la linea ES el badge de fuente (GIRO-live /
         // kc2g-fallback / model); en fallback resume el estado kc2g.
@@ -6616,3 +6622,4 @@ void App::shutdown() {
     delete impl;
     impl = nullptr;
 }
+
