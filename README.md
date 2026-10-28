@@ -67,6 +67,9 @@ than invented when the source fails. See
 - **F2 peak shell**: floats at the real measured hmF2 per column, colored by
   peak log-density (derived from the volume, always consistent with it).
 - **Model TEC**: TEC integrated from the volume (compare vs measured GloTEC).
+- **Display helpers**: iso-contour bands, 3D labels with leader lines, the
+  limb-zoom inset (`Windows > Limb x3`) and an exploded view (×1–×5) that
+  separates the shells without touching the data.
 - **HF trace layer** (`Windows > Circuit`): the HF ray path for the selected
   frequency drawn as a camera-facing ribbon (green = hop open, amber =
   marginal, red = closed) with a pulse travelling along the arc.
