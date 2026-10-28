@@ -403,6 +403,42 @@ int main() {
         fs::remove_all(p.dir, ec);
     }
 
+    std::printf("--- C2a-24: cache heredada con source=satnogs no pasa por catalogo ---\n");
+    {
+        Paths p = makePaths("F");
+        // Los builds anteriores a c76d6a5 guardaban el subconjunto de SatNOGS
+        // en satellites.tle. Si ese fichero sobrevive a la actualizacion, no
+        // puede servir como catalogo activo ni contar como cache joven.
+        {
+            TleSnapshot subset;
+            TleAdapter::parseSatNogsJson(satnogsJson(), T0, subset);
+            checkBool("se escribe el fichero heredado (source=satnogs)",
+                      TleAdapter::saveCache(p.cache, subset));
+        }
+        checkBool("no cuenta como cache de CelesTrak (epoch 0)",
+                  TleAdapter::celestrakCacheEpoch(p.cache) == 0.0);
+        checkBool("la edad para la puerta es -1 (sin cache)",
+                  TleAdapter::celestrakCacheAge(p.cache, T0 + 60.0) < 0.0);
+        TleSnapshot ignored;
+        checkBool("loadCelestrakCache la rechaza",
+                  !TleAdapter::loadCelestrakCache(p.cache, T0 + 60.0, ignored));
+
+        Mock m;   // CelesTrak responde 200 con el catalogo completo
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        checkBool("se pide el catalogo completo en vez de servir el subconjunto",
+                  ok && m.celestrakCalls == 1 &&
+                      a.getSnapshot().source == TleSource::Celestrak);
+        checkBool("el catalogo completo trae 3 filas", a.getSnapshot().sats.size() == 3);
+        checkBool("la cache se reescribe ya sin source=satnogs",
+                  readText(p.cache).find("source=satnogs") == std::string::npos);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

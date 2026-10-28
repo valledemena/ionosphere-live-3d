@@ -161,6 +161,15 @@ public:
     // Lee solo la cabecera de la cache (epoch). 0 si no hay o no se entiende.
     static double cacheEpoch(const std::filesystem::path& path);
 
+    // Variantes para la cache de CelesTrak (satellites.tle). Rechazan una
+    // cabecera source=satnogs: ese fichero lo escribieron los builds anteriores
+    // a c76d6a5 con el subconjunto de SatNOGS y no puede pasar por catalogo
+    // activo. Con epoch 0 la puerta lo ve como "sin cache" y pide el completo.
+    static double celestrakCacheEpoch(const std::filesystem::path& path);
+    static double celestrakCacheAge(const std::filesystem::path& path, double utc);
+    static bool loadCelestrakCache(const std::filesystem::path& path, double nowUtc,
+                                   TleSnapshot& out, double maxAgeSec = fetchgate::kLiveTtlSec);
+
     static const char* sourceLabel(TleSource s);
 
 private:

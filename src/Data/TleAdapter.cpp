@@ -427,6 +427,41 @@ double TleAdapter::cacheEpoch(const std::filesystem::path& path) {
     return (epoch > 0.0) ? epoch : 0.0;
 }
 
+double TleAdapter::celestrakCacheEpoch(const std::filesystem::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return 0.0;
+    std::string header;
+    if (!std::getline(f, header)) return 0.0;
+    // Un satellites.tle con source=satnogs lo escribieron los builds anteriores
+    // a c76d6a5 (el subconjunto, con epoch = ahora). Tratarlo como "sin cache"
+    // es lo unico seguro: si contara como cache joven, la puerta no pediria el
+    // catalogo completo en 6 h y ademas se dibujaria como si lo fuera.
+    if (header.find("source=satnogs") != std::string::npos) return 0.0;
+    if (header.compare(0, 15, "# tle-cache v1 ") != 0) return 0.0;
+    const size_t ep = header.find("epoch=");
+    if (ep == std::string::npos) return 0.0;
+    const double epoch = std::atof(header.c_str() + ep + 6);
+    return (epoch > 0.0) ? epoch : 0.0;
+}
+
+double TleAdapter::celestrakCacheAge(const std::filesystem::path& path, double utc) {
+    const double epoch = celestrakCacheEpoch(path);
+    if (!(epoch > 0.0)) return -1.0;
+    const double age = utc - epoch;
+    return age < 0.0 ? 0.0 : age;   // reloj adelantado: nunca negativa
+}
+
+bool TleAdapter::loadCelestrakCache(const std::filesystem::path& path, double nowUtc,
+                                    TleSnapshot& out, double maxAgeSec) {
+    TleSnapshot snap;
+    if (!loadCache(path, nowUtc, snap, maxAgeSec)) return false;
+    // Misma razon que en celestrakCacheEpoch: el subconjunto de SatNOGS tiene
+    // su propio fichero y no puede servirse como catalogo activo completo.
+    if (snap.source == TleSource::SatNogsCache) return false;
+    out = snap;
+    return true;
+}
+
 bool TleAdapter::loadCache(const std::filesystem::path& path, double nowUtc, TleSnapshot& out,
                            double maxAgeSec) {
     std::ifstream f(path, std::ios::binary);
@@ -480,7 +515,7 @@ bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why
     // tolerancia de 0.5 s: la cabecera guarda %.1f) y no la fuente: el
     // snapshot no se muta, la etiqueta sigue diciendo de donde vino el dato y
     // la edad se calcula en la UI.
-    const double onDiskEpoch = cacheEpoch(cachePath_);
+    const double onDiskEpoch = celestrakCacheEpoch(cachePath_);
     {
         std::lock_guard<std::mutex> lk(mutex_);
         const bool sameEpoch = onDiskEpoch > 0.0 && snapshotEpoch_ > 0.0 &&
@@ -506,7 +541,7 @@ bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why
         }
     }
     TleSnapshot cached;
-    if (!loadCache(cachePath_, utc, cached, maxAgeSec)) {
+    if (!loadCelestrakCache(cachePath_, utc, cached, maxAgeSec)) {
         std::lock_guard<std::mutex> lk(mutex_);
         error_ = why + "; sin cache utilizable";
         status_.clear();
@@ -617,8 +652,8 @@ bool TleAdapter::fetch(double utc) {
         st = gate_;
     }
 
-    const double age = cacheAgeOf(cachePath_, utc);
-    const double cacheEp = cacheEpoch(cachePath_);
+    const double age = celestrakCacheAge(cachePath_, utc);
+    const double cacheEp = celestrakCacheEpoch(cachePath_);
     const double jitter = jitterFor(cacheEp);
     const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
 
@@ -702,7 +737,7 @@ bool TleAdapter::fetch(double utc) {
         // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
         // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
         TleSnapshot cached;
-        if (loadCache(cachePath_, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
+        if (loadCelestrakCache(cachePath_, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
             snap = cached;
             ok = true;
             err += "; servido de cache";
@@ -785,8 +820,8 @@ double TleAdapter::nextNetworkUtc(double nowUtc) const {
         std::lock_guard<std::mutex> lk(mutex_);
         st = gate_;
     }
-    const double age = cacheAgeOf(cachePath_, nowUtc);
-    const double jitter = jitterFor(cacheEpoch(cachePath_));
+    const double age = celestrakCacheAge(cachePath_, nowUtc);
+    const double jitter = jitterFor(celestrakCacheEpoch(cachePath_));
     const fetchgate::Decision d = fetchgate::decide(nowUtc, st, age, jitter);
     switch (d.action) {
         case fetchgate::Action::Blocked:

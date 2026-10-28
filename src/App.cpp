@@ -231,7 +231,7 @@ struct App::Impl {
     TleSnapshot satSnap;
     double satSnapTime = -1.0;
     double satNextFetch = 0.0;
-    bool satWasFetching = false;   // flanco para programar tras el fetch
+    bool satSchedulePending = false;  // hay que recalcular tras el fetch en curso
     unsigned long satGeneration = 0;
     bool satVisible = false;
     WsprArcs wsprArcs;
@@ -2881,21 +2881,23 @@ void App::update(float dt) {
     if (impl->satVisible) {
         if (now >= impl->satNextFetch && !impl->satAdapter.isFetching()) {
             impl->satAdapter.fetchAsync(tNow);
-            // Valor provisional corto: el definitivo se calcula en el flanco
-            // de bajada de isFetching(). Programarlo aqui leeria el bloqueo
-            // PROVISIONAL del write-ahead (+2 h) y convertiria el reintento de
-            // 5 min de un fallo blando en una hora.
+            // Valor provisional corto: el definitivo se calcula cuando el
+            // fetch termine. Programarlo aqui leeria el bloqueo PROVISIONAL del
+            // write-ahead (+2 h) y convertiria el reintento de 5 min de un
+            // fallo blando en una hora.
             impl->satNextFetch = now + 60.0;
+            impl->satSchedulePending = true;
         }
-        // Flanco true -> false: el fetch ya decidio, asi que nextNetworkUtc
-        // devuelve el instante real (backoff, bloqueo o TTL de la cache).
-        const bool satFetching = impl->satAdapter.isFetching();
-        if (impl->satWasFetching && !satFetching) {
+        // Recálculo determinista: NO se depende de observar el flanco. Con una
+        // cache joven el fetch puede terminar en microsegundos, antes de esta
+        // lectura, y el flanco no se veria: el adaptador se despertaria cada
+        // minuto (hilo + lectura de disco) sin necesidad.
+        if (impl->satSchedulePending && !impl->satAdapter.isFetching()) {
             const double nextNet = impl->satAdapter.nextNetworkUtc(tNow);
             const double waitSec = std::max(60.0, std::min(3600.0, nextNet - tNow));
             impl->satNextFetch = now + waitSec;
+            impl->satSchedulePending = false;
         }
-        impl->satWasFetching = satFetching;
         const unsigned long gen = impl->satAdapter.getGeneration();
         if (gen != impl->satGeneration) {
             impl->satGeneration = gen;
