@@ -8,21 +8,25 @@
 #include "Data/FetchGate.h"
 #include "Data/OrbitProp.h"
 
-// Catalogo TLE de satelites activos. Cadena de fuentes, en orden:
+// Catalogo de satelites activos. Cadena de fuentes, en orden:
 //
-// 1) CelesTrak (primaria, viva):
-//    https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle
-//    Verificado en vivo el 2026-10-27: HTTP 200, "text/plain; charset=UTF-8",
-//    2 671 704 bytes = 47 709 lineas = 15 903 objetos. Texto plano, 3 lineas
-//    por objeto: nombre, linea 1, linea 2 (TLE clasico de 69 columnas).
+// 1) CelesTrak (primaria, viva), grupo `active` por defecto:
+//    https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv
+//    Desde 2026-05-09 FORMAT vale CSV por defecto y el TLE clasico de 5
+//    digitos se agoto el 2026-07-11, asi que FORMAT=csv se pide EXPLICITO y se
+//    parsea por cabecera (GP CSV / OMM, RFC 4180). Verificado en vivo el
+//    2026-10-27: 2 671 704 bytes en FORMAT=tle = 15 903 objetos; el CSV trae
+//    las mismas filas con EPOCH ISO-8601 y admiten NORAD de 6 digitos.
 //
 // 2) Cache de disco de CelesTrak, "satellites.tle" en el directorio de datos
 //    de usuario (C2a: absoluta, no relativa al CWD). Primera linea
-//    "# tle-cache v1 epoch=<segundos UTC> count=<n>" y despues el volcado TLE
-//    en el mismo formato de 3 lineas. Se sirve etiquetada como TleSource::Cache
-//    y su edad va en la nota. Admite hasta kMaxFallbackAgeSec (72 h) cuando la
-//    fuente viva falla; por debajo de kLiveTtlSec (6 h) NI SE PIDE RED.
-//    El fichero se escribe con tmp + rename (nunca a medias).
+//    "# tle-cache v2 epoch=<segundos UTC> count=<n> source=<origen> format=<csv|tle>"
+//    y despues el CUERPO CRUDO de la respuesta (CSV tal cual se descargo). Se
+//    sirve etiquetada como TleSource::Cache y su edad va en el panel. Admite
+//    hasta kMaxFallbackAgeSec (72 h) cuando la fuente viva falla; por debajo de
+//    kLiveTtlSec (6 h) NI SE PIDE RED. El fichero se escribe con tmp + rename
+//    (nunca a medias). Los ficheros v1 de builds anteriores siguen leyendose
+//    (su cuerpo era TLE de 3 lineas).
 //
 // 3) SatNOGS (ultimo recurso, vivo):
 //    https://db.satnogs.org/api/tle/?format=json
@@ -30,17 +34,20 @@
 //    537 295 bytes, 1 735 filas, SIN paginacion (Content-Length completo y
 //    sin cabecera Link). Array de objetos con los campos tle0 ("0 NOMBRE"),
 //    tle1, tle2, tle_source, sat_id, norad_cat_id, updated (ISO-8601).
+//    SatNOGS solo publica TLE clasico, asi que aqui se sigue usando parseTle.
 //    Solo cubre satelites con emisor registrado: es un subconjunto, no el
-//    catalogo activo completo. Tiene su PROPIA cache ("satellites-satnogs.tle")
-//    y su propia puerta en el sidecar: guardar el subconjunto en la cache de
-//    CelesTrak lo haria pasar por catalogo completo durante 6 h. Orden:
-//    cache CelesTrak (<=72 h) -> cache SatNOGS (<=72 h) -> red SatNOGS.
+//    catalogo activo completo. Tiene su PROPIA cache
+//    ("satellites-satnogs.tle") y su propia puerta en el sidecar: guardar el
+//    subconjunto en la cache de CelesTrak lo haria pasar por catalogo completo
+//    durante 6 h. Orden: cache CelesTrak (<=72 h) -> cache SatNOGS (<=72 h) ->
+//    red SatNOGS.
 //
-// HONESTIDAD: solo TLEs reales parseados. Si las tres fuentes fallan el
+// HONESTIDAD: solo elementos reales parseados. Si las tres fuentes fallan el
 // snapshot queda invalido (valid == false) con el motivo en
 // getErrorMessage() y NADA se dibuja. Nunca se inventan satelites ni
-// posiciones. Los TLEs con checksum roto o campos ilegibles se DESCARTAN y
-// se cuentan en la nota (no se auto-corrigen). Techo de 20 000 satelites.
+// posiciones. Las filas con checksum roto, campos ilegibles o EPOCH invalido
+// se DESCARTAN y se cuentan en la nota (no se auto-corrigen). Techo de 20 000
+// satelites.
 //
 // CIUDADANIA (C2a): la decision de tocar red la toma fetchgate::decide con el
 // estado persistido en un sidecar (last_attempt / last_success /
@@ -68,8 +75,11 @@ enum class TleSource {
 struct TleSat {
     std::string name;
     int noradId = 0;
-    // Lineas crudas del TLE (69 columnas, ya sin CR). Permiten auditar el
-    // registro y reescribir la cache en el mismo formato de 3 lineas.
+    // Lineas crudas del TLE (69 columnas, ya sin CR) cuando la fuente es TLE
+    // (SatNOGS o ficheros v1). En el camino CSV quedan VACIAS: los elementos ya
+    // vienen resueltos en `el` y la cache guarda el CSV crudo, no un TLE
+    // reconstruido. No sirven para auditar el registro CSV; para eso esta el
+    // propio fichero de cache.
     std::string line1;
     std::string line2;
     orbitprop::OrbitElements el;
@@ -150,14 +160,26 @@ public:
     // Puros (sin red): parsean y dejan el snapshot listo. Devuelven true si
     // hay al menos un TLE valido. `out.source` lo fija el parser.
     static bool parseTleCatalog(const std::string& text, double nowUtc, TleSnapshot& out);
+    // GP CSV de CelesTrak (OMM). Se mapea POR CABECERA, no por posicion: si
+    // manana anaden una columna, esto sigue funcionando. RFC 4180: comillas,
+    // comas y "" dentro de comillas. Admite NORAD de 6 digitos, que el TLE
+    // clasico ya no puede representar.
+    static bool parseCelesTrakCsv(const std::string& text, double nowUtc, TleSnapshot& out);
     static bool parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out);
 
     // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad
     // contra maxAgeSec (por defecto el TTL vivo de 6 h). `path` es fs::path
     // para que un perfil con caracteres no ASCII no rompa el tmp+rename.
+    // Acepta v2 (format=csv|tle) y los v1 de builds anteriores (cuerpo TLE).
     static bool loadCache(const std::filesystem::path& path, double nowUtc, TleSnapshot& out,
                           double maxAgeSec = fetchgate::kLiveTtlSec);
-    static bool saveCache(const std::filesystem::path& path, const TleSnapshot& snap);
+    // `rawBody` es el cuerpo crudo de la respuesta (el CSV de CelesTrak). Si se
+    // pasa, se guarda tal cual con format=csv: asi la cache no depende de que
+    // sepamos reconstruir un TLE de 69 columnas (imposible con NORAD de 6
+    // digitos). Sin `rawBody` se escribe format=tle a partir de line1/line2
+    // (camino de SatNOGS y de los tests); si falta alguna linea, no se guarda.
+    static bool saveCache(const std::filesystem::path& path, const TleSnapshot& snap,
+                          const std::string& rawBody = std::string());
     // Lee solo la cabecera de la cache (epoch). 0 si no hay o no se entiende.
     static double cacheEpoch(const std::filesystem::path& path);
 

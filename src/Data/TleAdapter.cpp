@@ -21,7 +21,7 @@
 namespace {
 
 const char* const kCelestrakUrl =
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle";
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv";
 const char* const kSatnogsUrl = "https://db.satnogs.org/api/tle/?format=json";
 const char* const kUserAgent = "IonosphereLive3D/1.0";
 
@@ -75,6 +75,124 @@ std::string fallbackName(int noradId) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "NORAD %05d", noradId);
     return buf;
+}
+
+// --- CSV / OMM de CelesTrak -------------------------------------------------
+// GP CSV: una fila de cabecera con nombres y una fila por objeto. Los campos
+// de texto pueden venir entre comillas (un nombre puede llevar coma) y una
+// comilla literal se escribe doble. Se parsea de verdad, no partiendo por
+// comas: "SAT, ""X"" 2" es UN campo.
+
+// RFC 4180. Acepta CRLF o LF; ignora CR fuera de comillas.
+std::vector<std::vector<std::string>> parseCsvRows(const std::string& text) {
+    std::vector<std::vector<std::string>> rows;
+    std::vector<std::string> row;
+    std::string field;
+    bool inQuotes = false;
+    bool started = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (inQuotes) {
+            if (c == '"') {
+                if (i + 1 < text.size() && text[i + 1] == '"') {
+                    field += '"';
+                    ++i;
+                } else {
+                    inQuotes = false;
+                }
+            } else {
+                field += c;
+            }
+            continue;
+        }
+        if (c == '"') {
+            inQuotes = true;
+            started = true;
+        } else if (c == ',') {
+            row.push_back(field);
+            field.clear();
+            started = true;
+        } else if (c == '\n') {
+            row.push_back(field);
+            rows.push_back(row);
+            row.clear();
+            field.clear();
+            started = false;
+        } else if (c != '\r') {
+            field += c;
+            started = true;
+        }
+    }
+    // Ultima fila sin salto final. Si el fichero acaba en \n no hay nada mas.
+    if (started || !field.empty() || !row.empty()) {
+        row.push_back(field);
+        rows.push_back(row);
+    }
+    return rows;
+}
+
+std::string upperTrim(const std::string& in) {
+    std::string out = trimName(in);
+    for (char& c : out) c = (char)std::toupper((unsigned char)c);
+    return out;
+}
+
+// "2026-10-27T14:18:26.839680" (UTC) -> segundos epoch. Fraccion opcional.
+bool iso8601Utc(const std::string& in, double& out) {
+    const std::string s = trimName(in);
+    if (s.size() < 19) return false;
+    for (size_t i = 0; i < 19; ++i) {
+        const char c = s[i];
+        if (i == 4 || i == 7) {
+            if (c != '-') return false;
+        } else if (i == 10) {
+            if (c != 'T' && c != ' ') return false;
+        } else if (i == 13 || i == 16) {
+            if (c != ':') return false;
+        } else if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    const int y = std::atoi(s.substr(0, 4).c_str());
+    const int mo = std::atoi(s.substr(5, 2).c_str());
+    const int d = std::atoi(s.substr(8, 2).c_str());
+    const int h = std::atoi(s.substr(11, 2).c_str());
+    const int mi = std::atoi(s.substr(14, 2).c_str());
+    const int se = std::atoi(s.substr(17, 2).c_str());
+    double frac = 0.0;
+    if (s.size() > 19 && s[19] == '.') frac = std::atof(s.c_str() + 19);
+    if (y < 1957 || mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+    if (h > 23 || mi > 59 || se > 60) return false;
+
+    // days_from_civil (Hinnant): dias desde 1970-01-01, sin tablas de mes.
+    long long yy = y;
+    yy -= (mo <= 2) ? 1 : 0;
+    const long long era = (yy >= 0 ? yy : yy - 399) / 400;
+    const unsigned yoe = (unsigned)(yy - era * 400);
+    const unsigned doy = (unsigned)((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const long long days = era * 146097 + (long long)doe - 719468;
+
+    out = (double)days * 86400.0 + h * 3600.0 + mi * 60.0 + se + frac;
+    return true;
+}
+
+bool csvNumber(const std::vector<std::string>& row, const std::vector<int>& col, size_t idx,
+               double& out) {
+    if (col[idx] < 0 || (size_t)col[idx] >= row.size()) return false;
+    const std::string& v = row[(size_t)col[idx]];
+    if (v.empty()) return false;
+    char* end = nullptr;
+    const double d = std::strtod(v.c_str(), &end);
+    if (end == v.c_str() || *end != '\0' || !std::isfinite(d)) return false;
+    out = d;
+    return true;
+}
+
+// Cabecera de cache, v1 (sin format=, cuerpo TLE) o v2 (con format=).
+bool isCacheHeader(const std::string& header) {
+    return header.compare(0, 15, "# tle-cache v1 ") == 0 ||
+           header.compare(0, 15, "# tle-cache v2 ") == 0;
 }
 
 void setNote(TleSnapshot& out, size_t dropped) {
@@ -337,6 +455,109 @@ bool TleAdapter::parseTleCatalog(const std::string& text, double nowUtc, TleSnap
     return out.valid;
 }
 
+bool TleAdapter::parseCelesTrakCsv(const std::string& text, double nowUtc, TleSnapshot& out) {
+    out = TleSnapshot{};
+    out.timeUtc = nowUtc;
+    out.source = TleSource::Celestrak;
+
+    const std::vector<std::vector<std::string>> rows = parseCsvRows(text);
+    if (rows.size() < 2) return false;   // sin cabecera o sin filas
+
+    // Las columnas se localizan POR NOMBRE. El orden del GP CSV puede cambiar
+    // (y de hecho ha cambiado al anadir OBJECT_TYPE/EPOCH ISO), asi que
+    // indexar por posicion es una bomba de relojeria.
+    enum CsvCol {
+        kName = 0,
+        kNorad,
+        kEpoch,
+        kMeanMotion,
+        kEcc,
+        kInc,
+        kRaan,
+        kArgp,
+        kMeanAnom,
+        kCsvCols
+    };
+    static const char* const kColNames[kCsvCols] = {
+        "OBJECT_NAME",     "NORAD_CAT_ID",  "EPOCH",        "MEAN_MOTION", "ECCENTRICITY",
+        "INCLINATION",     "RA_OF_ASC_NODE", "ARG_OF_PERICENTER", "MEAN_ANOMALY"};
+    std::vector<int> col(kCsvCols, -1);
+    for (size_t i = 0; i < rows[0].size(); ++i) {
+        const std::string name = upperTrim(rows[0][i]);
+        for (int k = 0; k < kCsvCols; ++k) {
+            if (name == kColNames[k]) col[k] = (int)i;
+        }
+    }
+    // Sin los elementos no hay nada que dibujar: mejor fallar que inventar.
+    // El nombre es opcional (hay fallback por NORAD).
+    for (int k = 1; k < kCsvCols; ++k) {
+        if (col[k] < 0) return false;
+    }
+
+    size_t dropped = 0;
+    for (size_t r = 1; r < rows.size(); ++r) {
+        const std::vector<std::string>& row = rows[r];
+        if (row.empty() || (row.size() == 1 && trimName(row[0]).empty())) continue;   // linea vacia
+
+        // NORAD como ENTERO: aqui caben los 6 digitos que el TLE clasico ya no
+        // puede escribir (catalogo de 5 digitos agotado el 2026-07-11).
+        double norad = 0.0;
+        if (!csvNumber(row, col, kNorad, norad) || norad < 1.0 || norad > 1.0e9) {
+            ++dropped;
+            continue;
+        }
+        double epoch = 0.0;
+        if (col[kEpoch] < 0 || (size_t)col[kEpoch] >= row.size() ||
+            !iso8601Utc(row[(size_t)col[kEpoch]], epoch)) {
+            ++dropped;
+            continue;
+        }
+        double mm = 0.0, ecc = 0.0, inc = 0.0, raan = 0.0, argp = 0.0, ma = 0.0;
+        if (!csvNumber(row, col, kMeanMotion, mm) || !csvNumber(row, col, kEcc, ecc) ||
+            !csvNumber(row, col, kInc, inc) || !csvNumber(row, col, kRaan, raan) ||
+            !csvNumber(row, col, kArgp, argp) || !csvNumber(row, col, kMeanAnom, ma)) {
+            ++dropped;
+            continue;
+        }
+        // Mismos topes que parseTle: si no es un satelite terrestre, fuera.
+        if (!(mm > 0.0 && mm <= 20.0) || !(ecc >= 0.0 && ecc < 1.0) ||
+            !(inc >= 0.0 && inc <= 180.0)) {
+            ++dropped;
+            continue;
+        }
+        // EPOCH de un objeto activo: ni del futuro ni de hace un ano. Con el
+        // reloj del sistema mal, esto descarta filas absurdas sin tocar las
+        // buenas (la cache se valida contra su propia cabecera, no contra el
+        // reloj de pared).
+        if (epoch > nowUtc + 7.0 * 86400.0 || epoch < nowUtc - 365.0 * 86400.0) {
+            ++dropped;
+            continue;
+        }
+
+        TleSat sat;
+        sat.noradId = (int)norad;
+        if (col[kName] >= 0 && (size_t)col[kName] < row.size()) {
+            sat.name = trimName(row[(size_t)col[kName]]);
+        }
+        if (sat.name.empty()) sat.name = fallbackName(sat.noradId);
+        sat.el.epochUtc = epoch;
+        sat.el.incDeg = inc;
+        sat.el.raanDeg = std::fmod(std::fmod(raan, 360.0) + 360.0, 360.0);
+        sat.el.ecc = ecc;
+        sat.el.argpDeg = std::fmod(std::fmod(argp, 360.0) + 360.0, 360.0);
+        sat.el.meanAnomDeg = std::fmod(std::fmod(ma, 360.0) + 360.0, 360.0);
+        sat.el.meanMotionRevDay = mm;
+        sat.el.valid = true;
+
+        if (out.sats.size() < kMaxSats) out.sats.push_back(sat);
+        else ++dropped;
+    }
+
+    setNote(out, dropped);
+    out.valid = !out.sats.empty();
+    return out.valid;
+}
+
 bool TleAdapter::parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out) {
     out = TleSnapshot{};
     out.timeUtc = nowUtc;
@@ -378,9 +599,23 @@ bool TleAdapter::parseSatNogsJson(const std::string& json, double nowUtc, TleSna
     return out.valid;
 }
 
-bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot& snap) {
+bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot& snap,
+                           const std::string& rawBody) {
     if (!snap.valid || snap.sats.empty()) return false;   // nunca guardar vacio
     namespace fs = std::filesystem;
+
+    // Con cuerpo crudo se guarda TAL CUAL (el CSV de CelesTrak): no hay que
+    // reconstruir nada y sobreviven los NORAD de 6 digitos, que no caben en un
+    // TLE de 5 columnas. Sin cuerpo crudo solo se puede volcar un TLE de 3
+    // lineas (SatNOGS o ficheros viejos); si falta alguna linea, no se guarda
+    // una cache que luego no se podria releer.
+    const bool csv = !rawBody.empty();
+    if (!csv) {
+        for (const TleSat& s : snap.sats) {
+            if (s.line1.empty() || s.line2.empty()) return false;
+        }
+    }
+
     std::error_code ec;
     if (path.has_parent_path()) fs::create_directories(path.parent_path(), ec);
 
@@ -391,15 +626,22 @@ bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot&
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return false;
-        char header[160];
-        std::snprintf(header, sizeof(header), "# tle-cache v1 epoch=%.1f count=%d source=%s\n",
-                      snap.timeUtc, (int)snap.sats.size(), TleAdapter::sourceLabel(snap.source));
+        char header[192];
+        std::snprintf(header, sizeof(header),
+                      "# tle-cache v2 epoch=%.1f count=%d source=%s format=%s\n", snap.timeUtc,
+                      (int)snap.sats.size(), TleAdapter::sourceLabel(snap.source),
+                      csv ? "csv" : "tle");
         f << header;
-        for (const TleSat& s : snap.sats) {
-            // Registro de 3 lineas; si el nombre viniera vacio se usa el NORAD
-            // (nunca se deja una linea en blanco que rompa el grupo).
-            const std::string& nm = s.name.empty() ? fallbackName(s.noradId) : s.name;
-            f << nm << '\n' << s.line1 << '\n' << s.line2 << '\n';
+        if (csv) {
+            f.write(rawBody.data(), (std::streamsize)rawBody.size());
+            if (rawBody.back() != '\n') f << '\n';
+        } else {
+            for (const TleSat& s : snap.sats) {
+                // Registro de 3 lineas; si el nombre viniera vacio se usa el
+                // NORAD (nunca se deja una linea en blanco que rompa el grupo).
+                const std::string& nm = s.name.empty() ? fallbackName(s.noradId) : s.name;
+                f << nm << '\n' << s.line1 << '\n' << s.line2 << '\n';
+            }
         }
         if (!f.good()) return false;
     }
@@ -420,7 +662,7 @@ double TleAdapter::cacheEpoch(const std::filesystem::path& path) {
     if (!f) return 0.0;
     std::string header;
     if (!std::getline(f, header)) return 0.0;
-    if (header.compare(0, 15, "# tle-cache v1 ") != 0) return 0.0;
+    if (!isCacheHeader(header)) return 0.0;
     const size_t ep = header.find("epoch=");
     if (ep == std::string::npos) return 0.0;
     const double epoch = std::atof(header.c_str() + ep + 6);
@@ -437,7 +679,7 @@ double TleAdapter::celestrakCacheEpoch(const std::filesystem::path& path) {
     // es lo unico seguro: si contara como cache joven, la puerta no pediria el
     // catalogo completo en 6 h y ademas se dibujaria como si lo fuera.
     if (header.find("source=satnogs") != std::string::npos) return 0.0;
-    if (header.compare(0, 15, "# tle-cache v1 ") != 0) return 0.0;
+    if (!isCacheHeader(header)) return 0.0;
     const size_t ep = header.find("epoch=");
     if (ep == std::string::npos) return 0.0;
     const double epoch = std::atof(header.c_str() + ep + 6);
@@ -471,7 +713,7 @@ bool TleAdapter::loadCache(const std::filesystem::path& path, double nowUtc, Tle
 
     const size_t nl = text.find('\n');
     const std::string header = (nl == std::string::npos) ? text : text.substr(0, nl);
-    if (header.compare(0, 15, "# tle-cache v1 ") != 0) return false;
+    if (!isCacheHeader(header)) return false;
     const size_t ep = header.find("epoch=");
     if (ep == std::string::npos) return false;
     const double epoch = std::atof(header.c_str() + ep + 6);
@@ -480,8 +722,13 @@ bool TleAdapter::loadCache(const std::filesystem::path& path, double nowUtc, Tle
     const double age = nowUtc - epoch;
     if (age > maxAgeSec) return false;
 
+    // v2 lleva `format=`; v1 (builds anteriores) siempre fue TLE de 3 lineas.
+    const std::string body = (nl == std::string::npos) ? std::string() : text.substr(nl + 1);
+    const bool csv = header.find("format=csv") != std::string::npos;
+
     TleSnapshot snap;
-    if (!parseTleCatalog(text, epoch, snap)) return false;
+    const bool ok = csv ? parseCelesTrakCsv(body, epoch, snap) : parseTleCatalog(body, epoch, snap);
+    if (!ok) return false;
     // La cabecera guarda el origen (`source=`), asi que una cache de SatNOGS
     // se distingue del catalogo completo aunque ambas se lean del disco.
     snap.source = (header.find("source=satnogs") != std::string::npos)
@@ -697,7 +944,7 @@ bool TleAdapter::fetch(double utc) {
     std::string body;
     const HttpResult res = httpGet(kCelestrakUrl, 120L, body);
     if (res.ok) {
-        ok = parseTleCatalog(body, utc, snap);
+        ok = parseCelesTrakCsv(body, utc, snap);
         if (!ok) err = "celestrak: respuesta ilegible";
     } else {
         err = "celestrak: " + res.err;
@@ -759,8 +1006,10 @@ bool TleAdapter::fetch(double utc) {
     // Solo el catalogo completo de CelesTrak va a satellites.tle. El
     // subconjunto de SatNOGS tiene su propia cache: guardarlo aqui lo haria
     // pasar por catalogo activo durante 6 h y taparia el reintento.
+    // Se guarda el CUERPO CRUDO: es lo que permite releerlo sin reconstruir un
+    // TLE de 5 columnas (imposible con NORAD de 6 digitos).
     if (snap.source == TleSource::Celestrak) {
-        saveCache(cachePath_, snap);   // best-effort: fallar aqui no es fatal
+        saveCache(cachePath_, snap, body);   // best-effort: fallar aqui no es fatal
     }
 
     {

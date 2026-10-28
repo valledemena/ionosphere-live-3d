@@ -24,6 +24,7 @@
 #include "Data/FetchGate.h"
 #include "Data/FetchState.h"
 #include "Data/TleAdapter.h"
+#include "tle_csv_fixture.h"
 
 #include <cmath>
 #include <cstdio>
@@ -58,40 +59,13 @@ static const double kBlock = 7200.0;   // fetchgate::kBlockSec
 // orbitprop::parseTle exige 69 columnas, prefijos "1 "/"2 ", el MISMO numero de
 // catalogo en las dos lineas y checksum correcto. Se parte del TLE real de la
 // ISS (epoch 26299.59614366) y solo se cambia el numero de catalogo, recalculando
-// el checksum. Los NORAD 90001+ son ficticios y estan declarados como tales.
+// el checksum (tlefixture::tleLines). Los NORAD 90001+ son ficticios y estan
+// declarados como tales.
 // -----------------------------------------------------------------------------
-static std::string withChecksum(std::string body) {
-    int sum = 0;
-    for (char c : body) {
-        if (c >= '0' && c <= '9') sum += c - '0';
-        else if (c == '-') sum += 1;
-    }
-    body += (char)('0' + (sum % 10));
-    return body;
-}
 
-static void satLines(int norad, std::string& l1, std::string& l2) {
-    char n[8];
-    std::snprintf(n, sizeof(n), "%05d", norad);
-    std::string b1 = "1 25544U 98067A   26299.59614366  .00006146  00000-0  11933-3 0  999";
-    std::string b2 = "2 25544  51.6336   9.8132 0006932 312.5452  47.4951 15.4906536959212";
-    b1.replace(2, 5, n);
-    b2.replace(2, 5, n);
-    l1 = withChecksum(b1);
-    l2 = withChecksum(b2);
-}
-
-// Catalogo "completo" de CelesTrak: 3 satelites.
-static std::string celestrakText() {
-    std::string out;
-    const int ids[3] = {25544, 90001, 90002};
-    for (int id : ids) {
-        std::string l1, l2;
-        satLines(id, l1, l2);
-        out += "SAT-" + std::to_string(id) + "\n" + l1 + "\n" + l2 + "\n";
-    }
-    return out;
-}
+// Catalogo "completo" de CelesTrak: 3 satelites en GP CSV (es lo que responde
+// gp.php?FORMAT=csv; el TLE de 5 digitos ya no admite el catalogo actual).
+static std::string celestrakCsv() { return tlefixture::catalogCsv(); }
 
 // Subconjunto de SatNOGS: 2 filas, una de ellas (90003) NO esta en CelesTrak.
 static std::string satnogsJson() {
@@ -111,7 +85,7 @@ static std::string satnogsJson() {
 // Transporte simulado: responde por URL. Cuenta las llamadas a cada proveedor,
 // que es lo que de verdad se quiere vigilar (cuota de CelesTrak).
 struct Mock {
-    std::string celestrakBody = celestrakText();
+    std::string celestrakBody = celestrakCsv();
     std::string satnogsBody = satnogsJson();
     int celestrakHttp = 200;
     int celestrakCurl = 0;
@@ -356,8 +330,8 @@ int main() {
         // Cache con epoch T0 y puerta de CelesTrak bloqueada: asi el pase entra
         // por serveCache (el camino de la caducidad), no por la red.
         TleSnapshot disk;
-        TleAdapter::parseTleCatalog(celestrakText(), T0, disk);
-        checkBool("cache de prueba escrita", TleAdapter::saveCache(p.cache, disk));
+        TleAdapter::parseCelesTrakCsv(celestrakCsv(), T0, disk);
+        checkBool("cache de prueba escrita", TleAdapter::saveCache(p.cache, disk, celestrakCsv()));
 
         auto blockBoth = [&](double untilUtc) {
             fetchgate::State cel;

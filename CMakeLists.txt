@@ -407,6 +407,22 @@ if(NOT WIN32)
     target_link_libraries(test_tle_orchestration PRIVATE Threads::Threads)
 endif()
 add_test(NAME tle_orchestration COMMAND test_tle_orchestration)
+# C2b: GP CSV (OMM) de CelesTrak - parser por cabecera RFC 4180, NORAD de 6
+# digitos y cache v2 con el CSV crudo. Puro: sin red.
+add_executable(test_tle_csv tests/test_tle_csv.cpp)
+target_include_directories(test_tle_csv PRIVATE src)
+target_sources(test_tle_csv PRIVATE
+    src/Data/TleAdapter.cpp
+    src/Data/OrbitProp.cpp
+    src/Data/FetchGate.cpp
+    src/Data/FetchState.cpp
+    src/Utils/Paths.cpp
+)
+target_link_libraries(test_tle_csv PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_tle_csv PRIVATE Threads::Threads)
+endif()
+add_test(NAME tle_csv COMMAND test_tle_csv)
 # Lote 5D: espiral de Parker — llama a PRODUCCION (ParkerMath), sin red.
 add_executable(test_parker tests/test_parker.cpp)
 target_include_directories(test_parker PRIVATE src)
