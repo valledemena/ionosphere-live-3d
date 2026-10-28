@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 #include "Ionosphere/GridLayer.h"  // TECGrid
 
@@ -26,7 +28,8 @@ class GloTecAdapter {
 public:
     GloTecAdapter();
     void init();
-    bool fetchTEC(double utc);
+    bool fetchTEC(double utc, int depthSlots = 36);
+    // backfill 6/24/72 h: 36/144/432 frames @ 10 min
     // Historico para el replay: lista completa del indice + descarga de un
     // frame concreto a un GridData independiente (thread-safe entre adapters
     // distintos; no llamar concurrente sobre el MISMO adapter).

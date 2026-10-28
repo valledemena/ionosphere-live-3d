@@ -251,54 +251,30 @@ bool GloTecAdapter::fetchFrame(const std::string& url, double timeUtc, GridData&
     return true;
 }
 
-bool GloTecAdapter::fetchTEC(double utc) {    // 1) Obtener el indice y extraer la URL del archivo mas reciente.
-    std::string index;
-    if (!fetchURL(GLOTEC_INDEX_URL, index)) {
-        fprintf(stderr, "[GloTecAdapter] No se pudo obtener el indice: %s\n", error_.c_str());
-        return false;
+bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
+    // C1b: backfill de profundidad 6/24/72 h (defecto 6 h = 36 frames @ 10 min).
+    // sentido de nuevo a viejo (de nuevo a viejo), un hilo, ~1 req/s, parada tras 3 404 seguidos.
+    // Puerta de 600 s en el llamante: se chequea en App/UI, no aqui.
+    // NOTA: la implementacion funcional del backfill (fetchIndex + su orden, 429/Retry-After) pendiente - hoy solo se pide el frame mas reciente.
+    std::vector<GloTecFrame> frames;
+    if (!fetchIndex(frames)) return false;
+    if (frames.empty()) { error_ = "indice vacio"; return false; }
+    std::sort(frames.begin(), frames.end(), [](const GloTecFrame& a, const GloTecFrame& b){ return a.timeUtc > b.timeUtc; });  // nuevo -> viejo
+
+    int downloaded = 0;
+    int fourZeroFour = 0;
+    for (size_t k = 0; k < (size_t)depthSlots && k < frames.size(); ++k) {
+        if (fourZeroFour >= 3) break;  // parada tras 3 404 consecutivos
+        if (downloaded > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // ~1 req/s
+        std::string js;
+        if (!fetchURL(frames[k].url, js)) { ++fourZeroFour; continue; }
+        if (!parseGeoJSON(js)) { ++fourZeroFour; continue; }
+        fourZeroFour = 0;
+        ++downloaded;
+        grid_.timestamp = frames[k].timeUtc;
+        grid_.valid = true;
+        lastFetchUtc_ = utc;
     }
-
-    // El indice es [{"url":"/products/glotec/...geojson","time_tag":"..."}, ...].
-    // Extraer el ultimo "url" (el mas reciente).
-    std::string lastUrl;
-    size_t p = 0, found = 0;
-    while ((found = index.find("\"url\"", p)) != std::string::npos) {
-        size_t col = found;
-        while (col < index.size() && index[col] != ':') col++;
-        size_t v = col + 1;
-        std::string u;
-        if (readString(index, v, u)) lastUrl = u;
-        p = found + 5;
-    }
-    if (lastUrl.empty()) {
-        error_ = "indice GloTEC vacio";
-        fprintf(stderr, "[GloTecAdapter] Error: %s\n", error_.c_str());
-        return false;
-    }
-
-    std::string full = (lastUrl[0] == '/') ? "https://services.swpc.noaa.gov" + lastUrl : lastUrl;
-
-    // 2) Descargar el GeoJSON
-    std::string geojson;
-    if (!fetchURL(full, geojson)) {
-        fprintf(stderr, "[GloTecAdapter] No se pudo obtener GeoJSON: %s\n", error_.c_str());
-        return false;
-    }
-
-    // 3) Parsear y rellenar el grid
-    if (!parseGeoJSON(geojson)) {
-        error_ = "parseGeoJSON fallo (sin celdas)";
-        fprintf(stderr, "[GloTecAdapter] %s\n", error_.c_str());
-        return false;
-    }
-
-    grid_.timestamp = utc;
-    grid_.valid = true;
-    lastFetchUtc_ = utc;
-
-    float minv = 1e9f, maxv = -1e9f;
-    for (float v : grid_.values) { minv = fminf(minv, v); maxv = fmaxf(maxv, v); }
-    printf("[GloTecAdapter] Real TEC GloTEC OK (%dx%d): min=%.2f max=%.2f TECU\n",
-           grid_.width, grid_.height, minv, maxv);
+    if (downloaded == 0) { error_ = "parseGeoJSON fallo (sin celdas)"; return false; }
     return true;
 }
