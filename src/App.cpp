@@ -231,6 +231,7 @@ struct App::Impl {
     TleSnapshot satSnap;
     double satSnapTime = -1.0;
     double satNextFetch = 0.0;
+    bool satWasFetching = false;   // flanco para programar tras el fetch
     unsigned long satGeneration = 0;
     bool satVisible = false;
     WsprArcs wsprArcs;
@@ -2880,15 +2881,21 @@ void App::update(float dt) {
     if (impl->satVisible) {
         if (now >= impl->satNextFetch && !impl->satAdapter.isFetching()) {
             impl->satAdapter.fetchAsync(tNow);
-            // C2a: si la puerta esta bloqueada o esperando, no despertar al
-            // adaptador cada hora para que no haga nada. OJO con los relojes:
-            // nextNetworkUtc trabaja en epoch UTC y `now` es glfwGetTime
-            // (segundos desde el arranque), asi que la espera se calcula
-            // contra tNow y luego se suma al reloj monotono.
+            // Valor provisional corto: el definitivo se calcula en el flanco
+            // de bajada de isFetching(). Programarlo aqui leeria el bloqueo
+            // PROVISIONAL del write-ahead (+2 h) y convertiria el reintento de
+            // 5 min de un fallo blando en una hora.
+            impl->satNextFetch = now + 60.0;
+        }
+        // Flanco true -> false: el fetch ya decidio, asi que nextNetworkUtc
+        // devuelve el instante real (backoff, bloqueo o TTL de la cache).
+        const bool satFetching = impl->satAdapter.isFetching();
+        if (impl->satWasFetching && !satFetching) {
             const double nextNet = impl->satAdapter.nextNetworkUtc(tNow);
             const double waitSec = std::max(60.0, std::min(3600.0, nextNet - tNow));
             impl->satNextFetch = now + waitSec;
         }
+        impl->satWasFetching = satFetching;
         const unsigned long gen = impl->satAdapter.getGeneration();
         if (gen != impl->satGeneration) {
             impl->satGeneration = gen;
@@ -4697,7 +4704,10 @@ void App::render() {
             s10.fetching = impl->satAdapter.isFetching();
             if (s10.hasData) {
                 s10.data = std::to_string((int)impl->satSnap.sats.size()) + " sats";
-                if (impl->satSnap.source == TleSource::Cache) s10.data += " (cache)";
+                if (impl->satSnap.source == TleSource::Cache ||
+                    impl->satSnap.source == TleSource::SatNogsCache) {
+                    s10.data += " (cache)";
+                }
             }
             s10.error = impl->satAdapter.getErrorMessage();
 
@@ -5514,9 +5524,15 @@ void App::render() {
     if (impl->satAdapter.isFetching()) {
         ImGui::TextDisabled("Satellites: fetching...");
     } else if (impl->satSnap.valid) {
-        ImGui::TextDisabled("Satellites: %d drawn / %d (%s, %d rings)", impl->satLayer.satCount(),
-                            (int)impl->satSnap.sats.size(),
-                            impl->satAdapter.getSourceLabel().c_str(),
+        // Una sola linea: procedencia Y edad. La etiqueta es del snapshot y no
+        // se muta (no pasa a "cache" por envejecer); la edad se calcula aqui
+        // desde el epoch, asi que dice la verdad aunque el origen siga siendo
+        // la descarga original.
+        const double snapEpoch = impl->satSnapTime > 0.0 ? impl->satSnapTime : impl->satSnap.timeUtc;
+        const double ageH = snapEpoch > 0.0 ? ((double)std::time(nullptr) - snapEpoch) / 3600.0 : 0.0;
+        ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d rings)",
+                            impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
+                            impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
                             impl->satLayer.ringCount());
     } else {
         ImGui::TextDisabled("Satellites: %s", impl->satSnap.note.empty()
@@ -5527,15 +5543,6 @@ void App::render() {
     // programado, bloqueo). No es un error: va en gris, no en rojo.
     const std::string satStatus = impl->satAdapter.getStatusNote();
     if (!satStatus.empty()) ImGui::TextDisabled("  %s", satStatus.c_str());
-    // La etiqueta dice DE DONDE vino el catalogo (celestrak/satnogs/cache); la
-    // edad se calcula aqui, sin mutar el snapshot. Pasado el TTL de 6 h se
-    // declara, aunque el origen siga siendo la descarga original.
-    if (impl->satSnap.valid && impl->satSnapTime > 0.0) {
-        const double ageH = ((double)std::time(nullptr) - impl->satSnapTime) / 3600.0;
-        if (ageH >= 6.0) {
-            ImGui::TextDisabled("  catalog is %.1f h old (refresh pending)", ageH);
-        }
-    }
 
     bool showCme = impl->cmeVisible;
     if (ImGui::Checkbox("CME front (ENLIL)", &showCme)) {

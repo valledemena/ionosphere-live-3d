@@ -391,6 +391,22 @@ add_executable(test_fetch_gate tests/test_fetch_gate.cpp)
 target_include_directories(test_fetch_gate PRIVATE src)
 target_sources(test_fetch_gate PRIVATE src/Data/FetchGate.cpp src/Data/FetchState.cpp)
 add_test(NAME fetch_gate COMMAND test_fetch_gate)
+# C2a: orquestacion de TleAdapter::fetch() con transporte inyectado (sin red:
+# 403, timeout, muerte a mitad, aislamiento de caches y cache de 73 h).
+add_executable(test_tle_orchestration tests/test_tle_orchestration.cpp)
+target_include_directories(test_tle_orchestration PRIVATE src)
+target_sources(test_tle_orchestration PRIVATE
+    src/Data/TleAdapter.cpp
+    src/Data/OrbitProp.cpp
+    src/Data/FetchGate.cpp
+    src/Data/FetchState.cpp
+    src/Utils/Paths.cpp
+)
+target_link_libraries(test_tle_orchestration PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_tle_orchestration PRIVATE Threads::Threads)
+endif()
+add_test(NAME tle_orchestration COMMAND test_tle_orchestration)
 # Lote 5D: espiral de Parker — llama a PRODUCCION (ParkerMath), sin red.
 add_executable(test_parker tests/test_parker.cpp)
 target_include_directories(test_parker PRIVATE src)

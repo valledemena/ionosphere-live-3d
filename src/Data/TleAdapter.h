@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -56,7 +57,13 @@
 // La posicion NO se calcula aqui: este modulo solo entrega elementos medios
 // (orbitprop::OrbitElements). Ver OrbitProp.h para el modelo y sus limites.
 
-enum class TleSource { None, Celestrak, SatNogs, Cache };
+enum class TleSource {
+    None,
+    Celestrak,
+    SatNogs,       // red de SatNOGS
+    SatNogsCache,  // cache propia de SatNOGS en disco (subconjunto, no el activo)
+    Cache          // cache de CelesTrak en disco
+};
 
 struct TleSat {
     std::string name;
@@ -78,11 +85,38 @@ struct TleSnapshot {
 
 class TleAdapter {
 public:
+    // Resultado de una peticion HTTP. Publico para que los tests puedan
+    // inyectar un transporte sin curl (ver setTransport).
+    struct HttpResult {
+        bool ok = false;          // 200 con cuerpo no vacio
+        long http = 0;
+        int curl = 0;
+        double retryAfter = 0.0;
+        std::string err;
+    };
+    // Transporte inyectable: (url, body de salida) -> resultado. En produccion
+    // es curl; en tests, una funcion que devuelve respuestas preparadas.
+    using Transport = std::function<HttpResult(const std::string& url, std::string& body)>;
+
     void init();
     // Descarga + parsea en hilo detached. No-op si ya hay una en curso.
     // Respeta la puerta de red: con cache joven no toca la red.
     void fetchAsync(double utc);
     bool isFetching() const { return fetching_; }
+
+    // Sincrono, mismo camino que fetchAsync pero en el hilo llamante. Es la
+    // entrada que usan los tests de orquestacion; no lo usa la app.
+    bool fetchOnce(double utc) { return fetch(utc); }
+
+    // --- Costuras de prueba (no tocar desde la app) ---
+    // Sustituye el transporte HTTP. Vaciar el function vuelve a curl.
+    void setTransport(Transport t) { transport_ = std::move(t); }
+    // Fija cache, cache de SatNOGS y sidecar, y limpia el estado en memoria.
+    void setPathsForTests(const std::filesystem::path& cache,
+                          const std::filesystem::path& satnogsCache,
+                          const std::filesystem::path& state);
+    // Relee el sidecar con un reloj explicito (simula un reinicio sin init()).
+    void loadStateForTests(double nowUtc);
 
     // COPIA del snapshot bajo mutex. Son ~16k filas: llamarlo solo cuando
     // cambie getGeneration() (p.ej. una vez cada 6 h), no cada frame.
@@ -130,15 +164,6 @@ public:
     static const char* sourceLabel(TleSource s);
 
 private:
-    // Info de una respuesta HTTP; la puerta decide con ella.
-    struct HttpResult {
-        bool ok = false;          // 200 con cuerpo no vacio
-        long http = 0;
-        int curl = 0;
-        double retryAfter = 0.0;
-        std::string err;
-    };
-
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
     static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     HttpResult httpGet(const char* url, long timeoutSec, std::string& body);
@@ -170,4 +195,5 @@ private:
     unsigned long generation_ = 0;
     std::string error_;
     std::string status_;
+    Transport transport_;   // vacio en produccion (curl)
 };

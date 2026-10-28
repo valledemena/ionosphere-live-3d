@@ -177,10 +177,16 @@ void TleAdapter::init() {
     // Un reloj adelantado o un sidecar manipulado no deben bloquear para
     // siempre: el recorte lo hace fetchgate.
     st.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(st.blockedUntilUtc, now);
+    // lastHttp == -1 es el provisional del write-ahead. Si sobrevive a un
+    // arranque, la peticion estaba EN VUELO cuando murio la app: el bloqueo de
+    // 2 h se mantiene (no se repite la descarga), pero ya no es "en curso", asi
+    // que deja de ocultarse en el panel (getBlockedUntilUtc).
+    if (st.lastHttp == -1) st.lastHttp = 0;
 
     fetchgate::State stN;
     fetchstate::load(statePath_, kKeySatnogs, stN);
     stN.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(stN.blockedUntilUtc, now);
+    if (stN.lastHttp == -1) stN.lastHttp = 0;
 
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -223,6 +229,12 @@ size_t TleAdapter::headerCallback(char* buffer, size_t size, size_t nitems, void
 }
 
 TleAdapter::HttpResult TleAdapter::httpGet(const char* url, long timeoutSec, std::string& body) {
+    // Costura de pruebas: si hay transporte inyectado, no se toca curl.
+    if (transport_) {
+        HttpResult r = transport_(url, body);
+        if (!r.ok && r.err.empty()) r.err = "transporte simulado";
+        return r;
+    }
     HttpResult r;
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -435,7 +447,11 @@ bool TleAdapter::loadCache(const std::filesystem::path& path, double nowUtc, Tle
 
     TleSnapshot snap;
     if (!parseTleCatalog(text, epoch, snap)) return false;
-    snap.source = TleSource::Cache;
+    // La cabecera guarda el origen (`source=`), asi que una cache de SatNOGS
+    // se distingue del catalogo completo aunque ambas se lean del disco.
+    snap.source = (header.find("source=satnogs") != std::string::npos)
+                      ? TleSource::SatNogsCache
+                      : TleSource::Cache;
     char buf[96];
     std::snprintf(buf, sizeof(buf), "cache: %d sats (edad %.1f h)", (int)snap.sats.size(),
                   age / 3600.0);
@@ -476,13 +492,17 @@ bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why
                 error_.clear();
                 return true;
             }
-            // Caducada: se invalida y se sube la generacion, porque App solo
-            // recopia el snapshot cuando cambia la generacion. Sin esto se
-            // seguirian dibujando datos de mas de 72 h.
-            latest_.valid = false;
-            latest_.sats.clear();
-            latest_.note = "cache caducada (>72 h)";
-            ++generation_;
+            // Caducada: se invalida UNA vez y se sube la generacion, porque
+            // App solo recopia el snapshot cuando cambia. Poner el epoch a 0
+            // evita que esta rama vuelva a dispararse en cada pase (antes
+            // subia la generacion sin parar y la UI recopiaba en bucle).
+            if (latest_.valid) {
+                latest_.valid = false;
+                latest_.sats.clear();
+                latest_.note = "cache caducada (>72 h)";
+                snapshotEpoch_ = 0.0;
+                ++generation_;
+            }
         }
     }
     TleSnapshot cached;
@@ -826,6 +846,12 @@ double TleAdapter::getLastAttemptUtc() const {
 
 double TleAdapter::getBlockedUntilUtc() const {
     std::lock_guard<std::mutex> lk(mutex_);
+    // lastHttp == -1 marca el bloqueo PROVISIONAL del intento en vuelo: no es
+    // una decision de politica, asi que el panel no debe pintarlo como
+    // "bloqueado" mientras la descarga esta en curso (para eso esta
+    // isFetching()). Si el provisional sobrevive a un reinicio, init() lo
+    // convierte en 0 (peticion interrumpida) y entonces SI se declara.
+    if (gate_.lastHttp == -1) return 0.0;
     return gate_.blockedUntilUtc;
 }
 
@@ -837,8 +863,42 @@ const char* TleAdapter::sourceLabel(TleSource s) {
     switch (s) {
         case TleSource::Celestrak: return "celestrak";
         case TleSource::SatNogs: return "satnogs";
+        case TleSource::SatNogsCache: return "satnogs-cache";
         case TleSource::Cache: return "cache";
         case TleSource::None:
         default: return "sin datos";
     }
+}
+
+void TleAdapter::setPathsForTests(const std::filesystem::path& cache,
+                                  const std::filesystem::path& satnogsCache,
+                                  const std::filesystem::path& state) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    cachePath_ = cache;
+    satnogsCachePath_ = satnogsCache;
+    statePath_ = state;
+    gate_ = fetchgate::State{};
+    gateSatnogs_ = fetchgate::State{};
+    latest_ = TleSnapshot{};
+    latest_.note = "sin datos";
+    snapshotEpoch_ = 0.0;
+    generation_ = 0;
+    error_.clear();
+    status_.clear();
+}
+
+void TleAdapter::loadStateForTests(double nowUtc) {
+    fetchgate::State a;
+    fetchstate::load(statePath_, kKeyActive, a);
+    a.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(a.blockedUntilUtc, nowUtc);
+    // Mismo criterio que init(): un provisional que sobrevive al reinicio es
+    // una peticion interrumpida, no una descarga en curso.
+    if (a.lastHttp == -1) a.lastHttp = 0;
+    fetchgate::State n;
+    fetchstate::load(statePath_, kKeySatnogs, n);
+    n.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(n.blockedUntilUtc, nowUtc);
+    if (n.lastHttp == -1) n.lastHttp = 0;
+    std::lock_guard<std::mutex> lk(mutex_);
+    gate_ = a;
+    gateSatnogs_ = n;
 }
