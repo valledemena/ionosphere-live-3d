@@ -69,6 +69,13 @@ struct Decision {
 // `cacheAgeSec` < 0 significa "no hay cache en disco".
 // `jitterSec` lo muestrea el llamante (0..kJitterMaxSec) para que esta funcion
 // siga siendo determinista y testeable.
+//
+// ANCLAJE DEL JITTER (revision C2a): el instante de reintento se calcula como
+//   eligibleAt = (now - cacheAge) + kLiveTtlSec + jitter
+// es decir, anclado a cuando la cache cumplio el TTL, NO a "ahora + jitter".
+// Con "ahora + jitter" cada reevaluacion volvia a posponer y el TTL efectivo
+// pasaba a ser el de 72 h. Invariante: reevaluar en t = fetchAtUtc devuelve
+// una accion que permite red (FetchNow).
 Decision decide(double nowUtc, const State& st, double cacheAgeSec, double jitterSec);
 
 // Recorta un bloqueo irracional (reloj adelantado) y normaliza negativos.
@@ -86,6 +93,11 @@ struct Outcome {
 };
 
 Outcome classify(long httpCode, int curlCode, double retryAfterSec);
+
+// HTTP 200 pero el cuerpo no se pudo interpretar. La descarga YA consumio la
+// ventana de actualizacion, asi que reintentar en 5 min solo puede dar 403:
+// se trata como bloqueo, no como fallo blando.
+Outcome unreadableBody();
 
 // Duración del bloqueo a aplicar tras `classify`: Retry-After si es mayor,
 // acotado a 24 h por cordura; si no, kBlockSec.

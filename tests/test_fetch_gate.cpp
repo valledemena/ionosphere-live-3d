@@ -46,6 +46,14 @@ static std::string tmpPath(const char* tag, int n) {
             ("fetch_gate_test_" + std::string(tag) + "_" + std::to_string(seq++))).string();
 }
 
+// Jitter determinista para la simulacion: la produccion lo deriva del epoch de
+// la cache (TleAdapter.cpp); aqui basta con que sea estable por cache y caiga
+// en 0..kJitterMaxSec, que es lo unico que la puerta necesita.
+static double simJitter(double cacheEpoch) {
+    const unsigned long long h = (unsigned long long)(cacheEpoch / 60.0);
+    return (double)((h * 2654435761ULL) % 1201ULL);
+}
+
 int main() {
     const double now = 1.79e9;   // epoch fijo: el test no depende del reloj real
 
@@ -68,18 +76,29 @@ int main() {
                                                     fetchgate::Action::CacheOnly);
     }
 
-    std::printf("--- C2a-3: cache 6..72 h -> FetchJittered ---\n");
+    std::printf("--- C2a-3: jitter ANCLADO al cruce del TTL (6..72 h) ---\n");
     {
+        // Regla: eligibleAt = epoch + 6 h + jitter, NO "ahora + jitter". Con
+        // "ahora + jitter" cada reevaluacion posponia otra vez y el TTL
+        // efectivo pasaba a 72 h (bug de la primera version de C2a).
         fetchgate::State st;
-        const auto d0 = d_now(now, st, 6.01 * 3600.0, 0.0);
-        check_bool("6.01 h -> FetchJittered", d0.action == fetchgate::Action::FetchJittered);
-        check_near("jitter 0 -> fetchAt = now", d0.fetchAtUtc, now);
+        const double age = fetchgate::kLiveTtlSec + 60.0;   // 6 h y 1 min
 
-        const auto d600 = d_now(now, st, 6.01 * 3600.0, 600.0);
-        check_near("jitter 600 -> fetchAt = now+600", d600.fetchAtUtc, now + 600.0);
+        const auto d600 = d_now(now, st, age, 600.0);
+        check_bool("6 h 1 min + jitter 600 -> FetchJittered",
+                   d600.action == fetchgate::Action::FetchJittered);
+        check_near("se ancla al TTL: fetchAt = now - 60 + 600", d600.fetchAtUtc, now + 540.0);
 
-        check_bool("71.9 h -> FetchJittered",
-                   d_now(now, st, 71.9 * 3600.0).action == fetchgate::Action::FetchJittered);
+        check_bool("6 h 1 min + jitter 0 -> ya vencido, FetchNow",
+                   d_now(now, st, age, 0.0).action == fetchgate::Action::FetchNow);
+
+        // Una cache de 7 h se refresca YA, sin esperar el jitter: el ancla
+        // quedo atras. Este es el caso que la version anterior nunca cumplia.
+        check_bool("7 h -> FetchNow (no se pospone)",
+                   d_now(now, st, 7.0 * 3600.0, fetchgate::kJitterMaxSec).action ==
+                       fetchgate::Action::FetchNow);
+        check_bool("71.9 h -> FetchNow",
+                   d_now(now, st, 71.9 * 3600.0).action == fetchgate::Action::FetchNow);
         check_bool("72.1 h -> FetchNow",
                    d_now(now, st, 72.1 * 3600.0).action == fetchgate::Action::FetchNow);
     }
@@ -87,11 +106,12 @@ int main() {
     std::printf("--- C2a-4: jitter acotado ---\n");
     {
         fetchgate::State st;
-        check_near("jitter negativo se acota a 0",
-                   d_now(now, st, 8.0 * 3600.0, -500.0).fetchAtUtc, now);
+        const double age = fetchgate::kLiveTtlSec + 60.0;
+        check_bool("jitter negativo: ya vencido -> FetchNow",
+                   d_now(now, st, age, -500.0).action == fetchgate::Action::FetchNow);
         check_near("jitter enorme se acota a 1200 s",
-                   d_now(now, st, 8.0 * 3600.0, 99999.0).fetchAtUtc,
-                   now + fetchgate::kJitterMaxSec);
+                   d_now(now, st, age, 99999.0).fetchAtUtc,
+                   now - 60.0 + fetchgate::kJitterMaxSec);
     }
 
     std::printf("--- C2a-5: bloqueo persistido ---\n");
@@ -130,13 +150,14 @@ int main() {
                    d_now(now, st, 8.0 * 3600.0).action == fetchgate::Action::CacheOnly);
 
         st.lastAttemptUtc = now - 301.0;
-        check_bool("pasado el backoff -> FetchJittered",
-                   d_now(now, st, 8.0 * 3600.0).action == fetchgate::Action::FetchJittered);
+        // La cache tiene 8 h: su ancla de jitter ya vencio, asi que se pide ya.
+        check_bool("pasado el backoff -> FetchNow",
+                   d_now(now, st, 8.0 * 3600.0).action == fetchgate::Action::FetchNow);
 
         st.retryFails = 0;
         st.lastAttemptUtc = now - 120.0;
         check_bool("sin fallos, el intento previo no bloquea",
-                   d_now(now, st, 8.0 * 3600.0).action == fetchgate::Action::FetchJittered);
+                   d_now(now, st, 8.0 * 3600.0).action == fetchgate::Action::FetchNow);
     }
 
     std::printf("--- C2a-8: progresion del backoff 5 -> 60 min ---\n");
@@ -212,7 +233,17 @@ int main() {
                    fetchgate::kBlockSec);
     }
 
-    std::printf("--- C2a-12: sidecar de estado (round-trip) ---\n");
+    std::printf("--- C2a-11b: 200 con cuerpo ilegible -> bloqueo ---\n");
+    {
+        const auto bad = fetchgate::unreadableBody();
+        check_bool("respuesta ilegible bloquea", bad.block);
+        check_bool("respuesta ilegible no es transporte", !bad.transport);
+        check_bool("se rotula como ilegible",
+                   std::string(bad.label).find("ilegible") != std::string::npos);
+        check_near("bloqueo de 2 h", fetchgate::blockDurationSec(bad), fetchgate::kBlockSec);
+    }
+
+    std::printf("--- C2a-12: sidecar de estado (round-trip con clave) ---\n");
     {
         const std::string path = tmpPath("state", 0);
         std::filesystem::remove(path);
@@ -225,10 +256,12 @@ int main() {
         in.lastCurl = 0;
         in.retryFails = 2;
 
-        check_bool("save escribe el sidecar", fetchstate::save(path, in));
+        check_bool("save escribe el sidecar",
+                   fetchstate::save(path, "celestrak.active", in));
 
         fetchgate::State out;
-        check_bool("load relee el sidecar", fetchstate::load(path, out));
+        check_bool("load relee el sidecar",
+                   fetchstate::load(path, "celestrak.active", out));
         check_near("last_attempt", out.lastAttemptUtc, in.lastAttemptUtc);
         check_near("last_success", out.lastSuccessUtc, in.lastSuccessUtc);
         check_near("blocked_until", out.blockedUntilUtc, in.blockedUntilUtc);
@@ -236,9 +269,35 @@ int main() {
         check_bool("last_curl", out.lastCurl == 0);
         check_bool("retry_fails", out.retryFails == 2);
 
+        // Segunda puerta en el MISMO fichero: no debe borrar la primera.
+        fetchgate::State other;
+        other.lastAttemptUtc = now - 30.0;
+        other.lastHttp = 429;
+        other.retryFails = 1;
+        check_bool("save de otra clave",
+                   fetchstate::save(path, "celestrak.satnogs", other));
+
+        fetchgate::State again;
+        check_bool("la primera puerta sobrevive al save de la segunda",
+                   fetchstate::load(path, "celestrak.active", again));
+        check_bool("la primera conserva su 403", again.lastHttp == 403);
+        check_bool("la primera conserva su retry_fails", again.retryFails == 2);
+
+        fetchgate::State sat;
+        check_bool("la segunda se lee con su clave",
+                   fetchstate::load(path, "celestrak.satnogs", sat));
+        check_bool("la segunda conserva su 429", sat.lastHttp == 429);
+
+        fetchgate::State absent;
+        check_bool("clave inexistente -> false",
+                   !fetchstate::load(path, "celestrak.stations", absent));
+        check_bool("prefijo parcial ('celestrak') no lee claves ajenas",
+                   !fetchstate::load(path, "celestrak", absent));
+
         std::filesystem::remove(path);
         fetchgate::State missing;
-        check_bool("load de fichero ausente -> false", !fetchstate::load(path, missing));
+        check_bool("load de fichero ausente -> false",
+                   !fetchstate::load(path, "celestrak.active", missing));
     }
 
     std::printf("--- C2a-13: sidecar tolerante a basura ---\n");
@@ -253,8 +312,9 @@ int main() {
             f << "linea_sin_igual\n";
             f << "\n";
         }
+        // Clave vacia = formato antiguo sin prefijo (migracion).
         fetchgate::State out;
-        check_bool("basura: load no falla", fetchstate::load(path, out));
+        check_bool("basura: load no falla", fetchstate::load(path, "", out));
         check_near("basura: conserva lo legible", out.lastAttemptUtc, 123.5);
         check_bool("basura: retry_fails negativo se acota a 0", out.retryFails == 0);
         std::filesystem::remove(path);
@@ -265,8 +325,112 @@ int main() {
             f << "# fetch-state v1\n";
         }
         fetchgate::State none;
-        check_bool("sin claves conocidas -> false", !fetchstate::load(empty, none));
+        check_bool("sin claves conocidas -> false", !fetchstate::load(empty, "", none));
         std::filesystem::remove(empty);
+    }
+
+    std::printf("--- C2a-14: PROPIEDAD - reevaluar en fetchAt permite red ---\n");
+    {
+        // La invariante que rompio la primera version: si decide() devuelve un
+        // instante de reintento, al llegar a ese instante la misma cache ya no
+        // puede volver a posponer. Se recorre una malla de edades y jitters.
+        int cases = 0, badAction = 0, badBound = 0, badAnchor = 0;
+        const double ages[] = {6.0 * 3600.0,       6.0 * 3600.0 + 1.0,
+                               6.0 * 3600.0 + 600, 7.0 * 3600.0,
+                               12.0 * 3600.0,      24.0 * 3600.0,
+                               48.0 * 3600.0,      71.9 * 3600.0};
+        const double jitters[] = {0.0, 1.0, 300.0, 900.0, 1200.0};
+        fetchgate::State st;
+        for (double age0 : ages) {
+            for (double j : jitters) {
+                const auto d = fetchgate::decide(now, st, age0, j);
+                ++cases;
+                if (d.action == fetchgate::Action::FetchJittered) {
+                    // El reintento nunca debe caer mas alla del jitter maximo.
+                    if (d.fetchAtUtc > now + fetchgate::kJitterMaxSec + 1e-6) ++badBound;
+                    const double age1 = age0 + (d.fetchAtUtc - now);
+                    const auto at = fetchgate::decide(d.fetchAtUtc, st, age1, j);
+                    if (at.action != fetchgate::Action::FetchNow) ++badAction;
+                } else if (d.action == fetchgate::Action::FetchNow) {
+                    // Y si ya permite red, el ancla quedo atras de verdad.
+                    const double eligible = (now - age0) + fetchgate::kLiveTtlSec + j;
+                    if (now < eligible - 1e-6) ++badAnchor;
+                }
+            }
+        }
+        check_bool("malla de 40 casos evaluada", cases == 40);
+        check_bool("fetchAt nunca supera now+jitter_max", badBound == 0);
+        check_bool("en fetchAt la accion permite red", badAction == 0);
+        check_bool("FetchNow solo cuando el ancla ya vencio", badAnchor == 0);
+    }
+
+    std::printf("--- C2a-15: simulacion 80 h con red OK (1 peticion / 2 h) ---\n");
+    {
+        fetchgate::State st;
+        double cacheEpoch = 0.0;      // sin cache
+        double prevReq = -1.0;
+        double minGap = 1e18, maxGap = 0.0;
+        int requests = 0;
+        int perWindow[48] = {0};
+        const double t0 = now;
+        for (double t = t0; t <= t0 + 80.0 * 3600.0; t += 60.0) {
+            const bool haveCache = cacheEpoch > 0.0;
+            const double age = haveCache ? (t - cacheEpoch) : -1.0;
+            const double jitter = haveCache ? simJitter(cacheEpoch) : 0.0;
+            const auto d = fetchgate::decide(t, st, age, jitter);
+            const bool fire = (d.action == fetchgate::Action::FetchNow) ||
+                              (d.action == fetchgate::Action::FetchJittered &&
+                               d.fetchAtUtc <= t);
+            if (!fire) continue;
+            ++requests;
+            if (prevReq >= 0.0) {
+                const double gap = t - prevReq;
+                if (gap < minGap) minGap = gap;
+                if (gap > maxGap) maxGap = gap;
+            }
+            prevReq = t;
+            const int w = (int)((t - t0) / 7200.0);
+            if (w >= 0 && w < 48) ++perWindow[w];
+            // Red OK: se instala cache nueva con epoch = t.
+            cacheEpoch = t;
+            st.lastAttemptUtc = t;
+            st.lastSuccessUtc = t;
+            st.retryFails = 0;
+            st.blockedUntilUtc = 0.0;
+        }
+        bool onePerWindow = true;
+        for (int w = 0; w < 41; ++w) {
+            if (perWindow[w] > 1) onePerWindow = false;
+        }
+        std::printf("    peticiones=%d  gap min=%.0f s  max=%.0f s\n", requests, minGap, maxGap);
+        check_bool("80 h: entre 12 y 15 peticiones", requests >= 12 && requests <= 15);
+        check_bool("maximo 1 peticion por ventana de 2 h", onePerWindow);
+        check_bool("ningun ciclo se salta el TTL de 6 h",
+                   minGap >= fetchgate::kLiveTtlSec - 1.0);
+        check_bool("el jitter no retrasa mas de 20 min",
+                   maxGap <= fetchgate::kLiveTtlSec + fetchgate::kJitterMaxSec + 60.0);
+    }
+
+    std::printf("--- C2a-16: simulacion con 403 (bloqueo de 2 h) ---\n");
+    {
+        fetchgate::State st;
+        // t0 sin cache -> FetchNow; la respuesta es 403.
+        check_bool("sin cache se pide", fetchgate::decide(now, st, -1.0, 0.0).action ==
+                                            fetchgate::Action::FetchNow);
+        st.lastAttemptUtc = now;
+        st.lastHttp = 403;
+        st.blockedUntilUtc = now + fetchgate::blockDurationSec(fetchgate::classify(403, 0, 0.0));
+
+        int askedDuringBlock = 0;
+        for (double u = now + 60.0; u < now + fetchgate::kBlockSec; u += 60.0) {
+            if (fetchgate::decide(u, st, -1.0, 0.0).action != fetchgate::Action::Blocked) {
+                ++askedDuringBlock;
+            }
+        }
+        check_bool("403: cero peticiones durante 2 h", askedDuringBlock == 0);
+        check_bool("403: a las 2 h vuelve a permitir",
+                   fetchgate::decide(now + fetchgate::kBlockSec, st, -1.0, 0.0).action ==
+                       fetchgate::Action::FetchNow);
     }
 
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);

@@ -8,8 +8,18 @@
 // el escenario que hay que cubrir: cerrar y abrir la app no debe reiniciar la
 // cuenta de errores contra CelesTrak.
 //
-// Modulo PURO: solo std. Formato de texto, una clave por linea, tolerante a
-// lineas desconocidas y a valores basura (se ignoran, nunca lanzan).
+// CLAVES POR ENDPOINT (revision C2a): el mismo fichero guarda varias puertas,
+// una por URL/grupo, con el prefijo delante:
+//
+//   celestrak.active.last_attempt=...
+//   celestrak.active.blocked_until=...
+//   celestrak.satnogs.last_attempt=...
+//
+// Asi C2b (amateur + stations) y el fallback SatNOGS no comparten bloqueo:
+// un 403 en un grupo no debe silenciar los demas.
+//
+// Modulo PURO: solo std. Texto, una clave por linea, tolerante a lineas
+// desconocidas y a valores basura (se ignoran, nunca lanzan).
 // =============================================================================
 #include <string>
 
@@ -17,12 +27,13 @@
 
 namespace fetchstate {
 
-// Escribe el estado completo. Crea el directorio padre si falta. Devuelve
+// Escribe el estado de `key`. Crea el directorio padre si falta. Devuelve
 // false si no se pudo escribir (no es fatal para el llamante).
-bool save(const std::string& path, const fetchgate::State& st);
+bool save(const std::string& path, const std::string& key, const fetchgate::State& st);
 
-// Lee el estado. Devuelve false si el fichero no existe o no trae ninguna
-// clave conocida. Los campos que falten conservan el default del struct.
-bool load(const std::string& path, fetchgate::State& out);
+// Lee el estado de `key`. `key` vacio lee el formato antiguo sin prefijo
+// (migracion de una version anterior). Devuelve false si no hay ninguna clave
+// conocida para esa puerta. Los campos ausentes conservan el default.
+bool load(const std::string& path, const std::string& key, fetchgate::State& out);
 
 }  // namespace fetchstate

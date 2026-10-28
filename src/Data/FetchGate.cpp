@@ -50,10 +50,17 @@ Decision decide(double nowUtc, const State& st, double cacheAgeSec, double jitte
 
     if (haveCache && cacheAgeSec < kMaxFallbackAgeSec) {
         const double jitter = std::min(std::max(jitterSec, 0.0), kJitterMaxSec);
-        d.action = Action::FetchJittered;
-        d.fetchAtUtc = nowUtc + jitter;
-        d.reason = (jitter > 0.0) ? "cache vieja, reintento programado" : "cache vieja";
-        return d;
+        // Anclado a cuando la cache cumplio el TTL, no a "ahora": con
+        // "ahora + jitter" cada reevaluacion posponia otra vez y el TTL
+        // efectivo se convertia en 72 h.
+        const double eligibleAt = (nowUtc - cacheAgeSec) + kLiveTtlSec + jitter;
+        if (nowUtc < eligibleAt) {
+            d.action = Action::FetchJittered;
+            d.fetchAtUtc = eligibleAt;
+            d.reason = "cache vieja, reintento programado";
+            return d;
+        }
+        // Ya vencido: cae a FetchNow.
     }
 
     d.action = Action::FetchNow;
@@ -115,6 +122,13 @@ Outcome classify(long httpCode, int curlCode, double retryAfterSec) {
     } else {
         out.label = "HTTP distinto de 200";
     }
+    return out;
+}
+
+Outcome unreadableBody() {
+    Outcome out;
+    out.block = true;
+    out.label = "respuesta ilegible";
     return out;
 }
 

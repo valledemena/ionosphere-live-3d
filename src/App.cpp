@@ -2881,9 +2881,13 @@ void App::update(float dt) {
         if (now >= impl->satNextFetch && !impl->satAdapter.isFetching()) {
             impl->satAdapter.fetchAsync(tNow);
             // C2a: si la puerta esta bloqueada o esperando, no despertar al
-            // adaptador cada hora para que no haga nada.
-            const double nextNet = impl->satAdapter.nextNetworkUtc(now);
-            impl->satNextFetch = std::max(now + 60.0, std::min(now + 3600.0, nextNet));
+            // adaptador cada hora para que no haga nada. OJO con los relojes:
+            // nextNetworkUtc trabaja en epoch UTC y `now` es glfwGetTime
+            // (segundos desde el arranque), asi que la espera se calcula
+            // contra tNow y luego se suma al reloj monotono.
+            const double nextNet = impl->satAdapter.nextNetworkUtc(tNow);
+            const double waitSec = std::max(60.0, std::min(3600.0, nextNet - tNow));
+            impl->satNextFetch = now + waitSec;
         }
         const unsigned long gen = impl->satAdapter.getGeneration();
         if (gen != impl->satGeneration) {
@@ -5519,6 +5523,10 @@ void App::render() {
                                                     ? "waiting for first fetch"
                                                     : impl->satSnap.note.c_str());
     }
+    // Motivo informativo de la puerta de red (cache viva, reintento
+    // programado, bloqueo). No es un error: va en gris, no en rojo.
+    const std::string satStatus = impl->satAdapter.getStatusNote();
+    if (!satStatus.empty()) ImGui::TextDisabled("  %s", satStatus.c_str());
 
     bool showCme = impl->cmeVisible;
     if (ImGui::Checkbox("CME front (ENLIL)", &showCme)) {

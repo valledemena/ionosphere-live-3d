@@ -29,8 +29,10 @@
 //    sin cabecera Link). Array de objetos con los campos tle0 ("0 NOMBRE"),
 //    tle1, tle2, tle_source, sat_id, norad_cat_id, updated (ISO-8601).
 //    Solo cubre satelites con emisor registrado: es un subconjunto, no el
-//    catalogo activo completo. No se cachea (su formato no es nuestro formato
-//    de disco) y solo se consulta si la cache no sirve.
+//    catalogo activo completo. Si responde, su resultado se guarda en la cache
+//    con el mismo formato de 3 lineas (asi el siguiente arranque no repite la
+//    peticion), pero solo se consulta cuando la cache no sirve y con su propia
+//    puerta en el sidecar.
 //
 // HONESTIDAD: solo TLEs reales parseados. Si las tres fuentes fallan el
 // snapshot queda invalido (valid == false) con el motivo en
@@ -43,9 +45,12 @@
 // blocked_until). Cualquier respuesta distinta de 200 bloquea 2 h (429 respeta
 // Retry-After); los errores de transporte usan backoff 5 -> 60 min. Sin
 // FOLLOWLOCATION (los 3xx son aviso de URL obsoleta, no algo que ocultar).
-// User-Agent propio (la URL de contacto entra con C1). Timeouts 25 s
-// (CelesTrak) y 15 s (SatNOGS). La cache viva se reutiliza 6 h; un reinicio
-// ya no pide de nuevo.
+// User-Agent propio (la URL de contacto entra con C1). Timeouts con tope
+// amplio (120 s CelesTrak, 90 s SatNOGS) mas LOW_SPEED_LIMIT/TIME: si el
+// enlace solo se arrastra, se espera en vez de abortar una descarga que el
+// servidor ya conto (un reintento daria 403). La cache viva se reutiliza 6 h;
+// un reinicio ya no pide de nuevo. Cada proveedor tiene su propia puerta en el
+// sidecar (claves celestrak.active / celestrak.satnogs).
 //
 // La posicion NO se calcula aqui: este modulo solo entrega elementos medios
 // (orbitprop::OrbitElements). Ver OrbitProp.h para el modelo y sus limites.
@@ -87,6 +92,9 @@ public:
     // Copia bajo mutex: el texto lo escribe el hilo de fetch, asi que devolver
     // una referencia seria una carrera al leerla desde el hilo principal.
     std::string getErrorMessage() const;
+    // Motivo informativo (no es un error): "red: cache viva (<6 h)", etc.
+    // Va aparte para que la UI no pinte un estado sano como averia.
+    std::string getStatusNote() const;
 
     // Epoch del snapshot instalado (cambia cuando cambia el catalogo, venga de
     // red o de cache). Es lo que usa el hilo de UI para saber si recopiarlo.
@@ -133,23 +141,27 @@ private:
     static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     HttpResult httpGet(const char* url, long timeoutSec, std::string& body);
     bool fetch(double utc);
+    // SatNOGS tiene su propia puerta: un bloqueo de CelesTrak no debe
+    // silenciar otro proveedor (revision C2a).
+    bool fetchSatnogs(double utc, TleSnapshot& out, std::string& err);
 
-    // Instala un snapshot y refresca el epoch que ve la UI.
-    void installLocked(const TleSnapshot& snap);
-    // Sirve cache (si la hay) y deja el motivo en error_.
+    // Sirve cache (si la hay) y deja el motivo en status_/error_.
     bool serveCache(double utc, double maxAgeSec, const std::string& why);
-    // Persiste el sidecar de la puerta (best-effort).
-    void persistState(const fetchgate::State& st);
+    // Persiste el sidecar de una puerta (best-effort).
+    void persistState(const std::string& key, const fetchgate::State& st);
     // Edad de la cache en segundos, o -1 si no hay.
     double cacheAgeSec(double utc) const;
 
     mutable std::mutex mutex_;
     TleSnapshot latest_;
     std::atomic<bool> fetching_{false};
-    fetchgate::State gate_;
+    fetchgate::State gate_;        // puerta de CelesTrak (grupo active)
+    fetchgate::State gateSatnogs_; // puerta de SatNOGS (proveedor distinto)
     double snapshotEpoch_ = 0.0;
     std::string cachePath_;
     std::string statePath_;
+    bool dirFallback_ = false;
     unsigned long generation_ = 0;
     std::string error_;
+    std::string status_;
 };
