@@ -196,12 +196,15 @@ bool isCacheHeader(const std::string& header) {
 }
 
 void setNote(TleSnapshot& out, size_t dropped) {
-    char buf[96];
+    char buf[128];
+    const size_t total = out.sats.size() + dropped;
+    const int pct = (total > 0) ? (int)(100.0 * (double)dropped / (double)total) : 0;
     if (out.sats.empty()) {
-        std::snprintf(buf, sizeof(buf), "sin TLE validos (%d descartados)", (int)dropped);
+        std::snprintf(buf, sizeof(buf), "sin TLE validos (%d descartados, %d%%)",
+                      (int)dropped, pct);
     } else if (dropped > 0) {
-        std::snprintf(buf, sizeof(buf), "%d sats (%d descartados)", (int)out.sats.size(),
-                      (int)dropped);
+        std::snprintf(buf, sizeof(buf), "%d sats (%d descartados, %d%%)",
+                      (int)out.sats.size(), (int)dropped, pct);
     } else {
         std::snprintf(buf, sizeof(buf), "%d sats", (int)out.sats.size());
     }

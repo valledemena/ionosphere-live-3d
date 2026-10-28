@@ -460,3 +460,14 @@ add_test(NAME ae_parse COMMAND test_ae_parse)
 add_executable(test_solar_wind_river tests/test_solar_wind_river.cpp)
 target_include_directories(test_solar_wind_river PRIVATE src libs/glm)
 add_test(NAME solar_wind_river COMMAND test_solar_wind_river)
+add_executable(test_tz_utc tests/test_tz_utc.cpp)
+target_include_directories(test_tz_utc PRIVATE src)
+target_sources(test_tz_utc PRIVATE
+    src/Data/TleAdapter.cpp
+    src/Data/OrbitProp.cpp
+    src/Data/FetchGate.cpp
+    src/Data/FetchState.cpp
+    src/Utils/Paths.cpp
+)
+target_link_libraries(test_tz_utc PRIVATE CURL::libcurl)
+add_test(NAME tz_utc COMMAND test_tz_utc)
