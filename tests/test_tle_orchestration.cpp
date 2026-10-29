@@ -44,6 +44,12 @@ static void checkBool(const char* what, bool cond) {
     std::printf("[%s] %s\n", cond ? "OK" : "FAIL", what);
 }
 
+static void checkInt(const char* what, int got, int want) {
+    const bool ok = (got == want);
+    (ok ? g_ok : g_fail) += 1;
+    std::printf("[%s] %s: got %d want %d\n", ok ? "OK" : "FAIL", what, got, want);
+}
+
 static void checkNear(const char* what, double got, double want, double tol = 1.0) {
     const bool ok = std::fabs(got - want) <= tol;
     (ok ? g_ok : g_fail) += 1;
@@ -600,6 +606,45 @@ int main() {
                   TleAdapter::loadCelestrakCache(p.cache, T0 + 120.0, back) &&
                       back.sats.size() == 3);
         checkBool("sin filas de otro grupo", !hasNorad(back, 90003));
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+    std::printf("--- C2b-31: defecto sin clave en settings.cfg -> amateur,stations ---\n");
+    {
+        TleAdapter a;
+        // No llamamos a setGroups; deberia iniciar con el defecto.
+        checkBool("defecto es amateur,stations", a.groups() == std::vector<std::string>({"amateur", "stations"}));
+    }
+
+    std::printf("--- C2b-32: active descarta los demas ---\n");
+    {
+        TleAdapter a;
+        a.setGroups({"active", "stations", "weather"});
+        checkBool("solo queda active", a.groups() == std::vector<std::string>({"active"}));
+    }
+
+    std::printf("--- C2b-33: alternar active y par pequeño sin contaminar caches/puertas ---\n");
+    {
+        Paths p = makePaths("Alt");
+        Mock m;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setTransport(m.transport());
+        
+        a.setGroups({"active"});
+        a.fetchOnce(T0 + 60.0);
+        checkInt("peticiones active", m.celestrakCalls, 1);
+        
+        m.celestrakCalls = 0;
+        a.setGroups({"amateur", "stations"});
+        a.fetchOnce(T0 + 120.0);
+        checkInt("peticiones amateur+stations", m.celestrakCalls, 2);
+        
+        const std::string state = readText(p.state);
+        checkBool("sidecar tiene claves la activo", state.find("celestrak.active") != std::string::npos);
+        checkBool("sidecar tiene claves la amateur", state.find("celestrak.amateur") != std::string::npos);
+        checkBool("sidecar tiene claves la stations", state.find("celestrak.stations") != std::string::npos);
 
         std::error_code ec;
         fs::remove_all(p.dir, ec);

@@ -237,7 +237,7 @@ struct App::Impl {
     bool satVisible = false;
     // C2b: grupos de CelesTrak seleccionados, tal cual van a settings.cfg
     // ("active" o "active,stations"). El adaptador los valida igualmente.
-    std::string satGroups = "active";
+    std::string satGroups = "amateur,stations";
     WsprArcs wsprArcs;
     CmeLayer cme;
     WhistlerLayer whistlers;
@@ -2955,11 +2955,13 @@ struct SatGroupPreset {
     const char* keys;
 };
 const SatGroupPreset kSatGroupPresets[] = {
-    {"Active only", "active"},
-    {"Active + stations", "active,stations"},
-    {"Active + weather", "active,weather"},
-    {"Active + GPS", "active,gps-ops"},
-    {"Active + science", "active,science"},
+    {"Amateur + stations", "amateur,stations"},
+    {"Amateur", "amateur"},
+    {"Stations", "stations"},
+    {"Weather", "weather"},
+    {"GPS", "gps-ops"},
+    {"Science", "science"},
+    {"Active (large download)", "active"},
 };
 constexpr int kSatGroupPresetCount =
     (int)(sizeof(kSatGroupPresets) / sizeof(kSatGroupPresets[0]));
@@ -5581,7 +5583,7 @@ void App::render() {
         impl->satLayer.setVisible(showSat);
         if (showSat) impl->satNextFetch = 0.0;   // evalua la puerta ya (C2a: encender no implica pedir)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak (active objects), fallback SatNOGS, then the on-disk cache - the source label says which one is drawn. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak. Amateur + stations is the default small download; 'Active' fetches the full catalogue. Fallback SatNOGS, then the on-disk cache. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
     if (impl->satVisible) {
         // C2b: que grupos de CelesTrak se piden y se fusionan. Cambiar de
         // seleccion no borra el catalogo actual: el siguiente pase lo sustituye.
