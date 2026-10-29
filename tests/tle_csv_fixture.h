@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // =============================================================================
 // Fixture compartido del GP CSV de CelesTrak (FORMAT=csv).
 //

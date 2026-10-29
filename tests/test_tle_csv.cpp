@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // test_tle_csv - C2b: GP CSV (OMM) de CelesTrak, puro y sin red.
 //
 // Por que CSV: el TLE clasico de 5 digitos se agoto el 2026-07-11 y desde

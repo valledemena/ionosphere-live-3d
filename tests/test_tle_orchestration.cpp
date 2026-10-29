@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // test_tle_orchestration - C2a: la ORQUESTACION de TleAdapter::fetch().
 //
 // Los otros tests cubren las piezas puras (decide, sidecar, cache). Aqui se

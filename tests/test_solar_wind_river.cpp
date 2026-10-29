@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // test_solar_wind_river - Lote 5 / modulo E: rio de viento solar (logica pura).
 //
 // Test sin GL y sin red: llama a PRODUCCION y comprueba
