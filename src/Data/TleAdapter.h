@@ -275,7 +275,9 @@ private:
     // Una puerta POR GRUPO: el estado de `weather` no puede pisar el de
     // `active` (antes habia un unico `gate_`).
     std::map<std::string, fetchgate::State> gates_;
-    std::vector<std::string> groupKeys_ = {"active"};
+    // Defecto sin seleccion explicita: par pequeno (C2b-31). `active` es el
+    // superconjunto y solo se pide cuando alguien lo elige en la UI.
+    std::vector<std::string> groupKeys_ = {"amateur", "stations"};
     fetchgate::State gateSatnogs_; // puerta de SatNOGS (proveedor distinto)
     double snapshotEpoch_ = 0.0;
     std::filesystem::path cachePath_;

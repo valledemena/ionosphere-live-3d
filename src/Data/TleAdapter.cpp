@@ -1159,7 +1159,7 @@ bool TleAdapter::fetch(double utc) {
                 }
             }
         }
-        // UN unico fallback, y solo si la fusion no dejo nada: un grupo caidom
+        // UN unico fallback, y solo si la fusion no dejo nada: un grupo caido
         // no manda a SatNOGS si los demas trajeron datos reales.
         return serveSatnogs(utc, note.empty() ? "celestrak: sin datos" : note);
     }
@@ -1171,7 +1171,7 @@ bool TleAdapter::fetch(double utc) {
         if (changed) ++generation_;
         latest_ = merged;
         snapshotEpoch_ = merged.timeUtc;
-        // Un catalogo vivo y completo no deja aviso; cache o un grupo caidom
+        // Un catalogo vivo y completo no deja aviso; cache o un grupo caido
         // no manda a SatNOGS si los demas trajeron datos reales.
         if (merged.source == TleSource::Celestrak) {
             // Catalogo vivo y completo: solo deja aviso si algun grupo fallo.
@@ -1193,7 +1193,9 @@ bool TleAdapter::fetch(double utc) {
 
     printf("[Tle] %s (%s)\n", merged.note.c_str(), sourceLabel(merged.source));
     return true;
-}bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
+}
+
+bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
     TleSnapshot snap;
     std::string err = why;
     if (!fetchSatnogs(utc, snap, err)) {
