@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <functional>
 #include <string>
 #include <vector>
 #include <thread>
@@ -36,6 +37,19 @@ public:
     // distintos; no llamar concurrente sobre el MISMO adapter).
     bool fetchIndex(std::vector<GloTecFrame>& out);
     bool fetchFrame(const std::string& url, double timeUtc, GridData& out);
+    // Backfill sobre un indice ya descargado (misma planificacion glotbf).
+    // Con `onFrame` vacio guarda en cache y deja el MAS NUEVO en newestOut;
+    // con `onFrame` entrega cada frame al llamante (que decide persistencia).
+    struct BackfillStats {
+        int planned = 0;    // peticiones planificadas
+        int cached = 0;     // frames del horizonte ya cacheados
+        int stored = 0;     // frames obtenidos
+    };
+    bool backfillFrom(const std::vector<GloTecFrame>& index,
+                      const std::vector<double>& cachedEpochs,
+                      double utc, int depthSlots,
+                      const std::function<void(const GridData&, double)>& onFrame,
+                      GridData* newestOut, BackfillStats* stats);
     void setGridSize(int w, int h) { gridW_ = w; gridH_ = h; }
     // Directorio del cache TEC en disco (teccache::saveFrame). El backfill no
     // vuelve a pedir los frames que ya estan ahi.

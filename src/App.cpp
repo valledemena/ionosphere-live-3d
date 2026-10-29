@@ -44,6 +44,7 @@
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
+#include "Data/GloTecBackfill.h"  // C1b: plan del backfill (profundidad/horizonte)
 #include "Data/GiroAdapter.h"
 #include "Data/TecCache.h"  // M10: cache TEC en disco
 #include "Data/SdoImageAdapter.h"  // M11: disco solar
@@ -519,6 +520,7 @@ struct App::Impl {
     // M10 (cache TEC en disco): settings + estado de restore.
     bool tecCacheEnabled = true;
     double tecCacheMaxAgeH = 72.0;   // >maxAge puebla replay, no current
+    int tecDepthSlots = 36;          // C1b: 36/144/432 = 6/24/72 h de backfill
     std::atomic<bool> cacheLoaded{false};     // init-read con frames reales
     std::atomic<double> cacheNewestEpoch{-1.0};
     std::atomic<int> cacheRestored{0};
@@ -1525,46 +1527,36 @@ bool App::init(int width, int height, const char* title) {
             self->impl->histLoading.store(true);
             GloTecAdapter loader;   // instancia propia: sin estado compartido
             loader.setGridSize(72, 72);
+            loader.setStopFlag(&self->impl->shutdownRequested);
             std::vector<GloTecFrame> idx;
             if (loader.fetchIndex(idx)) {
-                // TEC-ext 034: ventana [now-72 h, now] ausente en anillo/disco
-                // (el take clasico solo pedia mas-nuevo-que-cache: en cache
-                // calida no habria backfill de viejos).
+                // C1b: la precarga es un backfill planificado (glotbf::run):
+                // horizonte = profundidad elegida, ritmo ~1 req/s, paradas por
+                // 404/429/5xx y stop flag. Antes era un bucle sin pausa de
+                // hasta 432 GET en rafaga.
                 std::vector<double> cachedEp;
                 {
                     std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
                     for (const auto& f : self->impl->tecHist)
                         cachedEp.push_back(f.timestamp);
                 }
-                const int nCached = (int)cachedEp.size();
-                std::vector<double> idxEp;
-                idxEp.reserve(idx.size());
-                for (const auto& e : idx) idxEp.push_back(e.timeUtc);
-                const double nowPre =
-                    (double)std::time(nullptr);
-                const std::vector<std::size_t> want =
-                    teccache::missingInWindow(cachedEp, idxEp, nowPre,
-                                              (std::size_t)teccache::kCapFrames);
-                self->impl->histTotal.store((int)want.size());
-                int nSkipped = 0;
-                for (std::size_t k : want) {
-                    if (self->impl->shutdownRequested.load()) break;   // M0.2
-                    {
-                        std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
-                        const std::size_t nRing = self->impl->tecHist.size();
-                        const double ringOld = nRing > 0 ? self->impl->tecHist.front().timestamp : 0.0;
-                        if (!teccache::fitsInRing(nRing, (std::size_t)teccache::kCapFrames, ringOld, idx[k].timeUtc)) {
-                            ++nSkipped;
-                            self->impl->histDone.store(self->impl->histDone.load() + 1);
-                            continue;
-                        }
-                    }
-                    GridData fr;
-                    if (loader.fetchFrame(idx[k].url, idx[k].timeUtc, fr))
-                        self->pushHistoryFrame(fr, idx[k].timeUtc, false);
-                    self->impl->histDone.store(self->impl->histDone.load() + 1);
-                }
-                printf("[App] History preload: %d cached + %d fetched + %d skipped\n", nCached, (int)want.size() - nSkipped, nSkipped);
+                const double nowPre = (double)std::time(nullptr);
+                const int depth = glm::clamp(self->impl->tecDepthSlots, 36, 432);
+                std::vector<glotbf::IndexFrame> pure;
+                pure.reserve(idx.size());
+                for (const auto& e : idx) pure.push_back({e.url, e.timeUtc});
+                const std::vector<glotbf::IndexFrame> todo =
+                    glotbf::plan(pure, cachedEp, nowPre, depth);
+                self->impl->histDone.store(0);
+                self->impl->histTotal.store((int)todo.size());
+                GloTecAdapter::BackfillStats st;
+                loader.backfillFrom(idx, cachedEp, nowPre, depth,
+                    [self](const GridData& fr, double ts) {
+                        self->pushHistoryFrame(fr, ts, false);
+                        self->impl->histDone.fetch_add(1);
+                    }, nullptr, &st);
+                printf("[App] History preload: %d cached + %d fetched (%d planned, depth %d)\n",
+                       st.cached, st.stored, st.planned, depth);
             }
             self->impl->histLoading.store(false);
         });
@@ -3056,6 +3048,7 @@ void App::saveSettings() {
     fprintf(f, "voyWinH %g\n", (double)impl->voyagerGeom.h);
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
+    fprintf(f, "tecDepthSlots %d\n", impl->tecDepthSlots);               // C1b
     fclose(f);
 }
 
@@ -3166,6 +3159,10 @@ void App::loadSettings() {
     else if (k == "voyWinH") impl->voyagerGeom.h = glm::clamp((float)v, 220.0f, 1000.0f);
         else if (k == "tecCacheEnabled") impl->tecCacheEnabled = clB(v);   // M10
         else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
+        else if (k == "tecDepthSlots") {   // C1b: solo 36/144/432 (6/24/72 h)
+            const int d = (int)v;
+            impl->tecDepthSlots = (d == 144 || d == 432) ? d : 36;
+        }
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
@@ -3341,7 +3338,10 @@ void App::fetchWorker() {
                 if (gloDt >= 0 && (double)gloDt < 600.0) {
                     ok = (gloLastAttemptOk && glo.getGrid().valid);
                 } else {
-                    ok = glo.fetchTEC(epoch);
+                    // C1b: profundidad minima en el worker (solo huecos
+                    // recientes); el backfill largo lo hace la precarga en su
+                    // hilo para no bloquear solar wind/aurora/Kp en este.
+                    ok = glo.fetchTEC(epoch, 3);
                     gloLastAttemptOk = ok;
                     gloLastAttemptUtc = epoch;
                 }
@@ -6311,9 +6311,12 @@ void App::render() {
         GiroAdapter::GiroNetStatus gs = impl->giro.getNetStatus();
         if (!impl->replayMode) {
             if (impl->histLoading.load()) {
-                ImGui::Text("LIVE  (loading history %d/%d...)",
-                    impl->histDone.load(), impl->histTotal.load());
-                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay.");
+                // C1b: el progreso incluye el tamano real descargado
+                // (24 B de cabecera + 72x72 f32 por frame).
+                const double mb = (double)impl->histDone.load() * 20760.0 / (1024.0 * 1024.0);
+                ImGui::Text("LIVE  (loading history %d/%d, %.1f MB)",
+                    impl->histDone.load(), impl->histTotal.load(), mb);
+                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay (about 1 frame/s).");
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }

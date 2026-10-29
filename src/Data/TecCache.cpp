@@ -2,6 +2,7 @@
 #include "Data/TecCache.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <filesystem>
 
@@ -81,7 +82,11 @@ bool saveFrame(const std::string& dir, const Frame& f) {
     if (f.v.size() != (size_t)f.w * (size_t)f.h) return false;
     if (!ensureDir(dir)) return false;
     const std::string dst = dir + "/" + frameName(f.epoch);
-    const std::string tmp = dst + ".tmp";
+    // Sufijo unico: la precarga y el worker pueden guardar el mismo epoch a la
+    // vez (mismo .tmp = escritura entrelazada y rename perdido).
+    static std::atomic<unsigned> seq{0};
+    const std::string tmp =
+        dst + ".tmp" + std::to_string(seq.fetch_add(1, std::memory_order_relaxed));
     if (!writeAll(tmp, f)) {
         std::error_code ec;
         std::filesystem::remove(tmp, ec);

@@ -276,34 +276,19 @@ bool GloTecAdapter::fetchFrame(const std::string& url, double timeUtc, GridData&
     return true;
 }
 
-bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
-    // C1b: backfill 6/24/72 h. El plan y sus reglas (orden nuevo -> viejo,
-    // dedup contra el cache, 1 req/s, 3 x 404, Retry-After) viven en
-    // glotbf::run, puro y testeado con transporte/reloj inyectados.
-    std::vector<GloTecFrame> raw;
-    if (!fetchIndex(raw)) return false;
-    if (raw.empty()) { error_ = "indice vacio"; return false; }
-
-    std::vector<glotbf::IndexFrame> index;
-    index.reserve(raw.size());
-    for (const GloTecFrame& f : raw) index.push_back({f.url, f.timeUtc});
-
-    // El cache es la memoria del backfill: lo que ya esta en disco no se
-    // vuelve a pedir (ni gasta cuota ni reescribe el fichero).
-    teccache::ScanResult scan = teccache::loadCached(cacheDir_);
-    std::vector<double> cached;
-    cached.reserve(scan.frames.size());
-    for (const teccache::Frame& f : scan.frames) cached.push_back(f.epoch);
+bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
+                                 const std::vector<double>& cachedEpochs,
+                                 double utc, int depthSlots,
+                                 const std::function<void(const GridData&, double)>& onFrame,
+                                 GridData* newestOut, BackfillStats* stats) {
+    std::vector<glotbf::IndexFrame> pure;
+    pure.reserve(index.size());
+    for (const GloTecFrame& f : index) pure.push_back({f.url, f.timeUtc});
 
     glotbf::Options opt;
     opt.depthSlots = depthSlots > 0 ? depthSlots : glotbf::kDepth6h;
 
-    // El primero que llega (el mas nuevo, por el orden del plan) se queda como
-    // grid servido: antes el bucle dejaba el MAS VIEJO en pantalla.
     bool haveNewest = false;
-    double newestTs = 0.0;
-    GridData newest;
-
     auto transport = [this](const std::string& url) {
         glotbf::Response r;
         std::string body;
@@ -314,20 +299,26 @@ bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
         r.body = std::move(body);
         return r;
     };
-    auto store = [this, &haveNewest, &newest, &newestTs](
+    auto store = [this, &onFrame, newestOut, &haveNewest](
                      const glotbf::IndexFrame& f, const std::string& body) {
         if (!parseGeoJSON(body)) return false;
-        if (!haveNewest) {
-            newest = grid_;
-            newestTs = f.timeUtc;
-            haveNewest = true;
+        GridData g = grid_;
+        g.timestamp = f.timeUtc;
+        g.valid = true;
+        if (onFrame) {
+            onFrame(g, f.timeUtc);
+        } else {
+            teccache::Frame tf;
+            tf.epoch = f.timeUtc;
+            tf.w = g.width;
+            tf.h = g.height;
+            tf.v = g.values;
+            teccache::saveFrame(cacheDir_, tf);  // best-effort
+            if (!haveNewest) {
+                if (newestOut) *newestOut = g;
+                haveNewest = true;
+            }
         }
-        teccache::Frame tf;
-        tf.epoch = f.timeUtc;
-        tf.w = grid_.width;
-        tf.h = grid_.height;
-        tf.v = grid_.values;
-        teccache::saveFrame(cacheDir_, tf);  // best-effort: fallar aqui no es fatal
         return true;
     };
     auto sleepFn = [](double seconds) {
@@ -338,15 +329,41 @@ bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
     auto stopFn = [this]() { return stop_ && stop_->load(); };
 
     const glotbf::Result res =
-        glotbf::run(index, cached, utc, opt, transport, store, sleepFn, stopFn);
+        glotbf::run(pure, cachedEpochs, utc, opt, transport, store, sleepFn, stopFn);
 
-    if (haveNewest) {
+    if (stats) {
+        stats->planned = (int)res.requested.size();
+        stats->cached = res.skippedCached;
+        stats->stored = (int)res.stored.size();
+    }
+    if (res.stoppedOn404) error_ = "backfill: 3 x 404 seguidos";
+    else if (res.stoppedOn5xx) error_ = "backfill: 5xx del servidor";
+    else if (res.stoppedOn429) error_ = "backfill: 3 x 429 seguidos";
+    else if (res.stoppedOnRetryAfter) error_ = "backfill: Retry-After > tope";
+    else if (res.stoppedOnTransport) error_ = "backfill: 3 fallos de transporte";
+    else if (res.stoppedByCaller) error_ = "backfill interrumpido";
+    else error_.clear();
+
+    return !res.stored.empty();
+}
+
+bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
+    // C1b: el worker pide una profundidad pequena (huecos recientes); la
+    // precarga de App hace el backfill largo en su propio hilo.
+    std::vector<GloTecFrame> raw;
+    if (!fetchIndex(raw)) return false;
+    if (raw.empty()) { error_ = "indice vacio"; return false; }
+
+    teccache::ScanResult scan = teccache::loadCached(cacheDir_);
+    std::vector<double> cached;
+    cached.reserve(scan.frames.size());
+    for (const teccache::Frame& f : scan.frames) cached.push_back(f.epoch);
+
+    GridData newest;
+    if (backfillFrom(raw, cached, utc, depthSlots, {}, &newest, nullptr)) {
         grid_ = newest;
-        grid_.timestamp = newestTs;
         grid_.valid = true;
         lastFetchUtc_ = utc;
-        if (res.stoppedOn404) error_ = "backfill: 3 x 404 seguidos";
-        else if (res.stoppedOn5xx) error_ = "backfill: 5xx del servidor";
         return true;
     }
     // Todo estaba en cache: se sirve el frame mas nuevo del disco.
@@ -360,7 +377,5 @@ bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
         lastFetchUtc_ = utc;
         return true;
     }
-    error_ = res.stoppedByCaller ? "backfill interrumpido"
-                                 : "parseGeoJSON fallo (sin celdas)";
     return false;
 }
