@@ -7,9 +7,9 @@
 // por 404 y el Retry-After se prueban sin tocar NOAA (tests/test_glo_backfill).
 //
 // Reglas:
-//   - Plan: solo frames dentro de la ventana de 72 h, de NUEVO a VIEJO, sin
-//     los epochs que ya estan en el cache, limitado a depthSlots peticiones
-//     (36 = 6 h, 144 = 24 h, 432 = 72 h a 10 min/frame).
+//   - Plan: horizonte de depthSlots frames MAS NUEVOS dentro de la ventana de
+//     72 h (36 = 6 h, 144 = 24 h, 432 = 72 h a 10 min/frame). Dentro de ese
+//     horizonte se descartan los epochs que ya estan en el cache.
 //   - Ritmo: >= minIntervalSec entre peticiones (1 s por defecto).
 //   - Un 404 se cuenta y se salta; 3 404 CONSECUTIVOS paran. Un 404 aislado
 //     no bloquea nada: este modulo no escribe estado de puerta.
@@ -61,7 +61,7 @@ struct Options {
 struct Result {
     std::vector<double> requested;   // epochs pedidos, en orden
     std::vector<double> stored;      // epochs almacenados, en orden
-    int skippedCached = 0;           // frames de la ventana ya en cache
+    int skippedCached = 0;           // frames del horizonte ya en cache
     int notFound = 0;                // 404 recibidos
     int httpErrors = 0;              // transporte, 429 y otros no-200
     bool stoppedOn404 = false;       // 3 404 consecutivos
@@ -70,8 +70,10 @@ struct Result {
     double sleptSec = 0.0;           // suma de esperas
 };
 
-// Puro: orden nuevo -> viejo, ventana 72 h, dedup exacto contra cachedEpochs y
-// como maximo depthSlots frames.
+// Puro: horizonte de `depthSlots` frames mas nuevos de la ventana de 72 h y,
+// DENTRO de ese horizonte, descarta los ya cacheados. El horizonte se fija
+// antes del dedup: si no, en regimen estable se pedirian 36 frames viejos en
+// cada pase y en ~12 pases se bajaria la ventana entera.
 std::vector<IndexFrame> plan(const std::vector<IndexFrame>& index,
                              const std::vector<double>& cachedEpochs,
                              double nowUtc, int depthSlots);

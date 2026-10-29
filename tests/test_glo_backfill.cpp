@@ -98,7 +98,7 @@ int main() {
         std::vector<double> sleeps;
         auto sleepFn = [&sleeps](double sec) { sleeps.push_back(sec); };
         glotbf::Result r = glotbf::run(idx, cached, t0, opt, tr, store, sleepFn, {});
-        check_bool("pide 36 (profundidad 6 h)", (int)r.requested.size() == 36);
+        check_bool("horizonte de 36 menos 2 cacheados = 34", (int)r.requested.size() == 34);
         check_bool("primer pedido es el mas nuevo",
                    !r.requested.empty() && r.requested.front() == t0);
         check_bool("orden estricto nuevo -> viejo", strictlyDescending(r.requested));
@@ -107,8 +107,34 @@ int main() {
             if (e == t0 - 5 * kStep || e == t0 - 20 * kStep) cachedAsked = true;
         check_bool("frames cacheados no se piden", !cachedAsked);
         check_int("skippedCached cuenta los dos", r.skippedCached, 2);
-        check_int("los 36 se almacenan", (int)r.stored.size(), 36);
-        check_int("store llamado 36 veces", stored, 36);
+        check_int("los 34 se almacenan", (int)r.stored.size(), 34);
+        check_int("store llamado 34 veces", stored, 34);
+    }
+
+    std::printf("--- C1b: el horizonte se fija ANTES del dedup ---\n");
+    {
+        // Cache caliente con los 36 mas nuevos (menos el mas nuevo) y el frame
+        // nuevo que acaba de publicar el indice: solo se pide ese.
+        auto idx = makeIndex(t0, 37);
+        std::vector<double> cached;
+        for (int i = 1; i <= 36; ++i) cached.push_back(t0 - i * kStep);
+        auto p = glotbf::plan(idx, cached, t0, 36);
+        check_int("cache 36 + frame nuevo: solo el nuevo", (int)p.size(), 1);
+        check_bool("es el mas nuevo", !p.empty() && p[0].timeUtc == t0);
+
+        // Hueco dentro de las 6 h: solo se pide el hueco.
+        std::vector<double> hole;
+        for (int i = 0; i < 36; ++i)
+            if (i != 10) hole.push_back(t0 - i * kStep);
+        auto p2 = glotbf::plan(idx, hole, t0, 36);
+        check_int("hueco dentro de 6 h: solo el hueco", (int)p2.size(), 1);
+        check_bool("el hueco es el esperado",
+                   !p2.empty() && p2[0].timeUtc == t0 - 10 * kStep);
+
+        // Un frame cacheado FUERA del horizonte no encoge el horizonte.
+        std::vector<double> old = {t0 - 40 * kStep};
+        auto p3 = glotbf::plan(makeIndex(t0, 60), old, t0, 36);
+        check_int("cache fuera del horizonte no cuenta", (int)p3.size(), 36);
     }
 
     std::printf("--- C1b: 3 x 404 consecutivos paran sin almacenar ---\n");
@@ -239,7 +265,7 @@ int main() {
         check_bool("el ultimo planificado es el de 72 h",
                    !p432.empty() && std::fabs(p432.back().timeUtc - (t0 - 431 * kStep)) < 1e-9);
         auto p500 = glotbf::plan(wide, {}, t0, 500);
-        check_int("la ventana 72 h limita aunque se pidan 500", (int)p500.size(), 433);
+        check_int("la ventana 72 h limita aunque se pidan 500", (int)p500.size(), 432);
     }
 
     std::printf("--- C1b: stop() interrumpe ---\n");

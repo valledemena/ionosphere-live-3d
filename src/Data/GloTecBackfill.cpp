@@ -5,35 +5,49 @@
 
 namespace glotbf {
 
-std::vector<IndexFrame> plan(const std::vector<IndexFrame>& index,
-                             const std::vector<double>& cachedEpochs,
-                             double nowUtc, int depthSlots) {
+namespace {
+
+bool isCached(double epoch, const std::vector<double>& cached) {
+    for (double e : cached) {
+        if (e == epoch) return true;
+    }
+    return false;
+}
+
+// Frames de la ventana [now-72 h, now] de NUEVO a VIEJO, cortados a depth.
+// El borde usa `<=`: un frame exactamente a 72 h queda fuera, igual que la
+// poda del anillo (432 frames), para no pedir uno que se podaria al instante.
+std::vector<IndexFrame> horizon(const std::vector<IndexFrame>& index,
+                                double nowUtc, int depthSlots) {
     const int depth = depthSlots > 0 ? depthSlots : kDepth6h;
     std::vector<IndexFrame> out;
     if (index.empty() || depth <= 0) return out;
 
     const double oldest = nowUtc - kWindowSec;
-    std::vector<IndexFrame> inWindow;
-    inWindow.reserve(index.size());
     for (const IndexFrame& f : index) {
         if (!(f.timeUtc > 0.0) || !std::isfinite(f.timeUtc)) continue;
-        if (f.timeUtc < oldest) continue;
-        inWindow.push_back(f);
+        if (f.timeUtc <= oldest) continue;
+        out.push_back(f);
     }
-    std::sort(inWindow.begin(), inWindow.end(),
+    std::sort(out.begin(), out.end(),
               [](const IndexFrame& a, const IndexFrame& b) {
                   return a.timeUtc > b.timeUtc;  // nuevo -> viejo
               });
+    if ((int)out.size() > depth) out.resize((size_t)depth);
+    return out;
+}
 
-    out.reserve((size_t)depth);
-    for (const IndexFrame& f : inWindow) {
-        bool cached = false;
-        for (double e : cachedEpochs) {
-            if (e == f.timeUtc) { cached = true; break; }
-        }
-        if (cached) continue;
+}  // namespace
+
+std::vector<IndexFrame> plan(const std::vector<IndexFrame>& index,
+                             const std::vector<double>& cachedEpochs,
+                             double nowUtc, int depthSlots) {
+    const std::vector<IndexFrame> h = horizon(index, nowUtc, depthSlots);
+    std::vector<IndexFrame> out;
+    out.reserve(h.size());
+    for (const IndexFrame& f : h) {
+        if (isCached(f.timeUtc, cachedEpochs)) continue;
         out.push_back(f);
-        if ((int)out.size() >= depth) break;
     }
     return out;
 }
@@ -45,20 +59,13 @@ Result run(const std::vector<IndexFrame>& index,
            const Sleep& sleepFn, const Stop& stop) {
     Result r;
 
-    // skippedCached cuenta TODOS los frames de la ventana ya cacheados, no
-    // solo los que habrian entrado en la profundidad pedida.
-    {
-        const double oldest = nowUtc - kWindowSec;
-        for (const IndexFrame& f : index) {
-            if (!(f.timeUtc > 0.0) || f.timeUtc < oldest) continue;
-            for (double e : cachedEpochs) {
-                if (e == f.timeUtc) { ++r.skippedCached; break; }
-            }
-        }
-    }
-
     const std::vector<IndexFrame> todo =
         plan(index, cachedEpochs, nowUtc, opt.depthSlots);
+    // skippedCached = frames del horizonte que ya estaban (no reduce el
+    // horizonte, solo se saltan).
+    const std::vector<IndexFrame> h = horizon(index, nowUtc, opt.depthSlots);
+    r.skippedCached = (int)h.size() - (int)todo.size();
+
     if (todo.empty()) return r;
 
     int consec404 = 0;
@@ -87,6 +94,7 @@ Result run(const std::vector<IndexFrame>& index,
             if (++consec404 >= opt.stopAfter404) { r.stoppedOn404 = true; break; }
             continue;
         }
+
         if (res.http == 200) {
             if (store(f, res.body)) r.stored.push_back(f.timeUtc);
             else ++r.httpErrors;
