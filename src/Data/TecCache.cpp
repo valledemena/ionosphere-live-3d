@@ -192,7 +192,7 @@ bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, doubl
 void cleanupTmpFiles(const std::string& dir, double maxAgeSeconds) {
     namespace fs = std::filesystem;
     try {
-        if (!fs::exists(dir) || !fs.is_directory(dir)) {
+        if (!fs::exists(dir) || !fs::is_directory(dir)) {
             return;
         }
         auto now = fs::file_time_type::clock::now();
