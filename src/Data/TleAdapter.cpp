@@ -1119,16 +1119,25 @@ bool TleAdapter::fetch(double utc) {
     std::vector<TleSnapshot> parts;
     std::vector<std::string> notes;
     bool networkTried = false;
+    bool prevNetworkTried = false;
     for (size_t i = 0; i < specs.size(); ++i) {
         const GroupSpec& g = specs[i];
-        // C2b: pausa >= 2 s entre peticiones a distintos grupos.
-        if (i > 0) {
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+        // C2b: pausa >= 2 s entre peticiones a distintos grupos — y SOLO si el
+        // grupo anterior realmente llego a la red: un pase donde los grupos se
+        // sirven de cache no duerme ni un milisegundo sin haber pedido nada.
+        if (i > 0 && prevNetworkTried) {
+            std::function<void()> pause;
+            {
+                std::lock_guard<std::mutex> lk(mutex_);
+                pause = groupPause_;
+            }
+            if (pause) pause();
         }
         Acquired a;
         if (acquireGroup(g, utc, a)) parts.push_back(std::move(a.snap));
         if (!a.note.empty()) notes.push_back(a.note);
         networkTried = networkTried || a.networkTried;
+        prevNetworkTried = a.networkTried;
     }
     std::string note;
     for (const std::string& n : notes) {

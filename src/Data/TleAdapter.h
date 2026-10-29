@@ -1,10 +1,12 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 #include "Data/FetchGate.h"
 #include "Data/OrbitProp.h"
@@ -147,6 +149,13 @@ public:
                           const std::filesystem::path& state);
     // Relee el sidecar con un reloj explicito (simula un reinicio sin init()).
     void loadStateForTests(double nowUtc);
+    // C2b: pausa entre peticiones de red a grupos distintos. Por defecto son
+    // 2 s con std::this_thread::sleep_for; en pruebas se inyecta (y se cuenta)
+    // para que la suite no pague 2 s reales por escenario multigrupo.
+    void setGroupPauseForTests(std::function<void()> fn) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        groupPause_ = fn;
+    }
 
     // COPIA del snapshot bajo mutex. Son ~16k filas: llamarlo solo cuando
     // cambie getGeneration() (p.ej. una vez cada 6 h), no cada frame.
@@ -274,6 +283,11 @@ private:
     std::atomic<bool> fetching_{false};
     // Una puerta POR GRUPO: el estado de `weather` no puede pisar el de
     // `active` (antes habia un unico `gate_`).
+    // Pausa entre peticiones de red a grupos distintos: 2 s reales por
+    // defecto (Cortesia de cuota de CelesTrak), inyectable en pruebas.
+    std::function<void()> groupPause_ = [] {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    };
     std::map<std::string, fetchgate::State> gates_;
     // Defecto sin seleccion explicita: par pequeno (C2b-31). `active` es el
     // superconjunto y solo se pide cuando alguien lo elige en la UI.

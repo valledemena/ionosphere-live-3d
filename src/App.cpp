@@ -2981,6 +2981,16 @@ std::vector<std::string> splitGroups(const std::string& csv) {
     return out;
 }
 
+// C2b: inversa de splitGroups sobre las claves YA SANEADAS del adaptador.
+std::string joinGroups(const std::vector<std::string>& keys) {
+    std::string out;
+    for (const std::string& k : keys) {
+        if (!out.empty()) out += ',';
+        out += k;
+    }
+    return out;
+}
+
 }  // namespace
 
 void App::saveSettings() {
@@ -3254,6 +3264,16 @@ void App::loadSettings() {
     if (std::fabs(impl->bloomThreshold - 0.35f) <= 0.001f) {
         impl->bloomThreshold = 0.72f;
         printf("[App] settings: bloomThreshold 0.35 -> 0.72 (default M9e)\n");
+    }
+    // C2b: el ADAPTADOR manda tras el arranque. setGroups aplica el saneado
+    // completo (claves desconocidas fuera, dedup, y `active` descarta al
+    // resto); la cadena de la UI se reconstruye desde groups() para que un
+    // settings.cfg antiguo con "active,stations" no deje a la UI mostrando
+    // una cadena que no corresponde a ninguna seleccion real.
+    {
+        std::vector<std::string> keys = splitGroups(impl->satGroups);
+        if (!keys.empty()) impl->satAdapter.setGroups(keys);
+        impl->satGroups = joinGroups(impl->satAdapter.groups());
     }
     fclose(f);
     printf("[App] settings.cfg loaded\n");

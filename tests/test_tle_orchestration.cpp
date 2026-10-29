@@ -664,6 +664,41 @@ int main() {
         std::error_code ec;
         fs::remove_all(p.dir, ec);
     }
+
+    std::printf("--- C2b-34: la pausa entre grupos es condicional e inyectable ---\n");
+    {
+        Paths p = makePaths("P1");
+        Mock m;
+        m.groupBody["amateur"] = celestrakCsv();
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        int pauses = 0;
+        a.setGroupPauseForTests([&pauses] { ++pauses; });   // NO duerme: cuenta
+        a.setTransport(m.transport());
+        // Dos grupos, los dos a red: UNA pausa (solo entre el 1 y el 2).
+        a.fetchOnce(T0 + 60.0);
+        checkInt("dos grupos por red: una pausa", pauses, 1);
+        checkInt("dos grupos por red: dos peticiones", m.celestrakCalls, 2);
+
+        // Pase posterior con ambos grupos en cache JOVEN (escritas arriba):
+        // nadie toca la red, y entonces no hay NINGUNA pausa. El defecto pagaba
+        // 2 s por pase sin haber pedido nada.
+        TleAdapter b;
+        b.setPathsForTests(p.cache, p.satnogs, p.state);
+        b.setGroups({"amateur", "stations"});
+        int pausesB = 0;
+        b.setGroupPauseForTests([&pausesB] { ++pausesB; });
+        b.setTransport(m.transport());
+        b.fetchOnce(T0 + 120.0);
+        checkInt("dos grupos en cache: cero pausas", pausesB, 0);
+        checkInt("dos grupos en cache: cero peticiones nuevas",
+                 m.celestrakCalls, 2);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
