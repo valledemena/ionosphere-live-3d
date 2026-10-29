@@ -97,6 +97,7 @@ set(SOURCES
     src/Data/XrayAdapter.cpp
     src/Data/DiasAdapter.cpp
     src/Data/TecCache.cpp  # M10: cache TEC en disco (puro, sin curl/GL)
+    src/Data/GloTecBackfill.cpp  # C1b: plan del backfill GloTEC (puro, sin curl/GL)
     src/Data/Kc2gCache.cpp  # FASE B (P2): cache kc2g en disco (puro, sin curl/GL)
     src/Data/IrtamCache.cpp  # M-IRTAM (F1): cache IRTAM en disco (puro, sin curl/GL)
     src/Data/IrtamCoeffParse.cpp  # M-IRTAM-F2 (P1a): parse gambit-coeffs (puro, sin curl/GL)
@@ -277,6 +278,11 @@ add_test(NAME m2_sun COMMAND test_m2_sun)
 add_executable(test_tec_cache tests/test_tec_cache.cpp src/Data/TecCache.cpp)
 target_include_directories(test_tec_cache PRIVATE src)
 add_test(NAME tec_cache COMMAND test_tec_cache)
+# C1b (backfill GloTEC): plan con reloj y transporte inyectados. Llama a
+# PRODUCCION (namespace glotbf en src/Data/GloTecBackfill), no replica.
+add_executable(test_glo_backfill tests/test_glo_backfill.cpp src/Data/GloTecBackfill.cpp)
+target_include_directories(test_glo_backfill PRIVATE src)
+add_test(NAME glo_backfill COMMAND test_glo_backfill)
 # M11 (SDO): matematica del disco + λs. Llama a PRODUCCION (sundisk +
 # SolarPosition::getApparentEclipticLonDeg), no replica.
 add_executable(test_sdo_projection tests/test_sdo_projection.cpp src/Utils/SolarPosition.cpp)

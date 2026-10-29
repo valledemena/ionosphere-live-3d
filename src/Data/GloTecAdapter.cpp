@@ -1,4 +1,6 @@
 #include "GloTecAdapter.h"
+#include "Data/GloTecBackfill.h"
+#include "Data/TecCache.h"
 #include <curl/curl.h>
 #include <cstdio>
 #include <cmath>
@@ -87,13 +89,34 @@ size_t GloTecAdapter::writeCallback(void* contents, size_t size, size_t nmemb, s
     return total;
 }
 
+// Retry-After de la ultima respuesta (segundos; 0 si no hay o no es numerico).
+size_t GloTecAdapter::headerCallback(char* buffer, size_t size, size_t nitems, void* userdata) {
+    const size_t len = size * nitems;
+    double* out = (double*)userdata;
+    std::string line(buffer, len);
+    std::string lower = line;
+    for (char& c : lower) c = (char)tolower((unsigned char)c);
+    static const std::string kKey = "retry-after:";
+    if (lower.compare(0, kKey.size(), kKey) == 0) {
+        const char* v = line.c_str() + kKey.size();
+        while (*v == ' ' || *v == '\t') ++v;
+        *out = atof(v);
+    }
+    return len;
+}
+
 bool GloTecAdapter::fetchURL(const std::string& url, std::string& response) {
     CURL* curl = curl_easy_init();
     if (!curl) return false;
     response.clear();
+    lastHttp_ = 0;
+    lastCurl_ = 0;
+    lastRetryAfter_ = 0.0;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, headerCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &lastRetryAfter_);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "IonosphereLive3D/1.0");
@@ -103,6 +126,8 @@ bool GloTecAdapter::fetchURL(const std::string& url, std::string& response) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
     curl_easy_cleanup(curl);
 
+    lastHttp_ = http;
+    lastCurl_ = (int)res;
     if (res != CURLE_OK) {
         error_ = std::string("curl: ") + curl_easy_strerror(res);
         return false;
@@ -252,29 +277,90 @@ bool GloTecAdapter::fetchFrame(const std::string& url, double timeUtc, GridData&
 }
 
 bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
-    // C1b: backfill de profundidad 6/24/72 h (defecto 6 h = 36 frames @ 10 min).
-    // sentido de nuevo a viejo (de nuevo a viejo), un hilo, ~1 req/s, parada tras 3 404 seguidos.
-    // Puerta de 600 s en el llamante: se chequea en App/UI, no aqui.
-    // NOTA: la implementacion funcional del backfill (fetchIndex + su orden, 429/Retry-After) pendiente - hoy solo se pide el frame mas reciente.
-    std::vector<GloTecFrame> frames;
-    if (!fetchIndex(frames)) return false;
-    if (frames.empty()) { error_ = "indice vacio"; return false; }
-    std::sort(frames.begin(), frames.end(), [](const GloTecFrame& a, const GloTecFrame& b){ return a.timeUtc > b.timeUtc; });  // nuevo -> viejo
+    // C1b: backfill 6/24/72 h. El plan y sus reglas (orden nuevo -> viejo,
+    // dedup contra el cache, 1 req/s, 3 x 404, Retry-After) viven en
+    // glotbf::run, puro y testeado con transporte/reloj inyectados.
+    std::vector<GloTecFrame> raw;
+    if (!fetchIndex(raw)) return false;
+    if (raw.empty()) { error_ = "indice vacio"; return false; }
 
-    int downloaded = 0;
-    int fourZeroFour = 0;
-    for (size_t k = 0; k < (size_t)depthSlots && k < frames.size(); ++k) {
-        if (fourZeroFour >= 3) break;  // parada tras 3 404 consecutivos
-        if (downloaded > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // ~1 req/s
-        std::string js;
-        if (!fetchURL(frames[k].url, js)) { ++fourZeroFour; continue; }
-        if (!parseGeoJSON(js)) { ++fourZeroFour; continue; }
-        fourZeroFour = 0;
-        ++downloaded;
-        grid_.timestamp = frames[k].timeUtc;
+    std::vector<glotbf::IndexFrame> index;
+    index.reserve(raw.size());
+    for (const GloTecFrame& f : raw) index.push_back({f.url, f.timeUtc});
+
+    // El cache es la memoria del backfill: lo que ya esta en disco no se
+    // vuelve a pedir (ni gasta cuota ni reescribe el fichero).
+    teccache::ScanResult scan = teccache::loadCached(cacheDir_);
+    std::vector<double> cached;
+    cached.reserve(scan.frames.size());
+    for (const teccache::Frame& f : scan.frames) cached.push_back(f.epoch);
+
+    glotbf::Options opt;
+    opt.depthSlots = depthSlots > 0 ? depthSlots : glotbf::kDepth6h;
+
+    // El primero que llega (el mas nuevo, por el orden del plan) se queda como
+    // grid servido: antes el bucle dejaba el MAS VIEJO en pantalla.
+    bool haveNewest = false;
+    double newestTs = 0.0;
+    GridData newest;
+
+    auto transport = [this](const std::string& url) {
+        glotbf::Response r;
+        std::string body;
+        fetchURL(url, body);
+        r.http = lastHttp_;
+        r.transportOk = (lastCurl_ == 0);
+        r.retryAfterSec = lastRetryAfter_;
+        r.body = std::move(body);
+        return r;
+    };
+    auto store = [this, &haveNewest, &newest, &newestTs](
+                     const glotbf::IndexFrame& f, const std::string& body) {
+        if (!parseGeoJSON(body)) return false;
+        if (!haveNewest) {
+            newest = grid_;
+            newestTs = f.timeUtc;
+            haveNewest = true;
+        }
+        teccache::Frame tf;
+        tf.epoch = f.timeUtc;
+        tf.w = grid_.width;
+        tf.h = grid_.height;
+        tf.v = grid_.values;
+        teccache::saveFrame(cacheDir_, tf);  // best-effort: fallar aqui no es fatal
+        return true;
+    };
+    auto sleepFn = [](double seconds) {
+        if (seconds <= 0.0) return;
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds((long long)(seconds * 1000.0)));
+    };
+    auto stopFn = [this]() { return stop_ && stop_->load(); };
+
+    const glotbf::Result res =
+        glotbf::run(index, cached, utc, opt, transport, store, sleepFn, stopFn);
+
+    if (haveNewest) {
+        grid_ = newest;
+        grid_.timestamp = newestTs;
         grid_.valid = true;
         lastFetchUtc_ = utc;
+        if (res.stoppedOn404) error_ = "backfill: 3 x 404 seguidos";
+        else if (res.stoppedOn5xx) error_ = "backfill: 5xx del servidor";
+        return true;
     }
-    if (downloaded == 0) { error_ = "parseGeoJSON fallo (sin celdas)"; return false; }
-    return true;
+    // Todo estaba en cache: se sirve el frame mas nuevo del disco.
+    if (!scan.frames.empty()) {
+        const teccache::Frame& nf = scan.frames.back();
+        grid_.width = nf.w;
+        grid_.height = nf.h;
+        grid_.values = nf.v;
+        grid_.timestamp = nf.epoch;
+        grid_.valid = true;
+        lastFetchUtc_ = utc;
+        return true;
+    }
+    error_ = res.stoppedByCaller ? "backfill interrumpido"
+                                 : "parseGeoJSON fallo (sin celdas)";
+    return false;
 }

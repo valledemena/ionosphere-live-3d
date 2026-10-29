@@ -3223,6 +3223,7 @@ float App::currentKp() const {
 void App::fetchWorker() {
     GloTecAdapter glo;
     glo.setGridSize(72, 72);
+    glo.setStopFlag(&impl->shutdownRequested);  // backfill interrumpible
     SolarIndicesAdapter sidx;
     SolarWindAdapter sw;
     AuroraAdapter au;

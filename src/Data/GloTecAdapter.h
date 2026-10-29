@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <string>
 #include <vector>
 #include <thread>
@@ -36,12 +37,19 @@ public:
     bool fetchIndex(std::vector<GloTecFrame>& out);
     bool fetchFrame(const std::string& url, double timeUtc, GridData& out);
     void setGridSize(int w, int h) { gridW_ = w; gridH_ = h; }
+    // Directorio del cache TEC en disco (teccache::saveFrame). El backfill no
+    // vuelve a pedir los frames que ya estan ahi.
+    void setCacheDir(const std::string& dir) { cacheDir_ = dir; }
+    // Hilo interrumpible: el backfill consulta esta bandera antes de cada
+    // peticion (no hay sleeps largos no interrumpibles).
+    void setStopFlag(const std::atomic<bool>* flag) { stop_ = flag; }
     const TECGrid& getGrid() const { return grid_; }
     double getLastFetchTime() const { return lastFetchUtc_; }
     const std::string& getErrorMessage() const { return error_; }
 
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
+    static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     bool fetchURL(const std::string& url, std::string& response);
     // Extrae todos los valores 'tec' y 'coordinates' (lon, lat) del GeoJSON
     // y rellena grid_. Devuelve true si encontro el numero esperado de celdas.
@@ -52,4 +60,11 @@ private:
     int gridH_ = 72;
     double lastFetchUtc_ = 0.0;
     std::string error_;
+    // Ultimo resultado de fetchURL (para el backfill: HTTP, Retry-After y
+    // error de transporte no son lo mismo).
+    long lastHttp_ = 0;
+    int lastCurl_ = 0;
+    double lastRetryAfter_ = 0.0;
+    std::string cacheDir_ = "cache";
+    const std::atomic<bool>* stop_ = nullptr;
 };
