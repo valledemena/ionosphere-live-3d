@@ -12,6 +12,7 @@
 #include <iterator>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "Data/FetchState.h"
 #include "Utils/Paths.h"
@@ -20,13 +21,11 @@
 
 namespace {
 
-const char* const kCelestrakUrl =
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv";
 const char* const kSatnogsUrl = "https://db.satnogs.org/api/tle/?format=json";
 const char* const kUserAgent = "IonosphereLive3D/1.0";
 
-// Claves del sidecar: una puerta por endpoint.
-const char* const kKeyActive = "celestrak.active";
+// Claves del sidecar: una puerta por endpoint. Las de CelesTrak llevan el
+// grupo detras ("celestrak.<grupo>"); se construyen en groupSpec().
 const char* const kKeySatnogs = "celestrak.satnogs";
 
 constexpr double kFutureSlackSec = 10.0 * 60.0;
@@ -293,16 +292,25 @@ void TleAdapter::init() {
     statePath_ = dir / "tle-state";
 
     const double now = (double)std::time(nullptr);
-    fetchgate::State st;
-    const bool restored = fetchstate::load(statePath_, kKeyActive, st);
-    // Un reloj adelantado o un sidecar manipulado no deben bloquear para
-    // siempre: el recorte lo hace fetchgate.
-    st.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(st.blockedUntilUtc, now);
-    // lastHttp == -1 es el provisional del write-ahead. Si sobrevive a un
-    // arranque, la peticion estaba EN VUELO cuando murio la app: el bloqueo de
-    // 2 h se mantiene (no se repite la descarga), pero ya no es "en curso", asi
-    // que deja de ocultarse en el panel (getBlockedUntilUtc).
-    if (st.lastHttp == -1) st.lastHttp = 0;
+    // Una puerta POR GRUPO (C2b): el bloqueo de `weather` no puede silenciar
+    // `active` ni al reves. Se cargan las conocidas de golpe para que el panel
+    // y nextNetworkUtc() digan la verdad desde el arranque.
+    std::map<std::string, fetchgate::State> gates;
+    bool restored = false;
+    for (const std::string& key : knownGroups()) {
+        fetchgate::State st;
+        const std::string sk = "celestrak." + key;
+        restored = fetchstate::load(statePath_, sk, st) || restored;
+        // Un reloj adelantado o un sidecar manipulado no deben bloquear para
+        // siempre: el recorte lo hace fetchgate.
+        st.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(st.blockedUntilUtc, now);
+        // lastHttp == -1 es el provisional del write-ahead. Si sobrevive a un
+        // arranque, la peticion estaba EN VUELO cuando murio la app: el bloqueo
+        // de 2 h se mantiene (no se repite la descarga), pero ya no es "en
+        // curso", asi que deja de ocultarse en el panel (getBlockedUntilUtc).
+        if (st.lastHttp == -1) st.lastHttp = 0;
+        gates[sk] = st;
+    }
 
     fetchgate::State stN;
     fetchstate::load(statePath_, kKeySatnogs, stN);
@@ -311,7 +319,7 @@ void TleAdapter::init() {
 
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        gate_ = st;
+        gates_ = std::move(gates);
         gateSatnogs_ = stN;
         latest_ = TleSnapshot{};
         latest_.note = "sin datos";
@@ -602,6 +610,84 @@ bool TleAdapter::parseSatNogsJson(const std::string& json, double nowUtc, TleSna
     return out.valid;
 }
 
+TleSnapshot TleAdapter::mergeSnapshots(const std::vector<TleSnapshot>& parts) {
+    TleSnapshot out;
+    // indice NORAD -> posicion en out.sats. Con ~20k filas por grupo, buscar
+    // linealmente por cada fila seria cuadratico.
+    std::unordered_map<int, std::size_t> byNorad;
+    std::size_t groups = 0;
+    std::size_t dups = 0;
+    std::size_t dropped = 0;
+    double oldest = 0.0;
+    bool haveOldest = false;
+    TleSource firstSource = TleSource::None;
+    bool sameSource = true;
+
+    for (const TleSnapshot& p : parts) {
+        if (!p.valid || p.sats.empty()) continue;   // un grupo caido no aporta nada
+        if (groups == 0) firstSource = p.source;
+        else if (p.source != firstSource) sameSource = false;
+        ++groups;
+        if (!haveOldest || p.timeUtc < oldest) {
+            oldest = p.timeUtc;
+            haveOldest = true;
+        }
+        for (const TleSat& s : p.sats) {
+            if (s.noradId > 0) {
+                const auto it = byNorad.find(s.noradId);
+                if (it != byNorad.end()) {
+                    // Gana el EPOCH mas nuevo. El orden de los grupos no
+                    // decide nada: el mismo objeto puede venir de un grupo
+                    // actualizado antes que otro.
+                    TleSat& prev = out.sats[it->second];
+                    if (s.el.epochUtc > prev.el.epochUtc) prev = s;
+                    ++dups;
+                    continue;
+                }
+                if (out.sats.size() >= kMaxSats) {
+                    ++dropped;
+                    continue;
+                }
+                byNorad.emplace(s.noradId, out.sats.size());
+                out.sats.push_back(s);
+            } else {
+                // Sin NORAD no hay clave de dedup: se conserva tal cual.
+                if (out.sats.size() >= kMaxSats) {
+                    ++dropped;
+                    continue;
+                }
+                out.sats.push_back(s);
+            }
+        }
+    }
+
+    if (groups == 0) {
+        out.timeUtc = 0.0;
+        out.valid = false;
+        out.source = TleSource::None;
+        out.note = "sin datos";
+        return out;
+    }
+
+    out.timeUtc = oldest;
+    out.valid = !out.sats.empty();
+    // Grupos con origenes distintos: una parte no es viva, asi que el
+    // conjunto se declara como cache en vez de pasar por catalogo fresco.
+    out.source = sameSource ? firstSource : TleSource::Cache;
+
+    char buf[192];
+    if (dups == 0 && dropped == 0) {
+        std::snprintf(buf, sizeof(buf), "%d sats (%d grupos%s)", (int)out.sats.size(),
+                      (int)groups, sameSource ? "" : ", mixto");
+    } else {
+        std::snprintf(buf, sizeof(buf), "%d sats (%d grupos, %d duplicados%s%s)",
+                      (int)out.sats.size(), (int)groups, (int)dups,
+                      dropped > 0 ? ", techo alcanzado" : "", sameSource ? "" : ", mixto");
+    }
+    out.note = buf;
+    return out;
+}
+
 bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot& snap,
                            const std::string& rawBody) {
     if (!snap.valid || snap.sats.empty()) return false;   // nunca guardar vacio
@@ -759,61 +845,184 @@ void TleAdapter::persistState(const std::string& key, const fetchgate::State& st
     fetchstate::save(statePath_, key, st);   // best-effort
 }
 
-bool TleAdapter::serveCache(const GroupSpec& group, double utc, double maxAgeSec,
-                            const std::string& why) {
-    // Camino rapido: si el snapshot instalado YA es esta misma cache, no hay
-    // que releer ni parsear 16k filas. Se compara solo el epoch (con
-    // tolerancia de 0.5 s: la cabecera guarda %.1f) y no la fuente: el
-    // snapshot no se muta, la etiqueta sigue diciendo de donde vino el dato y
-    // la edad se calcula en la UI.
-    const double onDiskEpoch = celestrakCacheEpoch(group.cache);
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        const bool sameEpoch = onDiskEpoch > 0.0 && snapshotEpoch_ > 0.0 &&
-                               std::fabs(onDiskEpoch - snapshotEpoch_) < 0.5;
-        if (sameEpoch) {
-            // 72 h estricto: una cache que envejece en el sitio deja de valer.
-            if (utc - snapshotEpoch_ <= maxAgeSec) {
-                status_ = why;
-                error_.clear();
-                return true;
-            }
-            // Caducada: se invalida UNA vez y se sube la generacion, porque
-            // App solo recopia el snapshot cuando cambia. Poner el epoch a 0
-            // evita que esta rama vuelva a dispararse en cada pase (antes
-            // subia la generacion sin parar y la UI recopiaba en bucle).
-            if (latest_.valid) {
-                latest_.valid = false;
-                latest_.sats.clear();
-                latest_.note = "cache caducada (>72 h)";
-                snapshotEpoch_ = 0.0;
-                ++generation_;
-            }
-        }
-    }
-    TleSnapshot cached;
-    if (!loadCelestrakCache(group.cache, utc, cached, maxAgeSec)) {
-        std::lock_guard<std::mutex> lk(mutex_);
-        error_ = why + "; sin cache utilizable";
-        status_.clear();
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        // Solo se instala si el epoch cambia: recopiar 16k filas cada hora para
-        // el mismo contenido no aporta nada y la UI lo nota.
-        if (snapshotEpoch_ != cached.timeUtc || !latest_.valid) {
-            latest_ = cached;
-            snapshotEpoch_ = cached.timeUtc;
-            ++generation_;
-        }
-        status_ = why;
-        error_.clear();
-    }
-    printf("[Tle] %s (%s)\n", cached.note.c_str(), sourceLabel(TleSource::Cache));
-    return true;
+// --- Grupos de CelesTrak (C2b) ---------------------------------------------
+
+const std::vector<std::string>& TleAdapter::knownGroups() {
+    // Claves cuyo GROUP= acepta CelesTrak y que este proyecto dibuja. `active`
+    // es el catalogo completo; el resto son subconjuntos con solape parcial.
+    static const std::vector<std::string> kGroups = {"active", "amateur", "stations", "weather",
+                                                     "gps-ops", "science"};
+    return kGroups;
 }
 
+void TleAdapter::setGroups(const std::vector<std::string>& keys) {
+    std::vector<std::string> clean;
+    for (const std::string& k : keys) {
+        bool known = false;
+        for (const std::string& g : knownGroups()) {
+            if (g == k) known = true;
+        }
+        if (!known) continue;
+        bool dup = false;
+        for (const std::string& c : clean) {
+            if (c == k) dup = true;
+        }
+        if (!dup) clean.push_back(k);
+    }
+    // Decision de producto: si se pide `active`, se descartan los demas
+    // porque es el superconjunto.
+    bool hasActive = false;
+    for (const std::string& k : clean) if (k == "active") hasActive = true;
+    if (hasActive) {
+        clean.clear();
+        clean.push_back("active");
+    }
+    // Una clave inventada en settings.cfg no puede dejar el catalogo apagado.
+    if (clean.empty()) clean.push_back("active");
+    std::lock_guard<std::mutex> lk(mutex_);
+    groupKeys_ = clean;
+}
+
+std::vector<std::string> TleAdapter::groups() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return groupKeys_;
+}
+
+TleAdapter::GroupSpec TleAdapter::groupSpec(const std::string& key) const {
+    GroupSpec g;
+    g.key = "celestrak." + key;
+    g.url = std::string("https://celestrak.org/NORAD/elements/gp.php?GROUP=") + key +
+            "&FORMAT=csv";
+    // `active` conserva satellites.tle: es el fichero que ya tienen los
+    // perfiles de builds anteriores. Los demas grupos van a su lado.
+    g.cache = (key == "active") ? cachePath_
+                                : cachePath_.parent_path() / ("satellites-" + key + ".tle");
+    return g;
+}
+
+fetchgate::State TleAdapter::gateFor(const std::string& key) {
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        const auto it = gates_.find(key);
+        if (it != gates_.end()) return it->second;
+    }
+    // Grupo que no estaba en el mapa: su estado vive en el sidecar, no se
+    // arranca en blanco. Mismo saneado que init().
+    fetchgate::State st;
+    const double now = (double)std::time(nullptr);
+    fetchstate::load(statePath_, key, st);
+    st.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(st.blockedUntilUtc, now);
+    if (st.lastHttp == -1) st.lastHttp = 0;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        gates_.emplace(key, st);
+        return gates_[key];
+    }
+}
+
+void TleAdapter::storeGate(const std::string& key, const fetchgate::State& st) {
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        gates_[key] = st;
+    }
+    persistState(key, st);
+}
+
+bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out) {
+    const fetchgate::State st = gateFor(group.key);
+    const double age = celestrakCacheAge(group.cache, utc);
+    const double cacheEp = celestrakCacheEpoch(group.cache);
+    const double jitter = jitterFor(cacheEp);
+    const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
+
+    // Sin red: se sirve la cache del grupo (hasta 72 h). Aqui NO se instala
+    // nada: de publicar el resultado se encarga fetch() tras fusionar.
+    const bool networkAllowed =
+        d.action == fetchgate::Action::FetchNow ||
+        (d.action == fetchgate::Action::FetchJittered && d.fetchAtUtc <= utc);
+    if (!networkAllowed) {
+        if (loadCelestrakCache(group.cache, utc, out.snap, fetchgate::kMaxFallbackAgeSec)) {
+            out.ok = true;
+            out.note = group.key + ": " + d.reason;
+            return true;
+        }
+        out.note = group.key + ": " + d.reason + "; sin cache utilizable";
+        return false;
+    }
+
+    // --- Red: un unico intento por grupo y pase. ---
+    // Write-ahead: el intento se persiste ANTES de la descarga como bloqueo
+    // PROVISIONAL. decide() ignora lastAttempt si retryFails == 0, asi que un
+    // cierre a mitad volveria a pedir y gastaria la ventana de 2 h.
+    fetchgate::State st2 = st;
+    st2.lastAttemptUtc = utc;
+    st2.blockedUntilUtc = utc + fetchgate::kBlockSec;
+    st2.lastHttp = -1;
+    storeGate(group.key, st2);
+    out.networkTried = true;
+
+    std::string body;
+    const HttpResult res = httpGet(group.url.c_str(), 120L, body);
+    bool ok = false;
+    std::string err;
+    if (res.ok) {
+        ok = parseCelesTrakCsv(body, utc, out.snap);
+        if (!ok) err = "respuesta ilegible";
+    } else {
+        err = res.err;
+    }
+
+    // Un 200 con cuerpo ilegible no es un fallo de red: la descarga ya conto
+    // y reintentar a los 5 min daria 403. Bloqueo de 2 h.
+    const fetchgate::Outcome outcome =
+        (!ok && res.http == 200 && res.curl == 0)
+            ? fetchgate::unreadableBody()
+            : fetchgate::classify(res.http, res.curl, res.retryAfter);
+
+    if (outcome.block) {
+        // Politica: cualquier respuesta distinta de 200 detiene las peticiones
+        // de ESE grupo 2 h. 429 respeta Retry-After (acotado a 24 h).
+        st2.blockedUntilUtc = utc + fetchgate::blockDurationSec(outcome);
+        st2.lastHttp = (int)res.http;
+        st2.lastCurl = res.curl;
+        st2.retryFails = 0;
+        err += std::string(" [") + outcome.label + "]";
+    } else if (outcome.transport || !ok) {
+        // Transporte: no es una violacion de politica, solo un fallo blando
+        // con backoff 5 -> 60 min. Se retira el bloqueo provisional.
+        st2.blockedUntilUtc = 0.0;
+        st2.retryFails = std::min(st2.retryFails + 1, 6);
+        st2.lastHttp = (int)res.http;
+        st2.lastCurl = res.curl;
+    } else {
+        st2.blockedUntilUtc = 0.0;   // se retira el provisional
+        st2.retryFails = 0;
+        st2.lastHttp = 200;
+        st2.lastCurl = 0;
+        st2.lastSuccessUtc = utc;
+    }
+    storeGate(group.key, st2);
+
+    if (!ok) {
+        // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
+        // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
+        if (loadCelestrakCache(group.cache, utc, out.snap, fetchgate::kMaxFallbackAgeSec)) {
+            out.ok = true;
+            out.note = group.key + ": " + err + "; servido de cache";
+            return true;
+        }
+        out.note = group.key + ": " + err + "; sin cache utilizable";
+        return false;
+    }
+
+    // Solo el catalogo completo de CelesTrak va a su cache, y se guarda el
+    // CUERPO CRUDO: asi se relee sin reconstruir un TLE de 5 columnas
+    // (imposible con NORAD de 6 digitos).
+    saveCache(group.cache, out.snap, body);   // best-effort: fallar aqui no es fatal
+    out.ok = true;
+    out.note = err.empty() ? std::string() : group.key + ": " + err;
+    return true;
+}
 bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
     fetchgate::State st;
     {
@@ -896,153 +1105,95 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
     return ok;
 }
 
-TleAdapter::GroupSpec TleAdapter::activeGroup() const {
-    return GroupSpec{kKeyActive, kCelestrakUrl, cachePath_};
-}
-
-bool TleAdapter::fetch(double utc) { return fetchGroup(activeGroup(), utc); }
-
-bool TleAdapter::fetchGroup(const GroupSpec& group, double utc) {
-    fetchgate::State st;
+bool TleAdapter::fetch(double utc) {
+    std::vector<std::string> keys;
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        st = gate_;
+        keys = groupKeys_;
     }
 
-    const double age = celestrakCacheAge(group.cache, utc);
-    const double cacheEp = celestrakCacheEpoch(group.cache);
-    const double jitter = jitterFor(cacheEp);
-    const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
+    std::vector<GroupSpec> specs;
+    specs.reserve(keys.size());
+    for (const std::string& k : keys) specs.push_back(groupSpec(k));
 
-    // SatNOGS es OTRO proveedor y tiene su propia puerta: si la cache de
-    // CelesTrak no sirve, se prueba aunque CelesTrak este bloqueado.
-    if (d.action == fetchgate::Action::Blocked) {
-        const std::string why = std::string("celestrak: ") + d.reason;
-        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
-        return serveSatnogs(utc, why);
-    }
-    if (d.action == fetchgate::Action::CacheOnly) {
-        const std::string why = std::string("red: ") + d.reason;
-        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
-        return serveSatnogs(utc, why);
-    }
-    if (d.action == fetchgate::Action::FetchJittered && d.fetchAtUtc > utc) {
-        const std::string why = std::string("red: ") + d.reason;
-        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
-        return serveSatnogs(utc, why);
-    }
-
-    // --- A partir de aqui se toca la red: un unico intento por pase. ---
-    // Write-ahead: el intento se persiste ANTES de la descarga como bloqueo
-    // PROVISIONAL. lastAttempt solo no sirve: decide() lo ignora si
-    // retryFails == 0, asi que un cierre a mitad volvia a pedir y gastaba la
-    // ventana de 2 h. El provisional se retira al terminar (exito o fallo
-    // blando) y se sustituye por el bloqueo real si la respuesta no es 200.
-    st.lastAttemptUtc = utc;
-    st.blockedUntilUtc = utc + fetchgate::kBlockSec;
-    st.lastHttp = -1;
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        gate_ = st;
-    }
-    persistState(group.key, st);
-
-    std::string err;
-    TleSnapshot snap;
-    bool ok = false;
-
-    std::string body;
-    const HttpResult res = httpGet(group.url.c_str(), 120L, body);
-    if (res.ok) {
-        ok = parseCelesTrakCsv(body, utc, snap);
-        if (!ok) err = "celestrak: respuesta ilegible";
-    } else {
-        err = "celestrak: " + res.err;
-    }
-
-    // Un 200 con cuerpo ilegible no es un fallo de red: la descarga ya conto
-    // y reintentar a los 5 min daria 403. Bloqueo de 2 h.
-    const fetchgate::Outcome outcome =
-        (!ok && res.http == 200 && res.curl == 0)
-            ? fetchgate::unreadableBody()
-            : fetchgate::classify(res.http, res.curl, res.retryAfter);
-
-    if (outcome.block) {
-        // Politica: cualquier respuesta distinta de 200 detiene las peticiones
-        // 2 h. 429 respeta Retry-After (acotado a 24 h).
-        st.blockedUntilUtc = utc + fetchgate::blockDurationSec(outcome);
-        st.lastHttp = (int)res.http;
-        st.lastCurl = res.curl;
-        st.retryFails = 0;
-        err += std::string(" [") + outcome.label + "]";
-    } else if (outcome.transport || !ok) {
-        // Transporte: no es una violacion de politica, solo un fallo blando
-        // con backoff 5 -> 60 min. Se retira el bloqueo provisional.
-        st.blockedUntilUtc = 0.0;
-        st.retryFails = std::min(st.retryFails + 1, 6);
-        st.lastHttp = (int)res.http;
-        st.lastCurl = res.curl;
-    } else {
-        st.blockedUntilUtc = 0.0;   // se retira el provisional
-        st.retryFails = 0;
-        st.lastHttp = 200;
-        st.lastCurl = 0;
-        st.lastSuccessUtc = utc;
-    }
-
-    if (!ok) {
-        // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
-        // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
-        TleSnapshot cached;
-        if (loadCelestrakCache(group.cache, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
-            snap = cached;
-            ok = true;
-            err += "; servido de cache";
+    std::vector<TleSnapshot> parts;
+    std::vector<std::string> notes;
+    bool networkTried = false;
+    for (size_t i = 0; i < specs.size(); ++i) {
+        const GroupSpec& g = specs[i];
+        // C2b: pausa >= 2 s entre peticiones a distintos grupos.
+        if (i > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
+        Acquired a;
+        if (acquireGroup(g, utc, a)) parts.push_back(std::move(a.snap));
+        if (!a.note.empty()) notes.push_back(a.note);
+        networkTried = networkTried || a.networkTried;
+    }
+    std::string note;
+    for (const std::string& n : notes) {
+        if (!note.empty()) note += "; ";
+        note += n;
     }
 
-    // El estado de la puerta de CelesTrak se guarda antes de cualquier salida.
+    const TleSnapshot merged = mergeSnapshots(parts);
+    if (!merged.valid) {
+        // La cache que sostenia el snapshot instalado dejo de valer (>72 h):
+        // se invalida UNA vez para que la UI no siga dibujando un catalogo que
+        // ya no se sirve. Poner el epoch a 0 evita repetirlo en cada pase
+        // (antes la generacion subia en bucle y la UI recopiaba).
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            if (snapshotEpoch_ > 0.0 && latest_.valid) {
+                for (const GroupSpec& g : specs) {
+                    const double ep = celestrakCacheEpoch(g.cache);
+                    if (ep > 0.0 && std::fabs(ep - snapshotEpoch_) < 0.5 &&
+                        utc - ep > fetchgate::kMaxFallbackAgeSec) {
+                        latest_.valid = false;
+                        latest_.sats.clear();
+                        latest_.note = "cache caducada (>72 h)";
+                        snapshotEpoch_ = 0.0;
+                        ++generation_;
+                        break;
+                    }
+                }
+            }
+        }
+        // UN unico fallback, y solo si la fusion no dejo nada: un grupo caidom
+        // no manda a SatNOGS si los demas trajeron datos reales.
+        return serveSatnogs(utc, note.empty() ? "celestrak: sin datos" : note);
+    }
+
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        gate_ = st;
-    }
-    persistState(group.key, st);
-
-    if (!ok) {
-        err += "; cache: sin fichero utilizable";
-        return serveSatnogs(utc, err);
-    }
-
-    // Solo el catalogo completo de CelesTrak va a satellites.tle. El
-    // subconjunto de SatNOGS tiene su propia cache: guardarlo aqui lo haria
-    // pasar por catalogo activo durante 6 h y taparia el reintento.
-    // Se guarda el CUERPO CRUDO: es lo que permite releerlo sin reconstruir un
-    // TLE de 5 columnas (imposible con NORAD de 6 digitos).
-    if (snap.source == TleSource::Celestrak) {
-        saveCache(group.cache, snap, body);   // best-effort: fallar aqui no es fatal
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        if (snapshotEpoch_ != snap.timeUtc || !latest_.valid) ++generation_;
-        latest_ = snap;
-        snapshotEpoch_ = snap.timeUtc;
-        // Un catalogo vivo y completo no deja aviso; cache o SatNOGS si
-        // (el dato no es "live" y el panel debe poder decirlo).
-        if (snap.source == TleSource::Celestrak) {
-            error_.clear();
+        const bool changed = snapshotEpoch_ != merged.timeUtc || !latest_.valid ||
+                             latest_.sats.size() != merged.sats.size();
+        if (changed) ++generation_;
+        latest_ = merged;
+        snapshotEpoch_ = merged.timeUtc;
+        // Un catalogo vivo y completo no deja aviso; cache o un grupo caidom
+        // no manda a SatNOGS si los demas trajeron datos reales.
+        if (merged.source == TleSource::Celestrak) {
+            // Catalogo vivo y completo: solo deja aviso si algun grupo fallo.
+            if (!note.empty()) {
+                error_ = note;
+                status_.clear();
+            } else {
+                error_.clear();
+                status_.clear();
+            }
+        } else if (networkTried) {
+            error_ = note;
             status_.clear();
         } else {
-            error_ = err;
-            status_.clear();
+            error_.clear();
+            status_ = note;
         }
     }
 
-    printf("[Tle] %s (%s)\n", snap.note.c_str(), sourceLabel(snap.source));
+    printf("[Tle] %s (%s)\n", merged.note.c_str(), sourceLabel(merged.source));
     return true;
-}
-
-bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
+}bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
     TleSnapshot snap;
     std::string err = why;
     if (!fetchSatnogs(utc, snap, err)) {
@@ -1073,31 +1224,42 @@ void TleAdapter::fetchAsync(double utc) {
     }).detach();
 }
 
-double TleAdapter::nextNetworkUtc(double nowUtc) const {
-    fetchgate::State st;
+double TleAdapter::nextNetworkUtc(double nowUtc) {
+    std::vector<std::string> keys;
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        st = gate_;
+        keys = groupKeys_;
     }
-    const double age = celestrakCacheAge(cachePath_, nowUtc);
-    const double jitter = jitterFor(celestrakCacheEpoch(cachePath_));
-    const fetchgate::Decision d = fetchgate::decide(nowUtc, st, age, jitter);
-    switch (d.action) {
-        case fetchgate::Action::Blocked:
-        case fetchgate::Action::FetchJittered:
-            return d.fetchAtUtc;
-        case fetchgate::Action::CacheOnly:
-            // Espera tras fallo: el instante ya viene calculado. Cache viva:
-            // despertar justo al cruzar el TTL (App lo acota a 1 h).
-            if (d.fetchAtUtc > 0.0) return d.fetchAtUtc;
-            if (age >= 0.0) return nowUtc + (fetchgate::kLiveTtlSec - age) + jitter;
-            return nowUtc + 3600.0;
-        case fetchgate::Action::FetchNow:
-        default:
-            return nowUtc;
+    // Con varios grupos se devuelve el MINIMO: es el primero que puede pedir.
+    double best = -1.0;
+    for (const std::string& k : keys) {
+        const GroupSpec g = groupSpec(k);
+        const fetchgate::State st = gateFor(g.key);
+        const double age = celestrakCacheAge(g.cache, nowUtc);
+        const double jitter = jitterFor(celestrakCacheEpoch(g.cache));
+        const fetchgate::Decision d = fetchgate::decide(nowUtc, st, age, jitter);
+        double when = nowUtc;
+        switch (d.action) {
+            case fetchgate::Action::Blocked:
+            case fetchgate::Action::FetchJittered:
+                when = d.fetchAtUtc;
+                break;
+            case fetchgate::Action::CacheOnly:
+                // Espera tras fallo: el instante ya viene calculado. Cache
+                // viva: despertar justo al cruzar el TTL (App lo acota a 1 h).
+                if (d.fetchAtUtc > 0.0) when = d.fetchAtUtc;
+                else if (age >= 0.0) when = nowUtc + (fetchgate::kLiveTtlSec - age) + jitter;
+                else when = nowUtc + 3600.0;
+                break;
+            case fetchgate::Action::FetchNow:
+            default:
+                when = nowUtc;
+                break;
+        }
+        if (best < 0.0 || when < best) best = when;
     }
+    return best < 0.0 ? nowUtc : best;
 }
-
 TleSnapshot TleAdapter::getSnapshot() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return latest_;
@@ -1135,7 +1297,15 @@ double TleAdapter::getLastFetchTime() const {
 
 double TleAdapter::getLastAttemptUtc() const {
     std::lock_guard<std::mutex> lk(mutex_);
-    return gate_.lastAttemptUtc;
+    // El intento mas reciente de los grupos seleccionados.
+    double last = 0.0;
+    for (const std::string& k : groupKeys_) {
+        const auto it = gates_.find("celestrak." + k);
+        if (it != gates_.end() && it->second.lastAttemptUtc > last) {
+            last = it->second.lastAttemptUtc;
+        }
+    }
+    return last;
 }
 
 double TleAdapter::getBlockedUntilUtc() const {
@@ -1145,8 +1315,15 @@ double TleAdapter::getBlockedUntilUtc() const {
     // "bloqueado" mientras la descarga esta en curso (para eso esta
     // isFetching()). Si el provisional sobrevive a un reinicio, init() lo
     // convierte en 0 (peticion interrumpida) y entonces SI se declara.
-    if (gate_.lastHttp == -1) return 0.0;
-    return gate_.blockedUntilUtc;
+    // Con varios grupos se declara el bloqueo MAS LARGO de los seleccionados.
+    double until = 0.0;
+    for (const std::string& k : groupKeys_) {
+        const auto it = gates_.find("celestrak." + k);
+        if (it == gates_.end()) continue;
+        if (it->second.lastHttp == -1) continue;
+        if (it->second.blockedUntilUtc > until) until = it->second.blockedUntilUtc;
+    }
+    return until;
 }
 
 std::string TleAdapter::getSourceLabel() const {
@@ -1171,7 +1348,8 @@ void TleAdapter::setPathsForTests(const std::filesystem::path& cache,
     cachePath_ = cache;
     satnogsCachePath_ = satnogsCache;
     statePath_ = state;
-    gate_ = fetchgate::State{};
+    gates_.clear();
+    groupKeys_ = {"active"};   // sin seleccion explicita, el catalogo completo
     gateSatnogs_ = fetchgate::State{};
     latest_ = TleSnapshot{};
     latest_.note = "sin datos";
@@ -1182,17 +1360,22 @@ void TleAdapter::setPathsForTests(const std::filesystem::path& cache,
 }
 
 void TleAdapter::loadStateForTests(double nowUtc) {
-    fetchgate::State a;
-    fetchstate::load(statePath_, kKeyActive, a);
-    a.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(a.blockedUntilUtc, nowUtc);
-    // Mismo criterio que init(): un provisional que sobrevive al reinicio es
-    // una peticion interrumpida, no una descarga en curso.
-    if (a.lastHttp == -1) a.lastHttp = 0;
+    std::map<std::string, fetchgate::State> gates;
+    for (const std::string& key : knownGroups()) {
+        fetchgate::State st;
+        const std::string sk = "celestrak." + key;
+        fetchstate::load(statePath_, sk, st);
+        st.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(st.blockedUntilUtc, nowUtc);
+        // Mismo criterio que init(): un provisional que sobrevive al reinicio
+        // es una peticion interrumpida, no una descarga en curso.
+        if (st.lastHttp == -1) st.lastHttp = 0;
+        gates[sk] = st;
+    }
     fetchgate::State n;
     fetchstate::load(statePath_, kKeySatnogs, n);
     n.blockedUntilUtc = fetchgate::sanitizeBlockedUntil(n.blockedUntilUtc, nowUtc);
     if (n.lastHttp == -1) n.lastHttp = 0;
     std::lock_guard<std::mutex> lk(mutex_);
-    gate_ = a;
+    gates_ = std::move(gates);
     gateSatnogs_ = n;
 }

@@ -2,6 +2,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -61,6 +62,16 @@
 // un reinicio ya no pide de nuevo. Cada proveedor tiene su propia puerta en el
 // sidecar (claves celestrak.active / celestrak.satnogs).
 //
+// GRUPOS (C2b): CelesTrak publica el catalogo por grupos (active, stations,
+// weather, gps-ops, science). `setGroups` elige cuales se piden; cada grupo
+// tiene su URL, su cache ("satellites-<grupo>.tle"; `active` sigue usando
+// "satellites.tle") y SU PROPIA puerta en el sidecar (celestrak.<grupo>), asi
+// que un 403 en `weather` no silencia `active`. `acquireGroup` consigue el
+// snapshot de un grupo sin instalarlo; `fetch` fusiona los que respondan con
+// mergeSnapshots (dedup por NORAD) e instala el resultado. El fallback SatNOGS
+// es UNO solo, y solo si la fusion no dejo nada (vacio, no "incompleto": un
+// grupo caido no descarta los datos reales de los demas).
+//
 // La posicion NO se calcula aqui: este modulo solo entrega elementos medios
 // (orbitprop::OrbitElements). Ver OrbitProp.h para el modelo y sus limites.
 
@@ -118,6 +129,15 @@ public:
     // entrada que usan los tests de orquestacion; no lo usa la app.
     bool fetchOnce(double utc) { return fetch(utc); }
 
+    // --- Grupos de CelesTrak (C2b) ---
+    // Claves que se pueden pedir. `active` es el catalogo completo y el unico
+    // que existia antes de C2b.
+    static const std::vector<std::string>& knownGroups();
+    // Fija los grupos a pedir. Se descartan claves desconocidas y repetidas; si
+    // no queda ninguna, se vuelve a {"active"}. Seguro entre hilos.
+    void setGroups(const std::vector<std::string>& keys);
+    std::vector<std::string> groups() const;
+
     // --- Costuras de prueba (no tocar desde la app) ---
     // Sustituye el transporte HTTP. Vaciar el function vuelve a curl.
     void setTransport(Transport t) { transport_ = std::move(t); }
@@ -151,7 +171,8 @@ public:
 
     // Cuando toca volver a pedir, segun el estado actual y la cache. Lo usa el
     // scheduler de App para no despertar al adaptador hasta que sirva de algo.
-    double nextNetworkUtc(double nowUtc) const;
+    // Con varios grupos es el MINIMO de todos: el primero que pueda pedir.
+    double nextNetworkUtc(double nowUtc);
 
     // Sube en cada snapshot valido instalado (cambio de catalogo).
     unsigned long getGeneration() const;
@@ -166,6 +187,19 @@ public:
     // clasico ya no puede representar.
     static bool parseCelesTrakCsv(const std::string& text, double nowUtc, TleSnapshot& out);
     static bool parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out);
+
+    // Puro: fusiona los snapshots de varios grupos de CelesTrak en uno solo.
+    //  - Dedup por NORAD: gana el EPOCH mas nuevo, sin importar el orden de
+    //    los snapshots ni el nombre del grupo. Si empatan, se queda el primero.
+    //  - Las filas sin NORAD (> 0) no se pueden deduplicar: se anaden tal cual.
+    //  - timeUtc es el del grupo MAS VIEJO: la edad del catalogo fusionado no
+    //    puede aparentar ser mejor que la de su peor componente.
+    //  - source es el origen comun; si los grupos no coinciden, se declara
+    //    Cache (hay una parte que no es viva). El detalle va en note.
+    //  - valid solo si queda >= 1 satelite. Sin snapshots utiles, note dice
+    //    "sin datos" y timeUtc = 0.
+    // Orden de salida: por primera aparicion. Techo kMaxSats.
+    static TleSnapshot mergeSnapshots(const std::vector<TleSnapshot>& parts);
 
     // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad
     // contra maxAgeSec (por defecto el TTL vivo de 6 h). `path` es fs::path
@@ -196,31 +230,40 @@ public:
 
 private:
     // Un grupo de CelesTrak con su puerta, URL y fichero de cache propios.
-    // C2b paso 1: fetchGroup() ya esta parametrizado; hoy solo se instancia
-    // `active` (mismo comportamiento que antes del refactor).
     struct GroupSpec {
-        std::string key;                    // clave del sidecar
+        std::string key;                    // clave del sidecar ("celestrak.<key>")
         std::string url;                    // gp.php?GROUP=...
         std::filesystem::path cache;        // fichero de cache del grupo
     };
-    GroupSpec activeGroup() const;
+    GroupSpec groupSpec(const std::string& key) const;
 
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
     static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     HttpResult httpGet(const char* url, long timeoutSec, std::string& body);
     bool fetch(double utc);
-    // Mismo camino que fetch() pero con puerta/URL/cache inyectables.
-    bool fetchGroup(const GroupSpec& group, double utc);
+    // Consigue el snapshot de un grupo (red, o cache de hasta 72 h si la
+    // puerta no deja tocar red) SIN instalarlo: fetch() fusiona antes de
+    // publicar. Actualiza la puerta del grupo y la persiste.
+    struct Acquired {
+        TleSnapshot snap;
+        bool ok = false;
+        bool networkTried = false;  // httpGet llego a llamarse (fallo o cuerpo ilegible)
+        std::string note;           // motivo de la puerta o del fallo (para status_/error_)
+    };
+    bool acquireGroup(const GroupSpec& group, double utc, Acquired& out);
+    // Puerta de un grupo. Si la clave no esta en el mapa, se carga del sidecar
+    // (un grupo nuevo tras actualizar no arranca con el estado en blanco).
+    fetchgate::State gateFor(const std::string& key);
+    // Guarda la puerta en el mapa y en el sidecar (best-effort).
+    void storeGate(const std::string& key, const fetchgate::State& st);
     // SatNOGS tiene su propia puerta: un bloqueo de CelesTrak no debe
     // silenciar otro proveedor (revision C2a).
     bool fetchSatnogs(double utc, TleSnapshot& out, std::string& err);
     // Sirve SatNOGS (cache propia o red) e instala el snapshot. Devuelve false
-    // y deja el motivo en error_ si tampoco hay nada.
+    // y deja el motivo en error_ si tampoco hay nada. Solo se llama UNA vez,
+    // cuando la fusion de los grupos no dejo nada.
     bool serveSatnogs(double utc, const std::string& why);
 
-    // Sirve cache (si la hay) y deja el motivo en status_/error_.
-    bool serveCache(const GroupSpec& group, double utc, double maxAgeSec,
-                    const std::string& why);
     // Persiste el sidecar de una puerta (best-effort).
     void persistState(const std::string& key, const fetchgate::State& st);
     // Edad de una cache en segundos, o -1 si no hay.
@@ -229,7 +272,10 @@ private:
     mutable std::mutex mutex_;
     TleSnapshot latest_;
     std::atomic<bool> fetching_{false};
-    fetchgate::State gate_;        // puerta de CelesTrak (grupo active)
+    // Una puerta POR GRUPO: el estado de `weather` no puede pisar el de
+    // `active` (antes habia un unico `gate_`).
+    std::map<std::string, fetchgate::State> gates_;
+    std::vector<std::string> groupKeys_ = {"active"};
     fetchgate::State gateSatnogs_; // puerta de SatNOGS (proveedor distinto)
     double snapshotEpoch_ = 0.0;
     std::filesystem::path cachePath_;

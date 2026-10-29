@@ -151,6 +151,9 @@ struct App::Impl {
     // M0.2: las precargas en background pasan de detach() a miembros joinables
     // (cerrar la ventana durante una precarga podia usar impl tras liberarlo).
     std::thread histPreloadThread;
+    // Mutex shared between the periodic backfill and the main fetchWorker to
+    // avoid concurrent downloads that overwrite each other's frames.
+    std::mutex tecDownloadMutex;
     std::thread catalogPreloadThread;
     std::thread irtamBackfillThread;  // M-IRTAM-F2 (P4): backfill gambit (joinable, M0.2)
     std::atomic<bool> shutdownRequested{false};
@@ -235,6 +238,9 @@ struct App::Impl {
     bool satSchedulePending = false;  // hay que recalcular tras el fetch en curso
     unsigned long satGeneration = 0;
     bool satVisible = false;
+    // C2b: grupos de CelesTrak seleccionados, tal cual van a settings.cfg
+    // ("active" o "active,stations"). El adaptador los valida igualmente.
+    std::string satGroups = "amateur,stations";
     WsprArcs wsprArcs;
     CmeLayer cme;
     WhistlerLayer whistlers;
@@ -1510,6 +1516,8 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setVisible(true);           // sincronizar el toggle con el checkbox inicial (App.cpp L524)
     impl->tecLayer.setAltitude(300.0f / 6371.0f);  // arrancar a 300 km (radio ~1.047), no pegado a 1.02
     applyRelief();
+    // Cleanup orphan .tmp* files before starting threads.
+    teccache::cleanupTmpFiles("cache", 0.0);
     // Precarga del historico GloTEC (indice recuperado): ventana 72 h en
     // background para que el replay tenga pasado real al instante.
     {
@@ -1524,6 +1532,8 @@ bool App::init(int width, int height, const char* title) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             if (!self->impl->liveTecArrived.load() || self->impl->shutdownRequested.load())
                 return;
+
+            // Initial backfill
             self->impl->histLoading.store(true);
             GloTecAdapter loader;   // instancia propia: sin estado compartido
             loader.setGridSize(72, 72);
@@ -1559,6 +1569,52 @@ bool App::init(int width, int height, const char* title) {
                        st.cached, st.stored, st.planned, depth);
             }
             self->impl->histLoading.store(false);
+
+            // Periodic backfill and cleanup
+            while (!self->impl->shutdownRequested.load()) {
+                // Sleep for 1 hour (3600 seconds) but check for shutdown every second
+                for (int i = 0; i < 3600 && !self->impl->shutdownRequested.load(); i++)
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (self->impl->shutdownRequested.load())
+                    break;
+
+                // Periodic backfill: fill suspension holes in the window of the last `tecDepthSlots` frames
+                self->impl->histLoading.store(false); // We don't want to show loading for periodic backfill
+                std::lock_guard<std::mutex> dlk(self->impl->tecDownloadMutex);
+                GloTecAdapter loaderPeriodic;   // we can reuse the same loader or create a new one
+                loaderPeriodic.setGridSize(72, 72);
+                loaderPeriodic.setStopFlag(&self->impl->shutdownRequested);
+                std::vector<GloTecFrame> idxPeriodic;
+                if (loaderPeriodic.fetchIndex(idxPeriodic)) {
+                    std::vector<double> cachedEp;
+                    {
+                        std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
+                        for (const auto& f : self->impl->tecHist)
+                            cachedEp.push_back(f.timestamp);
+                    }
+                    const double nowPre = (double)std::time(nullptr);
+                    const int depth = glm::clamp(self->impl->tecDepthSlots, 36, 432);
+                    std::vector<glotbf::IndexFrame> pure;
+                    pure.reserve(idxPeriodic.size());
+                    for (const auto& e : idxPeriodic) pure.push_back({e.url, e.timeUtc});
+                    const std::vector<glotbf::IndexFrame> todo =
+                        glotbf::plan(pure, cachedEp, nowPre, depth);
+                    // We don't set histLoading or histDone for periodic backfill to avoid UI noise
+                    GloTecAdapter::BackfillStats st;
+                    loaderPeriodic.backfillFrom(idxPeriodic, cachedEp, nowPre, depth,
+                        [self](const GridData& fr, double ts) {
+                            self->pushHistoryFrame(fr, ts, false);
+                            // No increment of histDone for periodic backfill
+                        }, nullptr, &st);
+                    // Optionally, we can log if we stored any frames
+                    if (st.stored > 0) {
+                        printf("[App] Periodic backfill: stored %d frames\n", st.stored);
+                    }
+                }
+
+                // Cleanup .tmp* files in the cache directory
+                teccache::cleanupTmpFiles("cache", 300.0);
+            }
         });
     }
 
@@ -2942,6 +2998,44 @@ void App::updateMainGrid(const GridData& grid) {
     impl->shellLayer.updateFromGrid(grid);
 }
 
+namespace {
+
+// C2b: combinaciones de grupos de CelesTrak que ofrece el panel. Se guarda la
+// lista de claves tal cual ("active,stations") para que settings.cfg se lea a
+// simple vista y para que anadir un grupo no corra indices.
+struct SatGroupPreset {
+    const char* label;
+    const char* keys;
+};
+const SatGroupPreset kSatGroupPresets[] = {
+    {"Amateur + stations", "amateur,stations"},
+    {"Amateur", "amateur"},
+    {"Stations", "stations"},
+    {"Weather", "weather"},
+    {"GPS", "gps-ops"},
+    {"Science", "science"},
+    {"Active (large download)", "active"},
+};
+constexpr int kSatGroupPresetCount =
+    (int)(sizeof(kSatGroupPresets) / sizeof(kSatGroupPresets[0]));
+
+std::vector<std::string> splitGroups(const std::string& csv) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : csv) {
+        if (c == ',') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+}  // namespace
+
 void App::saveSettings() {
     FILE* f = fopen("settings.cfg", "w");
     if (!f) return;
@@ -2988,6 +3082,7 @@ void App::saveSettings() {
     fprintf(f, "cmeLayerVisible %d\n", impl->cmeVisible ? 1 : 0);
     fprintf(f, "whistlerVisible %d\n", impl->whistlerVisible ? 1 : 0);
     fprintf(f, "satellitesVisible %d\n", impl->satVisible ? 1 : 0);   // Lote 4A
+    fprintf(f, "satellites_group %s\n", impl->satGroups.c_str());      // C2b
     fprintf(f, "swArrowsVisible %d\n", impl->swArrowsVisible ? 1 : 0);
     fprintf(f, "swArrowMode %d\n", impl->swArrowMode);
     fprintf(f, "swArrowScale %g\n", (double)impl->swArrowScale);
@@ -3074,6 +3169,14 @@ void App::loadSettings() {
     while (fgets(line, sizeof(line), f)) {
         if (sscanf(line, "pinned %63s", key) == 1) {
             if (std::string(key) != "-") impl->pinnedCode = key;
+            continue;
+        }
+        // C2b: valor de TEXTO (lista de grupos), no numerico. setGroups
+        // descarta claves desconocidas y vuelve a `active` si no queda ninguna.
+        char gbuf[64];
+        if (sscanf(line, "satellites_group %63s", gbuf) == 1) {
+            impl->satGroups = gbuf;
+            impl->satAdapter.setGroups(splitGroups(impl->satGroups));
             continue;
         }
         if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
@@ -3341,6 +3444,7 @@ void App::fetchWorker() {
                     // C1b: profundidad minima en el worker (solo huecos
                     // recientes); el backfill largo lo hace la precarga en su
                     // hilo para no bloquear solar wind/aurora/Kp en este.
+                    std::lock_guard<std::mutex> dlk(impl->tecDownloadMutex);
                     ok = glo.fetchTEC(epoch, 3);
                     gloLastAttemptOk = ok;
                     gloLastAttemptUtc = epoch;
@@ -5533,7 +5637,33 @@ void App::render() {
         impl->satLayer.setVisible(showSat);
         if (showSat) impl->satNextFetch = 0.0;   // evalua la puerta ya (C2a: encender no implica pedir)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak (active objects), fallback SatNOGS, then the on-disk cache - the source label says which one is drawn. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak. Amateur + stations is the default small download; 'Active' fetches the full catalogue. Fallback SatNOGS, then the on-disk cache. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (impl->satVisible) {
+        // C2b: que grupos de CelesTrak se piden y se fusionan. Cambiar de
+        // seleccion no borra el catalogo actual: el siguiente pase lo sustituye.
+        int sel = -1;
+        for (int i = 0; i < kSatGroupPresetCount; ++i) {
+            if (impl->satGroups == kSatGroupPresets[i].keys) sel = i;
+        }
+        const char* label =
+            sel >= 0 ? kSatGroupPresets[sel].label : impl->satGroups.c_str();
+        ImGui::SetNextItemWidth(170.0f);
+        if (ImGui::BeginCombo("##satGroups", label)) {
+            for (int i = 0; i < kSatGroupPresetCount; ++i) {
+                const bool cur = (i == sel);
+                if (ImGui::Selectable(kSatGroupPresets[i].label, cur)) {
+                    impl->satGroups = kSatGroupPresets[i].keys;
+                    impl->satAdapter.setGroups(splitGroups(impl->satGroups));
+                    impl->satNextFetch = 0.0;   // evalua la puerta con los nuevos grupos
+                    impl->satSchedulePending = false;
+                }
+                if (cur) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetItemTooltip("CelesTrak groups fetched and merged by NORAD (duplicate keeps the newest EPOCH). Each group has its own rate-limit gate: a 403 in one does not silence the others.");
+    }
     if (impl->satAdapter.isFetching()) {
         ImGui::TextDisabled("Satellites: fetching...");
     } else if (impl->satSnap.valid) {
@@ -5543,10 +5673,20 @@ void App::render() {
         // la descarga original.
         const double snapEpoch = impl->satSnapTime > 0.0 ? impl->satSnapTime : impl->satSnap.timeUtc;
         const double ageH = snapEpoch > 0.0 ? ((double)std::time(nullptr) - snapEpoch) / 3600.0 : 0.0;
-        ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d rings)",
-                            impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
-                            impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
-                            impl->satLayer.ringCount());
+        const int nGroups = (int)impl->satAdapter.groups().size();
+        if (nGroups > 1) {
+            // C2b: con varios grupos se dice cuantos, o el recuento de filas
+            // no explica por que el catalogo es mayor que `active`.
+            ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d groups, %d rings)",
+                                impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
+                                impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
+                                nGroups, impl->satLayer.ringCount());
+        } else {
+            ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d rings)",
+                                impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
+                                impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
+                                impl->satLayer.ringCount());
+        }
     } else {
         ImGui::TextDisabled("Satellites: %s", impl->satSnap.note.empty()
                                                     ? "waiting for first fetch"
@@ -6317,6 +6457,29 @@ void App::render() {
                 ImGui::Text("LIVE  (loading history %d/%d, %.1f MB)",
                     impl->histDone.load(), impl->histTotal.load(), mb);
                 if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay (about 1 frame/s).");
+                // Depth selector for history
+                ImGui::Separator();
+                ImGui::Text("History depth");
+                const char* depthLabels[] = { "6h", "24h", "72h" };
+                int depthIndex = 0;
+                if (impl->tecDepthSlots == 36) depthIndex = 0;
+                else if (impl->tecDepthSlots == 144) depthIndex = 1;
+                else if (impl->tecDepthSlots == 432) depthIndex = 2;
+                else depthIndex = 0;
+                if (ImGui::Combo("##depth", &depthIndex, depthLabels, 3)) {
+                    int newSlots = 0;
+                    if (depthIndex == 0) newSlots = 36;
+                    else if (depthIndex == 1) newSlots = 144;
+                    else if (depthIndex == 2) newSlots = 432;
+                    if (newSlots != impl->tecDepthSlots) {
+                        impl->tecDepthSlots = newSlots;
+                        // Note: depth change requires restart to re-run backfill with new depth.
+                        // For immediate effect, the histPreloadThread would need to be restarted.
+                    }
+                }
+                ImGui::SameLine();
+                HelpMarker("Select how many hours of past TEC frames to keep for replay. "
+                           "Increasing depth may require re-downloading missed frames on next start.");
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }

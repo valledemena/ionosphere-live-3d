@@ -10,10 +10,12 @@
 // =============================================================================
 #include "Data/TecCache.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -214,6 +216,40 @@ int main() {
         check_bool("lleno+epoch<oldest false", !fitsInRing(C, C, 500.0, 100.0));
         check_bool("vacio true con oldest 0.0", fitsInRing(0, C, 0.0, 100.0));
         check_bool("viejo rige oldest sin ventana", !fitsInRing(C, C, 500.0, 1.0));
+    }
+
+    std::printf("--- P1b: cleanupTmpFiles (age-check) ---\n");
+    {
+        namespace fs = std::filesystem;
+        // We need freshDir, but let's create a simple temp dir instead.
+        auto tmp = fs::temp_directory_path() / "tec_cache_cleanup_test";
+        fs::remove_all(tmp);
+        fs::create_directories(tmp);
+        std::string dstr = tmp.string();
+        std::string recent = dstr + "/tec_recent.tmp";
+        std::ofstream recentFile(recent);
+        recentFile.close();
+        std::string old = dstr + "/tec_old.tmp";
+        std::ofstream oldFile(old);
+        oldFile.close();
+        // Set mtime of old file to 10 hours ago
+        auto past = fs::file_time_type::clock::now() - std::chrono::hours(10);
+        fs::last_write_time(old, past);
+        // With maxAgeSeconds=300 (5 min), recent should stay, old should go
+        teccache::cleanupTmpFiles(dstr, 300.0);
+        check_bool("recent .tmp preserved (maxAge check)", fs::exists(recent));
+        check_bool("old .tmp removed (maxAge check)", !fs::exists(old));
+        // Test cleanup with maxAgeSeconds=0 removes all .tmp
+        std::ofstream anotherTmp(dstr + "/tec_another.tmp");
+        anotherTmp.close();
+        teccache::cleanupTmpFiles(dstr, 0.0);
+        check_bool("all .tmp removed with maxAge 0", !fs::exists(dstr + "/tec_another.tmp"));
+        // Non-.tmp file should be preserved
+        std::ofstream other(dstr + "/other.txt");
+        other.close();
+        teccache::cleanupTmpFiles(dstr, 300.0);
+        check_bool("other.txt preserved after cleanup", fs::exists(dstr + "/other.txt"));
+        fs::remove_all(tmp);
     }
 
     std::printf("\n[test_tec_cache] %d OK, %d FAIL\n", g_ok, g_fail);
