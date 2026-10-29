@@ -151,6 +151,9 @@ struct App::Impl {
     // M0.2: las precargas en background pasan de detach() a miembros joinables
     // (cerrar la ventana durante una precarga podia usar impl tras liberarlo).
     std::thread histPreloadThread;
+    // Mutex shared between the periodic backfill and the main fetchWorker to
+    // avoid concurrent downloads that overwrite each other's frames.
+    std::mutex tecDownloadMutex;
     std::thread catalogPreloadThread;
     std::thread irtamBackfillThread;  // M-IRTAM-F2 (P4): backfill gambit (joinable, M0.2)
     std::atomic<bool> shutdownRequested{false};
@@ -1513,6 +1516,8 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setVisible(true);           // sincronizar el toggle con el checkbox inicial (App.cpp L524)
     impl->tecLayer.setAltitude(300.0f / 6371.0f);  // arrancar a 300 km (radio ~1.047), no pegado a 1.02
     applyRelief();
+    // Cleanup orphan .tmp* files before starting threads.
+    teccache::cleanupTmpFiles("cache", 0.0);
     // Precarga del historico GloTEC (indice recuperado): ventana 72 h en
     // background para que el replay tenga pasado real al instante.
     {
@@ -1575,6 +1580,7 @@ bool App::init(int width, int height, const char* title) {
 
                 // Periodic backfill: fill suspension holes in the window of the last `tecDepthSlots` frames
                 self->impl->histLoading.store(false); // We don't want to show loading for periodic backfill
+                std::lock_guard<std::mutex> dlk(self->impl->tecDownloadMutex);
                 GloTecAdapter loaderPeriodic;   // we can reuse the same loader or create a new one
                 loaderPeriodic.setGridSize(72, 72);
                 loaderPeriodic.setStopFlag(&self->impl->shutdownRequested);
@@ -1607,7 +1613,7 @@ bool App::init(int width, int height, const char* title) {
                 }
 
                 // Cleanup .tmp* files in the cache directory
-                teccache::cleanupTmpFiles("cache");
+                teccache::cleanupTmpFiles("cache", 300.0);
             }
         });
     }
@@ -3438,6 +3444,7 @@ void App::fetchWorker() {
                     // C1b: profundidad minima en el worker (solo huecos
                     // recientes); el backfill largo lo hace la precarga en su
                     // hilo para no bloquear solar wind/aurora/Kp en este.
+                    std::lock_guard<std::mutex> dlk(impl->tecDownloadMutex);
                     ok = glo.fetchTEC(epoch, 3);
                     gloLastAttemptOk = ok;
                     gloLastAttemptUtc = epoch;

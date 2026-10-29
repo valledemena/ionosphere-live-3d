@@ -70,6 +70,6 @@ bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, doubl
 
 // Remove temporary files matching "tec_*.tmp*" in the directory.
 // Best-effort, never throws.
-void cleanupTmpFiles(const std::string& dir);
+void cleanupTmpFiles(const std::string& dir, double maxAgeSeconds = 300.0);
 
 }  // namespace teccache
