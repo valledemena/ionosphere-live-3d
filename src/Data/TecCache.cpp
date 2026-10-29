@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
+#include <chrono>
 
 namespace teccache {
 namespace {
@@ -186,6 +187,40 @@ std::vector<std::size_t> missingInWindow(
 bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, double epoch) {
     if (ringSize < cap) return true;
     return epoch > oldestEpoch;
+}
+
+void cleanupTmpFiles(const std::string& dir, double maxAgeSeconds) {
+    namespace fs = std::filesystem;
+    try {
+        if (!fs::exists(dir) || !fs::is_directory(dir)) {
+            return;
+        }
+        auto now = fs::file_time_type::clock::now();
+        for (const auto& entry : fs::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            std::string filename = entry.path().filename().string();
+            // Match files that start with "tec_" and contain ".tmp"
+            if (filename.rfind("tec_", 0) == 0 && filename.find(".tmp") != std::string::npos) {
+                if (maxAgeSeconds > 0.0) {
+                    try {
+                        auto mtime = fs::last_write_time(entry.path());
+                        auto age = std::chrono::duration_cast<std::chrono::seconds>(now - mtime);
+                        if (age.count() < maxAgeSeconds) {
+                            continue; // Too recent, skip
+                        }
+                    } catch (...) {
+                        // If we can't get mtime, skip to be safe
+                        continue;
+                    }
+                }
+                fs::remove(entry.path());
+            }
+        }
+    } catch (...) {
+        // Best-effort: swallow any exception.
+    }
 }
 
 }  // namespace teccache
