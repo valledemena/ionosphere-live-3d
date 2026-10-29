@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,16 @@ static const double kBlock = 7200.0;   // fetchgate::kBlockSec
 // gp.php?FORMAT=csv; el TLE de 5 digitos ya no admite el catalogo actual).
 static std::string celestrakCsv() { return tlefixture::catalogCsv(); }
 
+// C2b: grupos con solape. `stations` trae la ISS con un EPOCH MAS NUEVO y un
+// objeto que no esta en `active` (90003). Asi se prueba a la vez la union y el
+// dedup por NORAD (gana el EPOCH mas nuevo, no el ultimo grupo leido).
+static const char* kStationsEpochIso = "2026-10-26T15:18:26.839680";   // T0 + 1 h
+static std::string stationsCsv() {
+    return std::string(tlefixture::csvHeader()) +
+           tlefixture::csvRow("ISS-STATIONS", 25544, kStationsEpochIso) +
+           tlefixture::csvRow("SAT-90003", 90003, kStationsEpochIso);
+}
+
 // Subconjunto de SatNOGS: 2 filas, una de ellas (90003) NO esta en CelesTrak.
 static std::string satnogsJson() {
     std::string out = "[";
@@ -93,6 +104,11 @@ struct Mock {
     int satnogsCurl = 0;
     int celestrakCalls = 0;
     int satnogsCalls = 0;
+    // C2b: respuesta por grupo ("active", "stations", ...). Si el grupo no
+    // aparece aqui se usan los valores de arriba.
+    std::map<std::string, int> groupHttp;
+    std::map<std::string, std::string> groupBody;
+    std::vector<std::string> celestrakUrls;   // grupo de cada peticion, en orden
     // Gancho opcional que se ejecuta DENTRO de la llamada a CelesTrak (antes de
     // responder): sirve para observar el sidecar con el fetch en vuelo.
     std::function<void()> onCelestrak;
@@ -102,16 +118,29 @@ struct Mock {
             TleAdapter::HttpResult r;
             const bool isCelestrak = url.find("celestrak") != std::string::npos;
             if (isCelestrak) {
-                // C2b: la URL debe llevar FORMAT=csv (y el grupo, cuando existan
-                // amateur/stations). Esto es parte del contrato del adaptador.
+                // C2b: la URL debe llevar FORMAT=csv y el grupo pedido. Esto es
+                // parte del contrato del adaptador.
                 checkBool("Celestrak pide FORMAT=csv",
                           url.find("FORMAT=csv") != std::string::npos);
+                std::string group;
+                const size_t gpos = url.find("GROUP=");
+                if (gpos != std::string::npos) {
+                    const size_t amp = url.find('&', gpos);
+                    group = url.substr(gpos + 6, amp == std::string::npos
+                                                     ? std::string::npos
+                                                     : amp - (gpos + 6));
+                }
+                celestrakUrls.push_back(group);
                 ++celestrakCalls;
                 if (onCelestrak) onCelestrak();
                 r.http = celestrakHttp;
+                const auto hit = groupHttp.find(group);
+                if (hit != groupHttp.end()) r.http = hit->second;
                 r.curl = celestrakCurl;
                 if (r.http == 200 && r.curl == 0) {
                     body = celestrakBody;
+                    const auto bit = groupBody.find(group);
+                    if (bit != groupBody.end()) body = bit->second;
                     r.ok = !body.empty();
                 } else {
                     r.err = r.curl != 0 ? "timeout simulado" : "HTTP simulado";
@@ -163,6 +192,16 @@ static double fieldOf(const std::string& text, const std::string& key) {
     if (at == std::string::npos) return -1.0;
     return std::atof(text.c_str() + at + key.size() + 1);
 }
+
+// C2b: busquedas por NORAD en el snapshot fusionado.
+static const TleSat* satByNorad(const TleSnapshot& s, int norad) {
+    for (const TleSat& x : s.sats) {
+        if (x.noradId == norad) return &x;
+    }
+    return nullptr;
+}
+
+static bool hasNorad(const TleSnapshot& s, int norad) { return satByNorad(s, norad) != nullptr; }
 
 int main() {
     std::printf("--- C2a-19: 403 sin cache -> SatNOGS, CelesTrak bloqueado 2 h ---\n");
@@ -417,6 +456,154 @@ int main() {
         fs::remove_all(p.dir, ec);
     }
 
+    std::printf("--- C2b-25: dos grupos vivos se fusionan (dedup por EPOCH) ---\n");
+    {
+        Paths p = makePaths("G1");
+        Mock m;
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("fetch ok", ok && s.valid);
+        checkBool("una peticion por grupo", m.celestrakCalls == 2);
+        checkBool("se pidio GROUP=stations",
+                  m.celestrakUrls.size() == 2 && m.celestrakUrls[1] == "stations");
+        checkBool("3 + 2 filas con la ISS repetida = 4", s.sats.size() == 4);
+        checkBool("el origen es CelesTrak", s.source == TleSource::Celestrak);
+        const TleSat* iss = satByNorad(s, 25544);
+        checkBool("la ISS quedo una sola vez", iss != nullptr);
+        checkBool("gana el EPOCH mas nuevo (stations)",
+                  iss != nullptr && iss->name == "ISS-STATIONS");
+        checkBool("el objeto exclusivo de stations esta", hasNorad(s, 90003));
+        checkBool("sin aviso: todo vivo", a.getErrorMessage().empty());
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-26: la puerta es POR GRUPO (403 en stations no silencia active) ---\n");
+    {
+        Paths p = makePaths("G2");
+        Mock m;
+        m.groupHttp["stations"] = 403;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("se sirve el grupo vivo", ok && s.valid && s.sats.size() == 3);
+        checkBool("un grupo caido no manda a SatNOGS", m.satnogsCalls == 0);
+        checkBool("el aviso nombra stations",
+                  a.getErrorMessage().find("stations") != std::string::npos);
+        checkNear("stations bloqueado 2 h", a.getBlockedUntilUtc(), T0 + 60.0 + kBlock);
+        const std::string state = readText(p.state);
+        checkNear("sidecar: stations tiene su propia clave",
+                  fieldOf(state, "celestrak.stations.blocked_until"), T0 + 60.0 + kBlock);
+        checkNear("sidecar: active no quedo bloqueado",
+                  fieldOf(state, "celestrak.active.blocked_until"), 0.0);
+        // Siguiente pase: active esta en cache joven y stations bloqueado, asi
+        // que no se toca la red para ninguno.
+        a.fetchOnce(T0 + 120.0);
+        checkBool("ningun grupo pide red otra vez", m.celestrakCalls == 2);
+        checkBool("sigue sirviendose el catalogo fusionado", a.getSnapshot().valid);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-27: cache de un grupo + vivo de otro, timeUtc el mas viejo ---\n");
+    {
+        Paths p = makePaths("G3");
+        TleSnapshot disk;
+        TleAdapter::parseCelesTrakCsv(celestrakCsv(), T0, disk);
+        checkBool("cache de active escrita", TleAdapter::saveCache(p.cache, disk, celestrakCsv()));
+        // active bloqueado (se sirve de cache); stations vive.
+        fetchgate::State cel;
+        cel.lastAttemptUtc = T0 - kBlock;
+        cel.lastHttp = 403;
+        cel.blockedUntilUtc = T0 + 3600.0;
+        fetchstate::save(p.state, "celestrak.active", cel);
+
+        Mock m;
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active", "stations"});
+        a.setTransport(m.transport());
+        a.loadStateForTests(T0);
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("se fusiona cache + vivo", ok && s.valid && s.sats.size() == 4);
+        checkBool("solo stations toca red",
+                  m.celestrakCalls == 1 && m.celestrakUrls[0] == "stations");
+        checkBool("origenes distintos -> se declara cache", s.source == TleSource::Cache);
+        checkNear("timeUtc = el del grupo mas viejo", a.getLastFetchTime(), T0, 1.0);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-28: si NINGUN grupo responde, SatNOGS se pide UNA vez ---\n");
+    {
+        Paths p = makePaths("G4");
+        Mock m;
+        m.groupHttp["active"] = 403;
+        m.groupHttp["stations"] = 403;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("hay subconjunto de SatNOGS", ok && s.valid);
+        checkBool("una sola peticion a SatNOGS", m.satnogsCalls == 1);
+        checkBool("origen SatNOGS", s.source == TleSource::SatNogs);
+        checkBool("2 filas del subconjunto", s.sats.size() == 2);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-29: la seleccion de grupos se sanea ---\n");
+    {
+        TleAdapter a;
+        a.setGroups({"weather", "nope", "weather", "active"});
+        checkBool("descarta desconocidos y repetidos, conserva el orden",
+                  a.groups() == std::vector<std::string>({"weather", "active"}));
+        a.setGroups({});
+        checkBool("vacio vuelve a active",
+                  a.groups() == std::vector<std::string>({"active"}));
+        a.setGroups({"nope"});
+        checkBool("solo desconocidos vuelve a active",
+                  a.groups() == std::vector<std::string>({"active"}));
+    }
+
+    std::printf("--- C2b-30: cada grupo tiene su propio fichero de cache ---\n");
+    {
+        Paths p = makePaths("G5");
+        Mock m;
+        m.groupHttp["weather"] = 500;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active", "weather"});
+        a.setTransport(m.transport());
+        a.fetchOnce(T0 + 60.0);
+        checkBool("la cache del grupo vivo se escribe", fs::exists(p.cache));
+        checkBool("la del grupo caido no se escribe",
+                  !fs::exists(p.dir / "satellites-weather.tle"));
+        TleSnapshot back;
+        checkBool("satellites.tle sigue siendo el catalogo de active",
+                  TleAdapter::loadCelestrakCache(p.cache, T0 + 120.0, back) &&
+                      back.sats.size() == 3);
+        checkBool("sin filas de otro grupo", !hasNorad(back, 90003));
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
