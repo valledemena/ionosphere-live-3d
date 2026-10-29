@@ -69,6 +69,8 @@ Result run(const std::vector<IndexFrame>& index,
     if (todo.empty()) return r;
 
     int consec404 = 0;
+    int consec429 = 0;
+    int consecTransport = 0;
     double pendingWait = 0.0;
     bool first = true;
 
@@ -91,27 +93,39 @@ Result run(const std::vector<IndexFrame>& index,
 
         if (!res.transportOk) {
             ++r.httpErrors;
-            if (++consec404 >= opt.stopAfter404) { r.stoppedOn404 = true; break; }
+            if (++consecTransport >= opt.stopAfter404) {
+                r.stoppedOnTransport = true;
+                break;
+            }
             continue;
         }
+        consecTransport = 0;
 
         if (res.http == 200) {
             if (store(f, res.body)) r.stored.push_back(f.timeUtc);
             else ++r.httpErrors;
             consec404 = 0;
+            consec429 = 0;
             continue;
         }
         if (res.http == 404) {
             ++r.notFound;
+            consec429 = 0;
             if (++consec404 >= opt.stopAfter404) { r.stoppedOn404 = true; break; }
             continue;
         }
         if (res.http == 429) {
+            ++r.rateLimited;
             ++r.httpErrors;
             consec404 = 0;
-            double wait = res.retryAfterSec > 0.0 ? res.retryAfterSec : 0.0;
-            if (wait > opt.maxWaitSec) wait = opt.maxWaitSec;
-            pendingWait = std::max(pendingWait, wait);
+            // Retry-After por encima del tope: mejor parar que recortarlo y
+            // volver a llamar a un servidor que pide horas de espera.
+            if (res.retryAfterSec > opt.maxWaitSec) {
+                r.stoppedOnRetryAfter = true;
+                break;
+            }
+            if (++consec429 >= opt.stopAfter404) { r.stoppedOn429 = true; break; }
+            pendingWait = std::max(pendingWait, res.retryAfterSec);
             continue;
         }
         if (res.http >= 500) {
@@ -121,6 +135,7 @@ Result run(const std::vector<IndexFrame>& index,
         }
         ++r.httpErrors;
         consec404 = 0;
+        consec429 = 0;
     }
     return r;
 }

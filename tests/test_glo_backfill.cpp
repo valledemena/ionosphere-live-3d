@@ -206,6 +206,72 @@ int main() {
                    sleeps.size() >= 2 && sleeps[1] >= 7.0);
     }
 
+    std::printf("--- C1b: 3 x 429 seguidos paran (sin cabecera) ---\n");
+    {
+        auto idx = makeIndex(t0, 10);
+        glotbf::Options opt;
+        opt.depthSlots = 10;
+        Script s;
+        auto tr = [&s](const std::string& url) {
+            s.order.push_back(std::atof(url.c_str() + 3));
+            glotbf::Response r;
+            r.http = 429;   // sin Retry-After
+            return r;
+        };
+        auto store = [](const glotbf::IndexFrame&, const std::string&) { return true; };
+        std::vector<double> sleeps;
+        auto sleepFn = [&sleeps](double sec) { sleeps.push_back(sec); };
+        glotbf::Result r = glotbf::run(idx, {}, t0, opt, tr, store, sleepFn, {});
+        check_bool("para por 429", r.stoppedOn429);
+        check_bool("no lo confunde con 404", !r.stoppedOn404);
+        check_int("solo 3 peticiones", (int)r.requested.size(), 3);
+        check_int("3 rate-limited contados", r.rateLimited, 3);
+        check_int("nada almacenado", (int)r.stored.size(), 0);
+    }
+
+    std::printf("--- C1b: Retry-After por encima del tope para ---\n");
+    {
+        auto idx = makeIndex(t0, 10);
+        glotbf::Options opt;
+        opt.depthSlots = 10;
+        Script s;
+        auto tr = [&s](const std::string& url) {
+            s.order.push_back(std::atof(url.c_str() + 3));
+            glotbf::Response r;
+            r.http = 429;
+            r.retryAfterSec = 3600.0;   // > maxWaitSec (600)
+            return r;
+        };
+        auto store = [](const glotbf::IndexFrame&, const std::string&) { return true; };
+        int sleeps = 0;
+        auto sleepFn = [&sleeps](double) { ++sleeps; };
+        glotbf::Result r = glotbf::run(idx, {}, t0, opt, tr, store, sleepFn, {});
+        check_bool("para en seco por Retry-After", r.stoppedOnRetryAfter);
+        check_int("1 sola peticion", (int)r.requested.size(), 1);
+        check_int("no duerme 3600 s", sleeps, 0);
+    }
+
+    std::printf("--- C1b: el transporte no se mezcla con los 404 ---\n");
+    {
+        auto idx = makeIndex(t0, 10);
+        glotbf::Options opt;
+        opt.depthSlots = 10;
+        Script s;
+        auto tr = [&s](const std::string& url) {
+            s.order.push_back(std::atof(url.c_str() + 3));
+            glotbf::Response r;
+            r.transportOk = false;   // curl falla
+            return r;
+        };
+        auto store = [](const glotbf::IndexFrame&, const std::string&) { return true; };
+        auto sleepFn = [](double) {};
+        glotbf::Result r = glotbf::run(idx, {}, t0, opt, tr, store, sleepFn, {});
+        check_bool("para por transporte", r.stoppedOnTransport);
+        check_bool("no levanta stoppedOn404", !r.stoppedOn404);
+        check_int("no cuenta 404", r.notFound, 0);
+        check_int("3 intentos", (int)r.requested.size(), 3);
+    }
+
     std::printf("--- C1b: 5xx para ---\n");
     {
         auto idx = makeIndex(t0, 10);

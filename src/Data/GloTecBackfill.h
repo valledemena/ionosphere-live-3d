@@ -13,9 +13,12 @@
 //   - Ritmo: >= minIntervalSec entre peticiones (1 s por defecto).
 //   - Un 404 se cuenta y se salta; 3 404 CONSECUTIVOS paran. Un 404 aislado
 //     no bloquea nada: este modulo no escribe estado de puerta.
-//   - Un 429 espera al menos Retry-After (acotado a maxWaitSec) antes de la
-//     siguiente peticion.
+//   - 429: espera Retry-After antes de la siguiente peticion. Tres 429
+//     consecutivos paran (un servidor que no da cabecera no aguanta 432
+//     peticiones a 1/s) y un Retry-After mayor que maxWaitSec para en seco.
 //   - Un 5xx para: el servidor esta caido, insistir solo empeora.
+//   - Los errores de transporte tienen su propio contador (3 consecutivos
+//     paran) y no se mezclan con los 404.
 // =============================================================================
 #include <functional>
 #include <string>
@@ -63,9 +66,13 @@ struct Result {
     std::vector<double> stored;      // epochs almacenados, en orden
     int skippedCached = 0;           // frames del horizonte ya en cache
     int notFound = 0;                // 404 recibidos
+    int rateLimited = 0;             // 429 recibidos
     int httpErrors = 0;              // transporte, 429 y otros no-200
     bool stoppedOn404 = false;       // 3 404 consecutivos
     bool stoppedOn5xx = false;       // primer 5xx
+    bool stoppedOn429 = false;       // 3 429 consecutivos sin cabecera
+    bool stoppedOnRetryAfter = false;// Retry-After mayor que maxWaitSec
+    bool stoppedOnTransport = false; // 3 errores de transporte consecutivos
     bool stoppedByCaller = false;    // stop() devolvio true
     double sleptSec = 0.0;           // suma de esperas
 };
