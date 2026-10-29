@@ -259,7 +259,12 @@ private:
         bool networkTried = false;  // httpGet llego a llamarse (fallo o cuerpo ilegible)
         std::string note;           // motivo de la puerta o del fallo (para status_/error_)
     };
-    bool acquireGroup(const GroupSpec& group, double utc, Acquired& out);
+    // `pauseBeforeNetwork`: cortesia de cuota — acquireGroup la invoca justo
+    // antes de httpGet, asi la pausa solo separa peticiones de red REALES
+    // (un grupo servido de cache no paga espera). fetch() pasa una que la
+    // deja pasar solo desde la segunda descarga del pase.
+    bool acquireGroup(const GroupSpec& group, double utc, Acquired& out,
+                      const std::function<void()>& pauseBeforeNetwork = {});
     // Puerta de un grupo. Si la clave no esta en el mapa, se carga del sidecar
     // (un grupo nuevo tras actualizar no arranca con el estado en blanco).
     fetchgate::State gateFor(const std::string& key);

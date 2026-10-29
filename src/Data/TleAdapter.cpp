@@ -928,7 +928,8 @@ void TleAdapter::storeGate(const std::string& key, const fetchgate::State& st) {
     persistState(key, st);
 }
 
-bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out) {
+bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out,
+                              const std::function<void()>& pauseBeforeNetwork) {
     const fetchgate::State st = gateFor(group.key);
     const double age = celestrakCacheAge(group.cache, utc);
     const double cacheEp = celestrakCacheEpoch(group.cache);
@@ -951,6 +952,10 @@ bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out)
     }
 
     // --- Red: un unico intento por grupo y pase. ---
+    // Cortesia de cuota: la pausa entre grupos se paga AQUI, solo si hay
+    // descarga real a la vista (y solo desde la segunda del pase: lo decide
+    // pauseBeforeNetwork).
+    if (pauseBeforeNetwork) pauseBeforeNetwork();
     // Write-ahead: el intento se persiste ANTES de la descarga como bloqueo
     // PROVISIONAL. decide() ignora lastAttempt si retryFails == 0, asi que un
     // cierre a mitad volveria a pedir y gastaria la ventana de 2 h.
@@ -1119,25 +1124,27 @@ bool TleAdapter::fetch(double utc) {
     std::vector<TleSnapshot> parts;
     std::vector<std::string> notes;
     bool networkTried = false;
-    bool prevNetworkTried = false;
+    // Cortesia de cuota >= 2 s entre descargas de grupos distintos. La puerta
+    // vive DENTRO de acquireGroup (justo antes de httpGet), de modo que solo
+    // separan peticiones de red REALES: un grupo que se sirve de cache no
+    // paga espera, y basta con que haya habido CUALQUIER descarga previa en
+    // el pase (no solo la del grupo inmediatamente anterior).
+    std::function<void()> pause;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        pause = groupPause_;
+    }
+    int netSeen = 0;   // descargas ya hechas en este pase
+    auto pauseGate = [&pause, &netSeen]() {
+        if (pause && netSeen > 0) pause();
+    };
     for (size_t i = 0; i < specs.size(); ++i) {
         const GroupSpec& g = specs[i];
-        // C2b: pausa >= 2 s entre peticiones a distintos grupos — y SOLO si el
-        // grupo anterior realmente llego a la red: un pase donde los grupos se
-        // sirven de cache no duerme ni un milisegundo sin haber pedido nada.
-        if (i > 0 && prevNetworkTried) {
-            std::function<void()> pause;
-            {
-                std::lock_guard<std::mutex> lk(mutex_);
-                pause = groupPause_;
-            }
-            if (pause) pause();
-        }
         Acquired a;
-        if (acquireGroup(g, utc, a)) parts.push_back(std::move(a.snap));
+        if (acquireGroup(g, utc, a, pauseGate)) parts.push_back(std::move(a.snap));
         if (!a.note.empty()) notes.push_back(a.note);
         networkTried = networkTried || a.networkTried;
-        prevNetworkTried = a.networkTried;
+        if (a.networkTried) ++netSeen;
     }
     std::string note;
     for (const std::string& n : notes) {
@@ -1360,7 +1367,9 @@ void TleAdapter::setPathsForTests(const std::filesystem::path& cache,
     satnogsCachePath_ = satnogsCache;
     statePath_ = state;
     gates_.clear();
-    groupKeys_ = {"active"};   // sin seleccion explicita, el catalogo completo
+    // groupKeys_ NO se toca aqui: el defecto del constructor es la seleccion
+    // de producto (C2b-31) y forzar `active` escondia el defecto a la suite
+    // entera (los escenarios C2a ya piden setGroups({"active"}) explicito).
     gateSatnogs_ = fetchgate::State{};
     latest_ = TleSnapshot{};
     latest_.note = "sin datos";

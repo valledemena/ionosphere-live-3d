@@ -26,6 +26,7 @@
 #include "Data/TleAdapter.h"
 #include "tle_csv_fixture.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -219,6 +220,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
 
         const bool ok = a.fetchOnce(T0);
@@ -258,6 +260,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
 
         const bool ok = a.fetchOnce(T0);
@@ -302,6 +305,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         Mock* mp = &m;
         m.onCelestrak = [&, mp]() {
@@ -329,6 +333,10 @@ int main() {
         // Reinicio: adaptador nuevo, mismo directorio. El sidecar se relee.
         TleAdapter b;
         b.setPathsForTests(p.cache, p.satnogs, p.state);
+        // C2a: seleccion explicita (setPathsForTests ya no fuerza nada). Sin
+        // esto el bloqueo leido del sidecar saldria 0.0: los grupos por
+        // defecto ni siquiera estan instalados en este reinicio simulado.
+        b.setGroups({"active"});
         b.loadStateForTests(T0 + 60.0);
         checkNear("tras el reinicio el bloqueo sigue vigente (peticion interrumpida)",
                   b.getBlockedUntilUtc(), T0 + kBlock);
@@ -352,6 +360,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         a.fetchOnce(T0);
 
@@ -396,6 +405,7 @@ int main() {
         blockBoth(T0 + 3600.0);
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         a.loadStateForTests(T0);
         checkBool("a las 0 h se sirve la cache", a.fetchOnce(T0) && a.getSnapshot().valid);
@@ -449,6 +459,7 @@ int main() {
         Mock m;   // CelesTrak responde 200 con el catalogo completo
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         const bool ok = a.fetchOnce(T0 + 60.0);
         checkBool("se pide el catalogo completo en vez de servir el subconjunto",
@@ -645,9 +656,8 @@ int main() {
         Mock m;
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
-        a.setTransport(m.transport());
-        
         a.setGroups({"active"});
+        a.setTransport(m.transport());
         a.fetchOnce(T0 + 60.0);
         checkInt("peticiones active", m.celestrakCalls, 1);
         
@@ -695,6 +705,57 @@ int main() {
         checkInt("dos grupos en cache: cero pausas", pausesB, 0);
         checkInt("dos grupos en cache: cero peticiones nuevas",
                  m.celestrakCalls, 2);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-35: pase con puerta cerrada y active en cache (escala real) ---\n");
+    {
+        Paths p = makePaths("Slow");
+        // La produccion trae ~15 900 objetos; medir el pase rapido con 3 filas
+        // de juguete no mide nada. HIDRATACION: nombres y NORAD 90001+ son
+        // ficticios, con elementos del fixture ISS.
+        static const char* kBigEpochIso = "2026-10-25T13:18:26.839680";   // T0 - 1 h
+        std::string bigCsv = tlefixture::csvHeader();
+        const int kBig = 16000;
+        for (int i = 0; i < kBig; ++i) {
+            bigCsv += tlefixture::csvRow("SAT-" + std::to_string(90000 + i),
+                                         90000 + i, kBigEpochIso);
+        }
+        TleSnapshot big;
+        checkBool("catalogo grande parsea",
+                  TleAdapter::parseCelesTrakCsv(bigCsv, T0 - 3600.0, big));
+        checkInt("el catalogo grande trae 16 000 filas", (int)big.sats.size(), kBig);
+        checkBool("cache grande escrita a disco",
+                  TleAdapter::saveCache(p.cache, big, bigCsv));
+
+        // Puerta CERRADA (bloqueado 2 h) y cache de 1 h (< TTL vivo de 6 h):
+        // decide() no deja pedir red por ninguna via; el pase es solo lectura
+        // de disco + parseo. Es justo el estado estable de produccion.
+        fetchgate::State cel;
+        cel.lastAttemptUtc = T0 - 60.0;
+        cel.lastHttp = 403;
+        cel.blockedUntilUtc = T0 + kBlock;
+        fetchstate::save(p.state, "celestrak.active", cel);
+
+        Mock m;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});
+        a.setTransport(m.transport());
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = a.fetchOnce(T0);
+        const double ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        std::printf("[medicion] pase con puerta cerrada + cache de 1 h: %.1f ms\n", ms);
+        checkBool("fetch ok tras puerta cerrada", ok);
+        checkBool("snapshot valido", a.getSnapshot().valid);
+        checkBool("fuente cache", a.getSnapshot().source == TleSource::Cache);
+        checkInt("filas servidas", (int)a.getSnapshot().sats.size(), kBig);
+        checkInt("la puerta cerrada no pide red", m.celestrakCalls, 0);
+        checkBool("el pase es barato (<2000 ms, tope para CI lenta)", ms < 2000.0);
 
         std::error_code ec;
         fs::remove_all(p.dir, ec);
