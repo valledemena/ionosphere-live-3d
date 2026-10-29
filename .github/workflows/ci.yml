@@ -35,6 +35,7 @@ jobs:
           tar xzf glfw.tar.gz
           cmake -S glfw-3.4 -B glfw-build \
             -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
+            -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON \
             -DCMAKE_INSTALL_PREFIX="$HOME/glfw"
           cmake --build glfw-build --parallel "$(nproc)"
           cmake --install glfw-build
