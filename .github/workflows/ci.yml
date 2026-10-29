@@ -28,7 +28,7 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev xorg-dev libgl1-mesa-dev
+          sudo apt-get install -y libcurl4-openssl-dev libglm-dev xorg-dev libgl1-mesa-dev
       - name: GLFW 3.4 (Ubuntu noble trae 3.3)
         run: |
           curl -sL https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz -o glfw.tar.gz

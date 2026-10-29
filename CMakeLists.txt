@@ -37,6 +37,9 @@ add_library(imgui STATIC
 )
 target_include_directories(imgui PUBLIC libs/imgui libs/imgui/backends)
 target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
+# imgui_impl_glfw.cpp incluye <GLFW/glfw3.h>: el target de glfw trae el
+# include dir. Sin esto, en Linux (glfw fuera de /usr) no compila.
+target_link_libraries(imgui PUBLIC glfw)
 
 # ── Sources ──────────────────────────────────────────────────────────
 set(SOURCES
