@@ -1,4 +1,4 @@
-name: C6 — CI Ubuntu (ctest 43/43)
+name: CI Ubuntu (Release + ctest)
 
 on:
   push:
@@ -11,15 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Encoding guard (sin BOM, sin mojibake)
+        run: |
+          set -e
+          if grep -rIlP '^\xEF\xBB\xBF' --include='*.cpp' --include='*.h' \
+               --include='*.md' --include='*.txt' src tests *.md 2>/dev/null; then
+            echo "::error::BOM UTF-8 encontrado"
+            exit 1
+          fi
+          if LC_ALL=C grep -rIn -e $'\xC3\x83' -e $'\xC3\x82' -e $'\xE2\x80\x9C' \
+               --include='*.cpp' --include='*.h' --include='*.md' src tests *.md 2>/dev/null; then
+            echo "::error::mojibake encontrado (Ã / Â / comillas tipograficas rotas)"
+            exit 1
+          fi
+          echo "encoding OK"
+      - name: Build (Release)
         run: |
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
           cmake --build build --parallel $(nproc)
-      - name: Test (43/43 verde obligatorio)
-        run: |
-          ctest --test-dir build --output-on-failure -V
-          # Si alguno falla, la CI debe fallar inmediatamente.
-      # Verificacion final: contar que todos pasan (43 tests registrados).
-      - name: Assert 43/43
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -V
+      - name: Assert 100% tests passed
         run: |
           ctest --test-dir build --output-on-failure | grep -q '100% tests passed'
