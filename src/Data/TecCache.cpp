@@ -188,4 +188,27 @@ bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, doubl
     return epoch > oldestEpoch;
 }
 
+void cleanupTmpFiles(const std::string& dir) {
+    namespace fs = std::filesystem;
+    try {
+        if (!fs::exists(dir) || !fs.is_directory(dir)) {
+            return;
+        }
+        for (const auto& entry : fs::directory_iterator(dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            std::string filename = entry.path().filename().string();
+            // Match files that start with "tec_" and contain ".tmp"
+            if (filename.rfind("tec_", 0) == 0 && filename.find(".tmp") != std::string::npos) {
+                fs::remove(entry.path());
+            }
+        }
+    } catch (const fs::filesystem_error&) {
+        // Best-effort: ignore filesystem errors.
+    } catch (...) {
+        // Best-effort: swallow any exception.
+    }
+}
+
 }  // namespace teccache

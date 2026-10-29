@@ -1527,6 +1527,8 @@ bool App::init(int width, int height, const char* title) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             if (!self->impl->liveTecArrived.load() || self->impl->shutdownRequested.load())
                 return;
+
+            // Initial backfill
             self->impl->histLoading.store(true);
             GloTecAdapter loader;   // instancia propia: sin estado compartido
             loader.setGridSize(72, 72);
@@ -1562,6 +1564,51 @@ bool App::init(int width, int height, const char* title) {
                        st.cached, st.stored, st.planned, depth);
             }
             self->impl->histLoading.store(false);
+
+            // Periodic backfill and cleanup
+            while (!self->impl->shutdownRequested.load()) {
+                // Sleep for 1 hour (3600 seconds) but check for shutdown every second
+                for (int i = 0; i < 3600 && !self->impl->shutdownRequested.load(); i++)
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (self->impl->shutdownRequested.load())
+                    break;
+
+                // Periodic backfill: fill suspension holes in the window of the last `tecDepthSlots` frames
+                self->impl->histLoading.store(false); // We don't want to show loading for periodic backfill
+                GloTecAdapter loaderPeriodic;   // we can reuse the same loader or create a new one
+                loaderPeriodic.setGridSize(72, 72);
+                loaderPeriodic.setStopFlag(&self->impl->shutdownRequested);
+                std::vector<GloTecFrame> idxPeriodic;
+                if (loaderPeriodic.fetchIndex(idxPeriodic)) {
+                    std::vector<double> cachedEp;
+                    {
+                        std::lock_guard<std::mutex> tlk(self->impl->tecHistMutex);
+                        for (const auto& f : self->impl->tecHist)
+                            cachedEp.push_back(f.timestamp);
+                    }
+                    const double nowPre = (double)std::time(nullptr);
+                    const int depth = glm::clamp(self->impl->tecDepthSlots, 36, 432);
+                    std::vector<glotbf::IndexFrame> pure;
+                    pure.reserve(idxPeriodic.size());
+                    for (const auto& e : idxPeriodic) pure.push_back({e.url, e.timeUtc});
+                    const std::vector<glotbf::IndexFrame> todo =
+                        glotbf::plan(pure, cachedEp, nowPre, depth);
+                    // We don't set histLoading or histDone for periodic backfill to avoid UI noise
+                    GloTecAdapter::BackfillStats st;
+                    loaderPeriodic.backfillFrom(idxPeriodic, cachedEp, nowPre, depth,
+                        [self](const GridData& fr, double ts) {
+                            self->pushHistoryFrame(fr, ts, false);
+                            // No increment of histDone for periodic backfill
+                        }, nullptr, &st);
+                    // Optionally, we can log if we stored any frames
+                    if (st.stored > 0) {
+                        printf("[App] Periodic backfill: stored %d frames\n", st.stored);
+                    }
+                }
+
+                // Cleanup .tmp* files in the cache directory
+                teccache::cleanupTmpFiles("cache");
+            }
         });
     }
 
@@ -6403,6 +6450,29 @@ void App::render() {
                 ImGui::Text("LIVE  (loading history %d/%d, %.1f MB)",
                     impl->histDone.load(), impl->histTotal.load(), mb);
                 if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay (about 1 frame/s).");
+                // Depth selector for history
+                ImGui::Separator();
+                ImGui::Text("History depth");
+                const char* depthLabels[] = { "6h", "24h", "72h" };
+                int depthIndex = 0;
+                if (impl->tecDepthSlots == 36) depthIndex = 0;
+                else if (impl->tecDepthSlots == 144) depthIndex = 1;
+                else if (impl->tecDepthSlots == 432) depthIndex = 2;
+                else depthIndex = 0;
+                if (ImGui::Combo("##depth", &depthIndex, depthLabels, 3)) {
+                    int newSlots = 0;
+                    if (depthIndex == 0) newSlots = 36;
+                    else if (depthIndex == 1) newSlots = 144;
+                    else if (depthIndex == 2) newSlots = 432;
+                    if (newSlots != impl->tecDepthSlots) {
+                        impl->tecDepthSlots = newSlots;
+                        // Note: depth change requires restart to re-run backfill with new depth.
+                        // For immediate effect, the histPreloadThread would need to be restarted.
+                    }
+                }
+                ImGui::SameLine();
+                HelpMarker("Select how many hours of past TEC frames to keep for replay. "
+                           "Increasing depth may require re-downloading missed frames on next start.");
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }
