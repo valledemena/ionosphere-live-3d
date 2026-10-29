@@ -1,8 +1,8 @@
-MSISÆ (NRL-SOF-014-1) SOFTWARE
+MSIS¬Æ (NRL-SOF-014-1) SOFTWARE
 OPEN SOURCE ACADEMIC RESEARCH LICENSE AGREEMENT
 
-1. Agreement. The MSISÆ empirical atmospheric model software (hereinafter
-ìSoftwareî) is property of The Government of the United States of America. This
+1. Agreement. The MSIS¬Æ empirical atmospheric model software (hereinafter
+‚ÄúSoftware‚Äù) is property of The Government of the United States of America. This
 software is being made available under the following terms and conditions. By
 using, modifying, reproducing, or preparing a derivative work of this Software,
 you agree to abide by the terms and conditions herein.
@@ -14,7 +14,7 @@ Any commercial use is prohibited. No other rights or permissions are provided.
 
 3. Basis. The Software was written by employees of the U.S. Naval Research
 Laboratory (NRL) and is property of the United States Government, as represented
-by the Secretary of the Navy. MSISÆ is a registered trademark of the Government
+by the Secretary of the Navy. MSIS¬Æ is a registered trademark of the Government
 of the United States of America, as represented by the Secretary of the Navy.
 Unauthorized use of the trademark is prohibited. 
 
@@ -40,20 +40,20 @@ pertains to such derivatives works, to Code 7630, U.S. Naval Research
 Laboratory. If any modifications to the Software substantially change the model
 output (including, but not limited to, alterations of the model formulation or
 model parameter values), then the modified Software shall not be identified
-ìMSISî without first obtaining the written consent of Counsel, Office of Naval
+‚ÄúMSIS‚Äù without first obtaining the written consent of Counsel, Office of Naval
 Research, Department of the Navy. In such cases, the MSIS acronym shall
 nonetheless still appear in the individual files in order to document the
 provenance of the modified Software.
 
 c. Notices.  Each copy of the Software, any modified Software, or derivative
 work shall include a file containing this Agreement. Any software package that
-incorporates the MSISÆ Software or derivative work shall include the following
-statement: "This software incorporates the MSISÆ empirical atmospheric model
+incorporates the MSIS¬Æ Software or derivative work shall include the following
+statement: "This software incorporates the MSIS¬Æ empirical atmospheric model
 software designed and provided by NRL. Use is governed by the Open Source
 Academic Research License Agreement contained in the file
 nrlmsis2.1_license.txt."
 
-5. Disclaimer of Warranty and Liability: As the owner of the MSISÆ software, the
+5. Disclaimer of Warranty and Liability: As the owner of the MSIS¬Æ software, the
 Government of the United States of America: (1) Disclaims any warranties,
 express, or implied, including but not limited to any implied warranties of
 merchantability, fitness for a particular purpose, title or non-infringement,

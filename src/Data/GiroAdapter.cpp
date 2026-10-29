@@ -137,7 +137,7 @@ bool GiroAdapter::fetchCatalog() {
         s.name = clean;
         s.latDeg = (float)atof(m[3].str().c_str());
         float lon = (float)atof(m[4].str().c_str());
-        if (lon > 180.0f) lon -= 360.0f;   // cat�logo en 0..360 E -> -180..180
+        if (lon > 180.0f) lon -= 360.0f;   // catalogo en 0..360 E -> -180..180
         s.lonDeg = lon;
         s.valid = false;
         parsed.push_back(s);

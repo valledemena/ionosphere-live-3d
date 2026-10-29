@@ -4,3 +4,4 @@
 *.jpeg binary
 *.ico binary
 *.bin binary
+*.parm binary
