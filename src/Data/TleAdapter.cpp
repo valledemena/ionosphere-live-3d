@@ -12,6 +12,7 @@
 #include <iterator>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "Data/FetchState.h"
 #include "Utils/Paths.h"
@@ -600,6 +601,84 @@ bool TleAdapter::parseSatNogsJson(const std::string& json, double nowUtc, TleSna
     setNote(out, dropped);
     out.valid = !out.sats.empty();
     return out.valid;
+}
+
+TleSnapshot TleAdapter::mergeSnapshots(const std::vector<TleSnapshot>& parts) {
+    TleSnapshot out;
+    // indice NORAD -> posicion en out.sats. Con ~20k filas por grupo, buscar
+    // linealmente por cada fila seria cuadratico.
+    std::unordered_map<int, std::size_t> byNorad;
+    std::size_t groups = 0;
+    std::size_t dups = 0;
+    std::size_t dropped = 0;
+    double oldest = 0.0;
+    bool haveOldest = false;
+    TleSource firstSource = TleSource::None;
+    bool sameSource = true;
+
+    for (const TleSnapshot& p : parts) {
+        if (!p.valid || p.sats.empty()) continue;   // un grupo caido no aporta nada
+        if (groups == 0) firstSource = p.source;
+        else if (p.source != firstSource) sameSource = false;
+        ++groups;
+        if (!haveOldest || p.timeUtc < oldest) {
+            oldest = p.timeUtc;
+            haveOldest = true;
+        }
+        for (const TleSat& s : p.sats) {
+            if (s.noradId > 0) {
+                const auto it = byNorad.find(s.noradId);
+                if (it != byNorad.end()) {
+                    // Gana el EPOCH mas nuevo. El orden de los grupos no
+                    // decide nada: el mismo objeto puede venir de un grupo
+                    // actualizado antes que otro.
+                    TleSat& prev = out.sats[it->second];
+                    if (s.el.epochUtc > prev.el.epochUtc) prev = s;
+                    ++dups;
+                    continue;
+                }
+                if (out.sats.size() >= kMaxSats) {
+                    ++dropped;
+                    continue;
+                }
+                byNorad.emplace(s.noradId, out.sats.size());
+                out.sats.push_back(s);
+            } else {
+                // Sin NORAD no hay clave de dedup: se conserva tal cual.
+                if (out.sats.size() >= kMaxSats) {
+                    ++dropped;
+                    continue;
+                }
+                out.sats.push_back(s);
+            }
+        }
+    }
+
+    if (groups == 0) {
+        out.timeUtc = 0.0;
+        out.valid = false;
+        out.source = TleSource::None;
+        out.note = "sin datos";
+        return out;
+    }
+
+    out.timeUtc = oldest;
+    out.valid = !out.sats.empty();
+    // Grupos con origenes distintos: una parte no es viva, asi que el
+    // conjunto se declara como cache en vez de pasar por catalogo fresco.
+    out.source = sameSource ? firstSource : TleSource::Cache;
+
+    char buf[192];
+    if (dups == 0 && dropped == 0) {
+        std::snprintf(buf, sizeof(buf), "%d sats (%d grupos%s)", (int)out.sats.size(),
+                      (int)groups, sameSource ? "" : ", mixto");
+    } else {
+        std::snprintf(buf, sizeof(buf), "%d sats (%d grupos, %d duplicados%s%s)",
+                      (int)out.sats.size(), (int)groups, (int)dups,
+                      dropped > 0 ? ", techo alcanzado" : "", sameSource ? "" : ", mixto");
+    }
+    out.note = buf;
+    return out;
 }
 
 bool TleAdapter::saveCache(const std::filesystem::path& path, const TleSnapshot& snap,

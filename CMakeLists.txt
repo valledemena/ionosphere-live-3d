@@ -437,6 +437,22 @@ if(NOT WIN32)
     target_link_libraries(test_tle_csv PRIVATE Threads::Threads)
 endif()
 add_test(NAME tle_csv COMMAND test_tle_csv)
+# C2b paso 2: fusion de snapshots de varios grupos (dedup por NORAD, gana el
+# EPOCH mas nuevo). Puro: sin red ni disco.
+add_executable(test_tle_merge tests/test_tle_merge.cpp)
+target_include_directories(test_tle_merge PRIVATE src)
+target_sources(test_tle_merge PRIVATE
+    src/Data/TleAdapter.cpp
+    src/Data/OrbitProp.cpp
+    src/Data/FetchGate.cpp
+    src/Data/FetchState.cpp
+    src/Utils/Paths.cpp
+)
+target_link_libraries(test_tle_merge PRIVATE CURL::libcurl)
+if(NOT WIN32)
+    target_link_libraries(test_tle_merge PRIVATE Threads::Threads)
+endif()
+add_test(NAME tle_merge COMMAND test_tle_merge)
 # Lote 5D: espiral de Parker — llama a PRODUCCION (ParkerMath), sin red.
 add_executable(test_parker tests/test_parker.cpp)
 target_include_directories(test_parker PRIVATE src)
