@@ -167,6 +167,19 @@ public:
     static bool parseCelesTrakCsv(const std::string& text, double nowUtc, TleSnapshot& out);
     static bool parseSatNogsJson(const std::string& json, double nowUtc, TleSnapshot& out);
 
+    // Puro: fusiona los snapshots de varios grupos de CelesTrak en uno solo.
+    //  - Dedup por NORAD: gana el EPOCH mas nuevo, sin importar el orden de
+    //    los snapshots ni el nombre del grupo. Si empatan, se queda el primero.
+    //  - Las filas sin NORAD (> 0) no se pueden deduplicar: se anaden tal cual.
+    //  - timeUtc es el del grupo MAS VIEJO: la edad del catalogo fusionado no
+    //    puede aparentar ser mejor que la de su peor componente.
+    //  - source es el origen comun; si los grupos no coinciden, se declara
+    //    Cache (hay una parte que no es viva). El detalle va en note.
+    //  - valid solo si queda >= 1 satelite. Sin snapshots utiles, note dice
+    //    "sin datos" y timeUtc = 0.
+    // Orden de salida: por primera aparicion. Techo kMaxSats.
+    static TleSnapshot mergeSnapshots(const std::vector<TleSnapshot>& parts);
+
     // Cache de disco (tambien puro: solo ficheros). loadCache valida la edad
     // contra maxAgeSec (por defecto el TTL vivo de 6 h). `path` es fs::path
     // para que un perfil con caracteres no ASCII no rompa el tmp+rename.
