@@ -850,7 +850,7 @@ void TleAdapter::persistState(const std::string& key, const fetchgate::State& st
 const std::vector<std::string>& TleAdapter::knownGroups() {
     // Claves cuyo GROUP= acepta CelesTrak y que este proyecto dibuja. `active`
     // es el catalogo completo; el resto son subconjuntos con solape parcial.
-    static const std::vector<std::string> kGroups = {"active", "stations", "weather",
+    static const std::vector<std::string> kGroups = {"active", "amateur", "stations", "weather",
                                                      "gps-ops", "science"};
     return kGroups;
 }
@@ -868,6 +868,14 @@ void TleAdapter::setGroups(const std::vector<std::string>& keys) {
             if (c == k) dup = true;
         }
         if (!dup) clean.push_back(k);
+    }
+    // Decision de producto: si se pide `active`, se descartan los demas
+    // porque es el superconjunto.
+    bool hasActive = false;
+    for (const std::string& k : clean) if (k == "active") hasActive = true;
+    if (hasActive) {
+        clean.clear();
+        clean.push_back("active");
     }
     // Una clave inventada en settings.cfg no puede dejar el catalogo apagado.
     if (clean.empty()) clean.push_back("active");
@@ -1111,7 +1119,12 @@ bool TleAdapter::fetch(double utc) {
     std::vector<TleSnapshot> parts;
     std::vector<std::string> notes;
     bool networkTried = false;
-    for (const GroupSpec& g : specs) {
+    for (size_t i = 0; i < specs.size(); ++i) {
+        const GroupSpec& g = specs[i];
+        // C2b: pausa >= 2 s entre peticiones a distintos grupos.
+        if (i > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
         Acquired a;
         if (acquireGroup(g, utc, a)) parts.push_back(std::move(a.snap));
         if (!a.note.empty()) notes.push_back(a.note);
@@ -1146,7 +1159,7 @@ bool TleAdapter::fetch(double utc) {
                 }
             }
         }
-        // UN unico fallback, y solo si la fusion no dejo nada: un grupo caido
+        // UN unico fallback, y solo si la fusion no dejo nada: un grupo caidom
         // no manda a SatNOGS si los demas trajeron datos reales.
         return serveSatnogs(utc, note.empty() ? "celestrak: sin datos" : note);
     }
@@ -1158,8 +1171,8 @@ bool TleAdapter::fetch(double utc) {
         if (changed) ++generation_;
         latest_ = merged;
         snapshotEpoch_ = merged.timeUtc;
-        // Un catalogo vivo y completo no deja aviso; cache o un grupo caido si
-        // (el dato no es "live" y el panel debe poder decirlo).
+        // Un catalogo vivo y completo no deja aviso; cache o un grupo caidom
+        // no manda a SatNOGS si los demas trajeron datos reales.
         if (merged.source == TleSource::Celestrak) {
             // Catalogo vivo y completo: solo deja aviso si algun grupo fallo.
             if (!note.empty()) {
@@ -1180,8 +1193,7 @@ bool TleAdapter::fetch(double utc) {
 
     printf("[Tle] %s (%s)\n", merged.note.c_str(), sourceLabel(merged.source));
     return true;
-}
-bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
+}bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
     TleSnapshot snap;
     std::string err = why;
     if (!fetchSatnogs(utc, snap, err)) {
