@@ -22,17 +22,11 @@ namespace {
 
 const char* const kCelestrakUrl =
     "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv";
-const char* const kCelestrakUrlAmateur =
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=csv";
-const char* const kCelestrakUrlStations =
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=csv";
 const char* const kSatnogsUrl = "https://db.satnogs.org/api/tle/?format=json";
 const char* const kUserAgent = "IonosphereLive3D/1.0";
 
-// Claves del sidecar: una puerta por endpoint (C2b anadira amateur/stations).
+// Claves del sidecar: una puerta por endpoint.
 const char* const kKeyActive = "celestrak.active";
-const char* const kKeyAmateur = "celestrak.amateur";
-const char* const kKeyStations = "celestrak.stations";
 const char* const kKeySatnogs = "celestrak.satnogs";
 
 constexpr double kFutureSlackSec = 10.0 * 60.0;
@@ -765,13 +759,14 @@ void TleAdapter::persistState(const std::string& key, const fetchgate::State& st
     fetchstate::save(statePath_, key, st);   // best-effort
 }
 
-bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why) {
+bool TleAdapter::serveCache(const GroupSpec& group, double utc, double maxAgeSec,
+                            const std::string& why) {
     // Camino rapido: si el snapshot instalado YA es esta misma cache, no hay
     // que releer ni parsear 16k filas. Se compara solo el epoch (con
     // tolerancia de 0.5 s: la cabecera guarda %.1f) y no la fuente: el
     // snapshot no se muta, la etiqueta sigue diciendo de donde vino el dato y
     // la edad se calcula en la UI.
-    const double onDiskEpoch = celestrakCacheEpoch(cachePath_);
+    const double onDiskEpoch = celestrakCacheEpoch(group.cache);
     {
         std::lock_guard<std::mutex> lk(mutex_);
         const bool sameEpoch = onDiskEpoch > 0.0 && snapshotEpoch_ > 0.0 &&
@@ -797,7 +792,7 @@ bool TleAdapter::serveCache(double utc, double maxAgeSec, const std::string& why
         }
     }
     TleSnapshot cached;
-    if (!loadCelestrakCache(cachePath_, utc, cached, maxAgeSec)) {
+    if (!loadCelestrakCache(group.cache, utc, cached, maxAgeSec)) {
         std::lock_guard<std::mutex> lk(mutex_);
         error_ = why + "; sin cache utilizable";
         status_.clear();
@@ -901,15 +896,21 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
     return ok;
 }
 
-bool TleAdapter::fetch(double utc) {
+TleAdapter::GroupSpec TleAdapter::activeGroup() const {
+    return GroupSpec{kKeyActive, kCelestrakUrl, cachePath_};
+}
+
+bool TleAdapter::fetch(double utc) { return fetchGroup(activeGroup(), utc); }
+
+bool TleAdapter::fetchGroup(const GroupSpec& group, double utc) {
     fetchgate::State st;
     {
         std::lock_guard<std::mutex> lk(mutex_);
         st = gate_;
     }
 
-    const double age = celestrakCacheAge(cachePath_, utc);
-    const double cacheEp = celestrakCacheEpoch(cachePath_);
+    const double age = celestrakCacheAge(group.cache, utc);
+    const double cacheEp = celestrakCacheEpoch(group.cache);
     const double jitter = jitterFor(cacheEp);
     const fetchgate::Decision d = fetchgate::decide(utc, st, age, jitter);
 
@@ -917,17 +918,17 @@ bool TleAdapter::fetch(double utc) {
     // CelesTrak no sirve, se prueba aunque CelesTrak este bloqueado.
     if (d.action == fetchgate::Action::Blocked) {
         const std::string why = std::string("celestrak: ") + d.reason;
-        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
         return serveSatnogs(utc, why);
     }
     if (d.action == fetchgate::Action::CacheOnly) {
         const std::string why = std::string("red: ") + d.reason;
-        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
         return serveSatnogs(utc, why);
     }
     if (d.action == fetchgate::Action::FetchJittered && d.fetchAtUtc > utc) {
         const std::string why = std::string("red: ") + d.reason;
-        if (serveCache(utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
+        if (serveCache(group, utc, fetchgate::kMaxFallbackAgeSec, why)) return true;
         return serveSatnogs(utc, why);
     }
 
@@ -944,14 +945,14 @@ bool TleAdapter::fetch(double utc) {
         std::lock_guard<std::mutex> lk(mutex_);
         gate_ = st;
     }
-    persistState(kKeyActive, st);
+    persistState(group.key, st);
 
     std::string err;
     TleSnapshot snap;
     bool ok = false;
 
     std::string body;
-    const HttpResult res = httpGet(kCelestrakUrl, 120L, body);
+    const HttpResult res = httpGet(group.url.c_str(), 120L, body);
     if (res.ok) {
         ok = parseCelesTrakCsv(body, utc, snap);
         if (!ok) err = "celestrak: respuesta ilegible";
@@ -993,7 +994,7 @@ bool TleAdapter::fetch(double utc) {
         // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
         // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
         TleSnapshot cached;
-        if (loadCelestrakCache(cachePath_, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
+        if (loadCelestrakCache(group.cache, utc, cached, fetchgate::kMaxFallbackAgeSec)) {
             snap = cached;
             ok = true;
             err += "; servido de cache";
@@ -1005,7 +1006,7 @@ bool TleAdapter::fetch(double utc) {
         std::lock_guard<std::mutex> lk(mutex_);
         gate_ = st;
     }
-    persistState(kKeyActive, st);
+    persistState(group.key, st);
 
     if (!ok) {
         err += "; cache: sin fichero utilizable";
@@ -1018,7 +1019,7 @@ bool TleAdapter::fetch(double utc) {
     // Se guarda el CUERPO CRUDO: es lo que permite releerlo sin reconstruir un
     // TLE de 5 columnas (imposible con NORAD de 6 digitos).
     if (snap.source == TleSource::Celestrak) {
-        saveCache(cachePath_, snap, body);   // best-effort: fallar aqui no es fatal
+        saveCache(group.cache, snap, body);   // best-effort: fallar aqui no es fatal
     }
 
     {

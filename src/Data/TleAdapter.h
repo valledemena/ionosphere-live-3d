@@ -195,10 +195,22 @@ public:
     static const char* sourceLabel(TleSource s);
 
 private:
+    // Un grupo de CelesTrak con su puerta, URL y fichero de cache propios.
+    // C2b paso 1: fetchGroup() ya esta parametrizado; hoy solo se instancia
+    // `active` (mismo comportamiento que antes del refactor).
+    struct GroupSpec {
+        std::string key;                    // clave del sidecar
+        std::string url;                    // gp.php?GROUP=...
+        std::filesystem::path cache;        // fichero de cache del grupo
+    };
+    GroupSpec activeGroup() const;
+
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
     static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     HttpResult httpGet(const char* url, long timeoutSec, std::string& body);
     bool fetch(double utc);
+    // Mismo camino que fetch() pero con puerta/URL/cache inyectables.
+    bool fetchGroup(const GroupSpec& group, double utc);
     // SatNOGS tiene su propia puerta: un bloqueo de CelesTrak no debe
     // silenciar otro proveedor (revision C2a).
     bool fetchSatnogs(double utc, TleSnapshot& out, std::string& err);
@@ -207,7 +219,8 @@ private:
     bool serveSatnogs(double utc, const std::string& why);
 
     // Sirve cache (si la hay) y deja el motivo en status_/error_.
-    bool serveCache(double utc, double maxAgeSec, const std::string& why);
+    bool serveCache(const GroupSpec& group, double utc, double maxAgeSec,
+                    const std::string& why);
     // Persiste el sidecar de una puerta (best-effort).
     void persistState(const std::string& key, const fetchgate::State& st);
     // Edad de una cache en segundos, o -1 si no hay.
