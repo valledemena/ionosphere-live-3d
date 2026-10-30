@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "Ionosphere/GridLayer.h"  // TECGrid
+#include "Utils/Paths.h"           // cache configurable (Paths.h)
 
 // GloTecAdapter: obtiene el TEC ionosférico real desde NOAA SWPC GloTEC.
 //
@@ -84,7 +85,7 @@ private:
     long lastHttp_ = 0;
     int lastCurl_ = 0;
     double lastRetryAfter_ = 0.0;
-    std::string cacheDir_ = "cache";
+    std::string cacheDir_ = paths::cacheRootString();  // cache configurable (Paths.h)
     const std::atomic<bool>* stop_ = nullptr;
     std::atomic<long long>* netBytesSink_ = nullptr;   // C1b/medido: bytes reales
 };

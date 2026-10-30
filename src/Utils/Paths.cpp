@@ -55,6 +55,17 @@ fs::path resolveBase() {
 
 bool userDataDirFallback() { return g_fallback; }
 
+// Raiz del cache relativo: por defecto el "cache" del CWD de toda la vida.
+// App la completa desde settings.cfg (cacheDir <ruta>) antes de crear
+// adaptadores; ver Paths.h.
+fs::path g_cacheRoot = "cache";
+
+void setCacheRoot(const fs::path& root) { g_cacheRoot = root; }
+
+fs::path cacheRoot() { return g_cacheRoot; }
+
+std::string cacheRootString() { return g_cacheRoot.string(); }
+
 fs::path userDataDir() {
     static const fs::path cached = []() -> fs::path {
         const fs::path base = resolveBase();

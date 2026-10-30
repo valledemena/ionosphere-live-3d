@@ -11,6 +11,8 @@
 #include <thread>
 #include <utility>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 // Endpoints DONKI FLR, en orden de intento (ver FlareAdapter.h).
 #define FLR_URL_1 \
     "https://ccmc.gsfc.nasa.gov/DONKI-API/get/FLR?startDate=%s&endDate=%s"
@@ -25,9 +27,12 @@ namespace {
 constexpr double kWindowSec = 72.0 * 3600.0;      // ventana pedida al endpoint
 constexpr double kCacheMaxAgeSec = 24.0 * 3600.0; // cache servible como mucho 24 h
 constexpr size_t kEventCap = 50;                  // techo de eventos publicados
-const char* const kCacheDir = "cache";
-const char* const kCacheFile = "cache/flares.json";
-const char* const kCacheTmp = "cache/flares.json.tmp";
+
+// Cache configurable (Paths.h): se resuelve EN EL PUNTO DE USO, no como
+// constante de arranque, porque init() restaura ficheros y puede correr
+// despues de que la app aplique el "cacheDir" de settings.cfg.
+std::string flareCacheFile() { return paths::cacheRootString() + "/flares.json"; }
+std::string flareCacheTmp() { return paths::cacheRootString() + "/flares.json.tmp"; }
 
 // ---- Utilidades de fecha (misma aritmetica que CmeAdapter/EbroAdapter) ----
 
@@ -346,7 +351,7 @@ size_t FlareAdapter::writeCallback(void* contents, size_t size, size_t nmemb, st
 }
 
 bool FlareAdapter::readCache(std::string& body, double& epoch) {
-    FILE* fp = std::fopen(kCacheFile, "rb");
+    FILE* fp = std::fopen(flareCacheFile().c_str(), "rb");
     if (!fp) return false;
     std::string all;
     char buf[4096];
@@ -371,10 +376,10 @@ bool FlareAdapter::readCache(std::string& body, double& epoch) {
 void FlareAdapter::writeCache(double epoch, const std::string& body) {
     if (body.empty() || !(epoch > 0.0)) return;
     std::error_code ec;
-    std::filesystem::create_directories(kCacheDir, ec);
+    std::filesystem::create_directories(paths::cacheRoot(), ec);
     if (ec) return;
     // Temporal + rename: nunca dejar un cache a medias si se corta.
-    FILE* fp = std::fopen(kCacheTmp, "wb");
+    FILE* fp = std::fopen(flareCacheTmp().c_str(), "wb");
     if (!fp) return;
     char head[48];
     int hn = std::snprintf(head, sizeof(head), "FLR1 %.0f\n", epoch);
@@ -382,11 +387,11 @@ void FlareAdapter::writeCache(double epoch, const std::string& body) {
     ok = ok && std::fwrite(body.data(), 1, body.size(), fp) == body.size();
     if (std::fclose(fp) != 0) ok = false;
     if (!ok) {
-        std::filesystem::remove(kCacheTmp, ec);
+        std::filesystem::remove(flareCacheTmp(), ec);
         return;
     }
-    std::filesystem::rename(kCacheTmp, kCacheFile, ec);
-    if (ec) std::filesystem::remove(kCacheTmp, ec);
+    std::filesystem::rename(flareCacheTmp(), flareCacheFile(), ec);
+    if (ec) std::filesystem::remove(flareCacheTmp(), ec);
 }
 
 bool FlareAdapter::fetch(double utc) {

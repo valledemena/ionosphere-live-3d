@@ -48,6 +48,8 @@
 #include <string>
 #include <vector>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 // Producto. El orden fija el indice interno (0..1).
 enum class SolProduct { LascoC2 = 0, DrapGlobal = 1 };
 
@@ -125,5 +127,5 @@ private:
     double lastFetchUtc_[2] = {0.0, 0.0};
     std::string err_[2];   // motivo por producto ("" = ultimo intento bien)
     std::atomic<bool> fetching_{false};
-    std::string cacheDir_ = "cache";
+    std::string cacheDir_ = paths::cacheRootString();  // cache configurable (Paths.h)
 };

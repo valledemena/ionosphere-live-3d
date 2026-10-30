@@ -19,10 +19,16 @@
 #include <iterator>
 #include <thread>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 namespace {
 
 const char* const kHorizonsUrl = "https://ssd.jpl.nasa.gov/api/horizons.api";
-const char* const kCachePath = "cache/voyager.txt";
+
+// Cache configurable (Paths.h): se resuelve EN EL PUNTO DE USO, no como
+// constante de arranque, porque init() restaura ficheros y puede correr
+// despues de que la app aplique el "cacheDir" de settings.cfg.
+std::string voyagerCachePath() { return paths::cacheRootString() + "/voyager.txt"; }
 
 // Caducidad del cache servido. El fetch en vivo NO usa este TTL: el kick
 // manual del panel debe refrescar de verdad (dos POST pequenos a JPL).
@@ -208,7 +214,7 @@ void VoyagerAdapter::init() {
         // Cache joven: el panel tiene algo que ensenar antes del primer fetch,
         // declarado como "cached" (nunca como live).
         const double now = (double)std::time(nullptr);
-        have = loadCache(kCachePath, now, cached);
+        have = loadCache(voyagerCachePath(), now, cached);
     }
     {
         std::lock_guard<std::mutex> lk(mutex_);
@@ -528,7 +534,7 @@ bool VoyagerAdapter::fetch(double utc) {
     if (!ok1 && !ok2) {
         const std::string both = "Voyager 1: " + errV1 + "; Voyager 2: " + errV2;
         VoyagerSnapshot cached;
-        const bool haveCache = loadCache(kCachePath, base, cached);
+        const bool haveCache = loadCache(voyagerCachePath(), base, cached);
         {
             std::lock_guard<std::mutex> lk(mutex_);
             if (!latest_.valid && haveCache) {
@@ -560,7 +566,7 @@ bool VoyagerAdapter::fetch(double utc) {
         snap.note = "live: Voyager 2 only, no Voyager 1 range";
     }
 
-    saveCache(kCachePath, snap, rawV1, rawV2);  // best-effort: fallar no es fatal
+    saveCache(voyagerCachePath(), snap, rawV1, rawV2);  // best-effort: fallar no es fatal
 
     {
         std::lock_guard<std::mutex> lk(mutex_);

@@ -27,6 +27,7 @@
 // P1b hara flip aditivo (rellena + valid=true, sin tocar tipos ni wiring).
 // =============================================================================
 #include "Ionosphere/GridLayer.h"  // GridData (estructura final del bundle)
+#include "Utils/Paths.h"           // cache configurable (Paths.h)
 
 #include <map>
 #include <string>
@@ -115,7 +116,7 @@ private:
                                 std::string* userp);
     bool fetchURL(const std::string& url, std::string& response);
 
-    std::string dir_ = "cache";
+    std::string dir_ = paths::cacheRootString();   // cache configurable (Paths.h)
     double freshestTov_ = 0.0;
     std::string error_;
 };

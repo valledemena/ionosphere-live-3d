@@ -52,6 +52,8 @@
 #include "Data/SdoImageAdapter.h"  // M11: disco solar
 #include "UI/SunPanel.h"  // M11: ventana Sun
 #include "Data/Kc2gAdapter.h"   // M4R-A: failover kc2g (FASE A sellada)
+#include "Utils/Paths.h"        // cache configurable: raiz de la familia "cache"
+#include "Utils/AppCfg.h"       // cacheDir <ruta> (parser extraido, testeable)
 #include "Data/SolarIndicesAdapter.h"
 #include "Data/SolarWindAdapter.h"
 #include "Data/RadioPropagationAdapter.h"
@@ -953,14 +955,14 @@ bool App::sampleIrtamBracketWorker(int pairKind, double epoch,
     // 1. Indice (param, tovEpoch, path): memo por mtime o full scan.
     std::error_code ec;
     const auto curMtime =
-        std::filesystem::last_write_time("cache", ec);
+        std::filesystem::last_write_time(paths::cacheRoot(), ec);
     bool useMemo = false;
     if (!ec && memo.valid && curMtime == memo.dirMtime &&
         !memo.entries.empty()) {
         useMemo = true;
     }
     if (!useMemo) {
-        const irtamccache::ScanResult sc = irtamccache::loadCached("cache");
+        const irtamccache::ScanResult sc = irtamccache::loadCached(paths::cacheRootString());
         if (sc.buckets.empty()) return false;
         memo.entries.clear();
         for (const auto& bk : sc.buckets) {
@@ -968,7 +970,7 @@ bool App::sampleIrtamBracketWorker(int pairKind, double epoch,
             memo.entries.push_back({bk.param, bk.tovEpoch, bk.path});
         }
         std::error_code ec2;
-        memo.dirMtime = std::filesystem::last_write_time("cache", ec2);
+        memo.dirMtime = std::filesystem::last_write_time(paths::cacheRoot(), ec2);
         memo.valid = !ec2 && !memo.entries.empty();
         if (!memo.valid) return false;
     }
@@ -1533,7 +1535,7 @@ bool App::init(int width, int height, const char* title) {
     impl->tecLayer.setAltitude(300.0f / 6371.0f);  // arrancar a 300 km (radio ~1.047), no pegado a 1.02
     applyRelief();
     // Cleanup orphan .tmp* files before starting threads.
-    teccache::cleanupTmpFiles("cache", 0.0);
+    teccache::cleanupTmpFiles(paths::cacheRootString(), 0.0);
     // Precarga del historico GloTEC (indice recuperado): ventana 72 h en
     // background para que el replay tenga pasado real al instante.
     {
@@ -1666,7 +1668,7 @@ bool App::init(int width, int height, const char* title) {
                 }
 
                 // Cleanup .tmp* files in the cache directory
-                teccache::cleanupTmpFiles("cache", 300.0);
+                teccache::cleanupTmpFiles(paths::cacheRootString(), 300.0);
             }
         });
     }
@@ -1712,7 +1714,7 @@ bool App::init(int width, int height, const char* title) {
         impl->irtamBackfillThread = std::thread([self]() {
             irtamfetch::IrtamCoeffAdapter irt;  // instancia propia del hilo
             irt.init();  // solo curl_global_init + printf (sin red)
-            irt.setCacheDir("cache");
+            irt.setCacheDir(paths::cacheRootString());
             auto publish = [&]() {
                 auto b = std::make_shared<irtamfetch::IrtamBundle>();
                 b->dataEpoch = irt.freshestTov();
@@ -1721,7 +1723,7 @@ bool App::init(int width, int height, const char* title) {
                 // P1b: intento de flip aditivo (mismo TOV en ambos params).
                 do {
                     const irtamccache::ScanResult sc =
-                        irtamccache::loadCached("cache");
+                        irtamccache::loadCached(paths::cacheRootString());
                     if (sc.buckets.empty()) break;
                     // TOV comun mas fresca: interseccion foF2 x hmF2.
                     double tovF = 0.0, tovH = 0.0;
@@ -1782,10 +1784,10 @@ bool App::init(int width, int height, const char* title) {
                 // El bloque F/H de arriba ni se toca.
                 do {
                     const double tovBB = irtamccache::commonTovEpoch(
-                        irtamccache::loadCached("cache").buckets, "b0", "b1");
+                        irtamccache::loadCached(paths::cacheRootString()).buckets, "b0", "b1");
                     if (tovBB <= 0.0) break;
                     const irtamccache::ScanResult scB =
-                        irtamccache::loadCached("cache");
+                        irtamccache::loadCached(paths::cacheRootString());
                     const irtamccache::Bucket* b0 = nullptr;
                     const irtamccache::Bucket* b1 = nullptr;
                     for (const auto& bk : scB.buckets) {
@@ -1941,6 +1943,11 @@ bool App::init(int width, int height, const char* title) {
     impl->vanAllen.setVisible(false);
     impl->westFord.init();
     impl->westFord.setVisible(false);
+
+    // Raiz del cache configurable (Paths.h): settings.cfg "cacheDir <ruta>".
+    // ANTES de "Lote 3" y del hilo de red de abajo: los adaptadores restauran
+    // cache en init() y el fetchThread escribe frames desde su primer ciclo.
+    applyCacheDirectory();
 
     // Lote 3: adaptadores de red + capas (ocultas por defecto).
     impl->wsprAdapter.init();
@@ -3176,6 +3183,9 @@ void App::saveSettings() {
     fprintf(f, "camRY %g\n", (double)impl->camera.rotateY);
     fprintf(f, "camDist %g\n", (double)impl->camera.distance);
     fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
+    // Cache configurable: persistir la raiz actual (siempre, con su defecto
+    // "cache" o la ruta configurada; con espacios intactos).
+    fprintf(f, "cacheDir %s\n", paths::cacheRootString().c_str());
     fprintf(f, "hfTraceVisible %d\n", impl->hfTraceVisible ? 1 : 0);   // M8 (plan 11.4)
     fprintf(f, "hfFreqMHz %g\n", (double)impl->hfFreqMHz);
     fprintf(f, "sunVisible %d\n", impl->sunVisible ? 1 : 0);   // M11
@@ -3210,8 +3220,25 @@ void App::saveSettings() {
     fclose(f);
 }
 
+void App::applyCacheDirectory() {
+    // Primera lectura de settings.cfg del arranque: SOLO la clave cacheDir
+    // (el resto lo aplica loadSettings mas tarde, con la GUI ya disponible).
+    FILE* f = fopen("settings.cfg", "r");
+    if (!f) return;
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        std::string dir;
+        if (appcfg::parseCacheDirLine(line, dir)) {
+            paths::setCacheRoot(dir);
+            break;
+        }
+    }
+    fclose(f);
+}
+
 void App::loadSettings() {
     FILE* f = fopen("settings.cfg", "r");
+    std::string dirBuf;   // raiz del cache (Paths.h): ruta con espacios posibles
     if (!f) return;
     char tag[32] = {0};
     if (!fgets(tag, sizeof(tag), f)) { fclose(f); return; }
@@ -3240,6 +3267,12 @@ void App::loadSettings() {
         if (sscanf(line, "satellites_group %63s", gbuf) == 1) {
             impl->satGroups = gbuf;
             impl->satAdapter.setGroups(splitGroups(impl->satGroups));
+            continue;
+        }
+        // Cache configurable: raiz de la familia "cache" (Paths.h). Idempotente
+        // con applyCacheDirectory (el reload de la GUI re-aplica la misma ruta).
+        if (appcfg::parseCacheDirLine(line, dirBuf)) {
+            paths::setCacheRoot(dirBuf);
             continue;
         }
         if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
@@ -3917,7 +3950,7 @@ void App::rebuildSlice(bool force) {
 // replay pero no current. Badge "cache" hasta que llegue live.
 void App::restoreTecCache() {
     if (!impl->tecCacheEnabled) return;
-    teccache::ScanResult scan = teccache::loadCached("cache");
+    teccache::ScanResult scan = teccache::loadCached(paths::cacheRootString());
     if (scan.frames.empty()) return;
     {
         std::lock_guard<std::mutex> lk(impl->tecHistMutex);
@@ -3965,7 +3998,7 @@ void App::restoreTecCache() {
 // Sin cache: freeze honesto FASE A (primera sesion de fallback sin historia).
 void App::restoreKc2gCache() {
     const double now = (double)std::time(nullptr);
-    const int n = impl->kc2g.restoreFromCache("cache", now);
+    const int n = impl->kc2g.restoreFromCache(paths::cacheRootString(), now);
     if (n <= 0) return;
     int nSt = 0;
     double t0 = 0.0, t1 = 0.0;
@@ -4006,7 +4039,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
         f.w = grid.width;
         f.h = grid.height;
         f.v = grid.values;
-        teccache::saveFrame("cache", f);
+        teccache::saveFrame(paths::cacheRootString(), f);
     }
     size_t pos = 0;
     while (pos < impl->tecHist.size() && impl->tecHist[pos].timestamp < ts) pos++;
@@ -4014,7 +4047,7 @@ void App::pushHistoryFrame(const GridData& grid, double ts, bool simulated) {   
     while (impl->tecHist.size() > (std::size_t)teccache::kCapFrames) {
         const double dropTs = impl->tecHist.begin()->timestamp;
         impl->tecHist.erase(impl->tecHist.begin());
-        teccache::removeFrame("cache", dropTs);   // P1 delete-on-pop (particion 102)
+        teccache::removeFrame(paths::cacheRootString(), dropTs);   // P1 delete-on-pop (particion 102)
     }   // TEC-ext 034: cap 432 = 72 h @ 10 min
 }
 
