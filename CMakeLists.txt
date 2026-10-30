@@ -286,6 +286,12 @@ add_test(NAME tec_cache COMMAND test_tec_cache)
 add_executable(test_glo_backfill tests/test_glo_backfill.cpp src/Data/GloTecBackfill.cpp)
 target_include_directories(test_glo_backfill PRIVATE src)
 add_test(NAME glo_backfill COMMAND test_glo_backfill)
+# PeriodicWait: el PLAZO de 1 h de la espera entre ciclos del backfill
+# periodico (la funcion de produccion que usa App::histPreloadThread; sin
+# test, el plazo desaparecio en a80ec06 y el ciclo no corria nunca).
+add_executable(test_periodic_wait tests/test_periodic_wait.cpp)
+target_include_directories(test_periodic_wait PRIVATE src)
+add_test(NAME periodic_wait COMMAND test_periodic_wait)
 # M11 (SDO): matematica del disco + λs. Llama a PRODUCCION (sundisk +
 # SolarPosition::getApparentEclipticLonDeg), no replica.
 add_executable(test_sdo_projection tests/test_sdo_projection.cpp src/Utils/SolarPosition.cpp)

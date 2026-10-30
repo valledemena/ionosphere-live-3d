@@ -45,6 +45,7 @@
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
+#include "Data/PeriodicWait.h"   // bucle del backfill periodico (test de plazo)
 #include "Data/GloTecBackfill.h"  // C1b: plan del backfill (profundidad/horizonte)
 #include "Data/GiroAdapter.h"
 #include "Data/TecCache.h"  // M10: cache TEC en disco
@@ -1588,17 +1589,27 @@ bool App::init(int width, int height, const char* title) {
             self->impl->histLoading.store(false);
 
             // Periodic backfill and cleanup.
-            while (!self->impl->shutdownRequested.load()) {
-                // Espera 1 h — pero DESPIERTA YA si la UI cambia la
-                // profundidad (depthCv + atomic) o se pide cierre (max 1 s de
-                // latencia por re-chequeo, como antes). Antes: 3600 sleeps de
-                // 1 s ciegos al cambio de profundidad.
-                const int lastDepth = self->impl->tecDepthSlots.load();
-                while (!self->impl->shutdownRequested.load() &&
-                       self->impl->tecDepthSlots.load() == lastDepth) {
-                    std::unique_lock<std::mutex> lk(self->impl->depthCvMutex);
-                    self->impl->depthCv.wait_for(lk, std::chrono::seconds(1));
-                }
+            while (true) {
+                // Espera el proximo ciclo — con PLAZO de 1 h SIEMPRE (commit
+                // anterior lo perdio: el ciclo no corria nunca sin cambio de
+                // profundidad, y el hueco tras una suspension no se rellenaba).
+                // DESPIERTA YA si la UI cambia la profundidad (depthCv notify)
+                // o se pide cierre (re-chequeo max 1 s, como antes).
+                const bool runCycle = periodicwait::waitNextCycle(
+                    3600.0,
+                    [self]() { return self->impl->shutdownRequested.load(); },
+                    [self]() { return self->impl->tecDepthSlots.load(); },
+                    [self]() {
+                        std::unique_lock<std::mutex> lk(self->impl->depthCvMutex);
+                        self->impl->depthCv.wait_for(lk, std::chrono::seconds(1));
+                    },
+                    []() {
+                        return std::chrono::duration<double>(
+                                   std::chrono::steady_clock::now()
+                                       .time_since_epoch()).count();
+                    });
+                if (!runCycle)
+                    break;
                 if (self->impl->shutdownRequested.load())
                     break;
 
@@ -6516,8 +6527,10 @@ void App::render() {
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 432) feed the replay. GIRO station history: %.1f h.", gs.histHours);
             // Selector de profundidad SIEMPRE visible (antes solo durante la
-            // carga del hist rico, que es justo cuando no lo buscas).
+            // carga del historico, que es justo cuando no lo buscas). Detras
+            // DEL tooltip LIVE, no del HelpMarker (regresion a80ec06).
             ImGui::Separator();
             ImGui::Text("History depth");
             const char* depthLabels[] = { "6h", "24h", "72h" };
@@ -6533,10 +6546,10 @@ void App::render() {
                 }
             }
             ImGui::SameLine();
-            HelpMarker("Select how many hours of past TEC frames to keep for replay. "
-                       "The next periodic backfill (hourly, or immediately on change) "
-                       "uses this depth; also applied after app restart.");
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 432) feed the replay. GIRO station history: %.1f h.", gs.histHours);
+            HelpMarker("Select how far back to download past TEC frames "
+                       "(download horizon). Applies to the next periodic "
+                       "backfill (hourly, or immediately on change) and after "
+                       "app restart. On disk, frames are kept up to 72 h.");
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
                     impl->replayMode = true;
