@@ -1008,7 +1008,13 @@ bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out,
     }
     storeGate(group.key, st2);
 
+    // Fallo de CelesTrak (404/429/5xx/cuerpo ilegible/error de transporte):
+    // marcar para que fetch() parta el resto del pase — la politica del host
+    // es parar ante cualquier respuesta no-200. El siguiente pase los reintenta.
     if (!ok) {
+        out.hostError = true;
+        out.blockedUntilUtc =
+            (st2.blockedUntilUtc > utc) ? st2.blockedUntilUtc : (utc + 5.0 * 60.0);
         // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
         // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
         if (loadCelestrakCache(group.cache, utc, out.snap, fetchgate::kMaxFallbackAgeSec)) {
@@ -1145,6 +1151,29 @@ bool TleAdapter::fetch(double utc) {
         if (!a.note.empty()) notes.push_back(a.note);
         networkTried = networkTried || a.networkTried;
         if (a.networkTried) ++netSeen;
+        // Interrupcion por host: ante un non-200/error de CelesTrak, el resto
+        // de grupos del MISMO pase se salta (sin persistir nada: el siguiente
+        // pase reintenta los restantes). El grupo que fallo ya escribio su
+        // puerta (2 h o backoff) como corresponde.
+        if (a.networkTried && a.hostError) {
+            notes.push_back(g.key + ": pase interrumpido por host");
+            // Puerta de host (HOST GUARD): los grupos aun no intentados suben su
+            // blockedUntil al del que fallo (sin marcarlos como intentados — sus
+            // retryFails/lastAttempt quedan intactos), para que nextNetworkUtc
+            // (minimo por grupo) retrase el siguiente pase en lugar de despertar
+            // a los 60 s y pedir al host que acaba de fallar.
+            const double hostUntil =
+                (a.blockedUntilUtc > utc) ? a.blockedUntilUtc
+                                          : (utc + 5.0 * 60.0);
+            for (size_t j = i + 1; j < specs.size(); ++j) {
+                const GroupSpec& other = specs[j];
+                fetchgate::State s = gateFor(other.key);
+                if (hostUntil <= s.blockedUntilUtc) continue;
+                s.blockedUntilUtc = hostUntil;
+                storeGate(other.key, s);
+            }
+            break;
+        }
     }
     std::string note;
     for (const std::string& n : notes) {
