@@ -59,12 +59,13 @@ struct State {
     int lastHttp = 0;               // ultimo codigo HTTP visto (0 = ninguno)
     int lastCurl = 0;               // ultimo CURLcode (0 = OK)
     int retryFails = 0;             // fallos "blandos" seguidos (transporte/parseo)
-    std::string blockedBy = "own";    // origin de un bloqueo: "own" (el grupo
-                                       // probo y fracaso) o "host" ( groupId
-                                       // vecino fallido paro este pase). Un
-                                       // loader previo no conoce la clave y lo
-                                       // trata como "own" (default).
-};struct Decision {
+    std::string blockedBy = "own";    // "own" si el bloqueo es del grupo
+                                       // propio, "host" si lo propagó la puerta
+                                       // de host. Un sidecar antiguo no trae la
+                                       // clave y se tomará como "own" (default).
+};
+
+struct Decision {
     Action action = Action::FetchNow;
     double fetchAtUtc = 0.0;   // instante a partir del cual se puede pedir
     const char* reason = "";   // texto corto para la nota del panel

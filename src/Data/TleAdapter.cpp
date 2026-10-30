@@ -1120,7 +1120,8 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
 }
 
 bool TleAdapter::fetch(double utc) {
-    // Snapshot invalido si se lanza: garantiza que el panel por grupo sea
+    // Snapshot invalido si se lanza -> garantiza que el panel por grupo sea
+    // coherente incluso si acaba por cache, por SatNOGS o por error.
     // coherente incluso si acaba por cache, por SatNOGS o por error.
     struct _Guard {
         TleAdapter* self = nullptr;
@@ -1251,11 +1252,18 @@ bool TleAdapter::fetch(double utc) {
     }
 
     printf("[Tle] %s (%s)\n", merged.note.c_str(), sourceLabel(merged.source));
-    refreshGroupStatusSnapshot(utc);
     return true;
 }
 
 bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
+    struct _Guard {
+        TleAdapter* self = nullptr;
+        double utc = 0.0;
+        ~_Guard() { if (self) self->refreshGroupStatusSnapshot(utc); }
+    } g;
+    g.self = this;
+    g.utc = utc;
+
     TleSnapshot snap;
     std::string err = why;
     if (!fetchSatnogs(utc, snap, err)) {
@@ -1275,7 +1283,6 @@ bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
         status_.clear();
     }
     printf("[Tle] %s (%s)\n", snap.note.c_str(), sourceLabel(snap.source));
-    refreshGroupStatusSnapshot(utc);
     return true;
 }
 

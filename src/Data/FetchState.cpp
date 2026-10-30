@@ -88,7 +88,7 @@ bool save(const std::filesystem::path& path, const std::string& key,
         f << prefix << "last_attempt=" << st.lastAttemptUtc << '\n';
         f << prefix << "last_success=" << st.lastSuccessUtc << '\n';
         f << prefix << "blocked_until=" << st.blockedUntilUtc << '\n';
-f << prefix << "blocked_by=" << st.blockedBy << '\n';
+        f << prefix << "blocked_by=" << st.blockedBy << '\n';
         f << prefix << "last_http=" << st.lastHttp << '\n';
         f << prefix << "last_curl=" << st.lastCurl << '\n';
         f << prefix << "retry_fails=" << st.retryFails << '\n';

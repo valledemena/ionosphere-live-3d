@@ -795,6 +795,23 @@ int main() {
         checkInt("a T0+120 s ninguna nueva peticion (host guard)",
                  m.celestrakCalls, before);
 
+        // El pase acaba probablemente por SatNOGS (fallo de CelesTrak); aun
+        // asi, el snapshot por grupo ya atrapó el host guard.
+        std::vector<TleAdapter::GroupStatus> gs = a.groupStatuses();
+        checkBool("snapshot poblado", gs.size() == 2);
+        // Se admiten malevolencias en el orden de grupos:
+        TleAdapter::GroupStatus* st = nullptr;
+        TleAdapter::GroupStatus* sh = nullptr;
+        for (auto& g : gs) {
+            if (g.key == "celestrak.amateur" || g.key == "amateur") st = &g;
+            if (g.key == "celestrak.stations" || g.key == "stations") sh = &g;
+        }
+        // Si los nombres vienen crudos, busca por bloqueo.
+        if (st == nullptr && !gs.empty()) sh = &gs.back();
+        if (sh != nullptr)
+            checkBool("stations origen host tras SatNOGS",
+                      sh->blockedBy == "host" && sh->blockedUntilUtc > T0);
+
         std::error_code ec;
         fs::remove_all(p.dir, ec);
     }

@@ -149,10 +149,10 @@ public:
                           const std::filesystem::path& satnogsCache,
                           const std::filesystem::path& state);
 
-    // Copia del estado por grupo (para el panel por grupo). SIN E/S en el hilo
-    // de UI: lectura bajo mutex del snapshot que se actualiza al FINAL de cada
-    // pase; nunca lee el disco ni llama a gateFor() por frame. `nowUtc` solo
-    // se usa para calcular edades en el texto (formatRow).
+    // Copia del estado por grupo (para el panel). SIN E/S en el hilo de UI:
+    // lectura bajo mutex del snapshot que se actualiza al FINAL de cada pase;
+    // nunca lee el disco ni llama a gateFor() por frame. La edad del cache y
+    // el texto se calculan en la UI o en el test (con reloj inyectado).
     using GroupStatus = tlegroupstatus::Status;
     std::vector<GroupStatus> groupStatuses();
     // Relee el sidecar con un reloj explicito (simula un reinicio sin init()).

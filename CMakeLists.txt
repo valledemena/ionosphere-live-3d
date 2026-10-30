@@ -292,6 +292,11 @@ add_test(NAME glo_backfill COMMAND test_glo_backfill)
 add_executable(test_periodic_wait tests/test_periodic_wait.cpp)
 target_include_directories(test_periodic_wait PRIVATE src)
 add_test(NAME periodic_wait COMMAND test_periodic_wait)
+# FetchState: blocked_by (own/host/none) ida/vuelta + sidecar antiguo + valor
+# invalido (tolerante) para el panel por grupo.
+add_executable(test_fetchstate_blockedby tests/test_fetchstate_blockedby.cpp src/Data/FetchState.cpp)
+target_include_directories(test_fetchstate_blockedby PRIVATE src)
+add_test(NAME fetchstate_blockedby COMMAND test_fetchstate_blockedby)
 # Panel por grupo (TLE): formatter puro de la fila del panel por grupo, con
 # reloj inyectado. Solo standard library + Utils/TleGroupStatus.h.
 add_executable(test_tle_group_panel tests/test_tle_group_panel.cpp)
