@@ -780,6 +780,14 @@ int main() {
         checkBool("el intentado fue amateur",
                   m.celestrakUrls.size() == 1 &&
                       m.celestrakUrls[0] == "amateur");
+        // Sidecar: el grupo no intentado queda bloqueado por la puerta del host,
+        // SIN cambio de lastAttempt (no se marco como intento).
+        {
+            fetchgate::State host;
+            fetchstate::load(p.state, "celestrak.stations", host);
+            checkNear("stations blockedUntil = host guard (2 h)", host.blockedUntilUtc, T0 + 60.0 + kBlock, 1.0);
+            checkNear("stations lastAttempt intacto", host.lastAttemptUtc, 0.0, 1e-6);
+        }
 
         // A los 60 + 60 s el host guard impide cualquier nueva peticion.
         const int before = m.celestrakCalls;
@@ -806,6 +814,13 @@ int main() {
         a.fetchOnce(T0 + 60.0);
         checkInt("solo una peticion ante error de transporte",
                  m.celestrakCalls, 1);
+        // Puerta de host para transporte: 5 min, no 2 h.
+        {
+            fetchgate::State host;
+            fetchstate::load(p.state, "celestrak.stations", host);
+            checkNear("stations guard de transporte = 5 min", host.blockedUntilUtc,
+                      T0 + 60.0 + 300.0, 1.0);
+        }
 
         const int before = m.celestrakCalls;
         a.fetchOnce(T0 + 120.0);
