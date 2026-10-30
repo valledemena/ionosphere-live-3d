@@ -235,6 +235,9 @@ struct App::Impl {
     bool satSchedulePending = false;  // hay que recalcular tras el fetch en curso
     unsigned long satGeneration = 0;
     bool satVisible = false;
+    // C2b: grupos de CelesTrak seleccionados, tal cual van a settings.cfg
+    // ("active" o "active,stations"). El adaptador los valida igualmente.
+    std::string satGroups = "amateur,stations";
     WsprArcs wsprArcs;
     CmeLayer cme;
     WhistlerLayer whistlers;
@@ -2942,6 +2945,54 @@ void App::updateMainGrid(const GridData& grid) {
     impl->shellLayer.updateFromGrid(grid);
 }
 
+namespace {
+
+// C2b: combinaciones de grupos de CelesTrak que ofrece el panel. Se guarda la
+// lista de claves tal cual ("active,stations") para que settings.cfg se lea a
+// simple vista y para que anadir un grupo no corra indices.
+struct SatGroupPreset {
+    const char* label;
+    const char* keys;
+};
+const SatGroupPreset kSatGroupPresets[] = {
+    {"Amateur + stations", "amateur,stations"},
+    {"Amateur", "amateur"},
+    {"Stations", "stations"},
+    {"Weather", "weather"},
+    {"GPS", "gps-ops"},
+    {"Science", "science"},
+    {"Active (large download)", "active"},
+};
+constexpr int kSatGroupPresetCount =
+    (int)(sizeof(kSatGroupPresets) / sizeof(kSatGroupPresets[0]));
+
+std::vector<std::string> splitGroups(const std::string& csv) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : csv) {
+        if (c == ',') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+// C2b: inversa de splitGroups sobre las claves YA SANEADAS del adaptador.
+std::string joinGroups(const std::vector<std::string>& keys) {
+    std::string out;
+    for (const std::string& k : keys) {
+        if (!out.empty()) out += ',';
+        out += k;
+    }
+    return out;
+}
+
+}  // namespace
+
 void App::saveSettings() {
     FILE* f = fopen("settings.cfg", "w");
     if (!f) return;
@@ -2988,6 +3039,7 @@ void App::saveSettings() {
     fprintf(f, "cmeLayerVisible %d\n", impl->cmeVisible ? 1 : 0);
     fprintf(f, "whistlerVisible %d\n", impl->whistlerVisible ? 1 : 0);
     fprintf(f, "satellitesVisible %d\n", impl->satVisible ? 1 : 0);   // Lote 4A
+    fprintf(f, "satellites_group %s\n", impl->satGroups.c_str());      // C2b
     fprintf(f, "swArrowsVisible %d\n", impl->swArrowsVisible ? 1 : 0);
     fprintf(f, "swArrowMode %d\n", impl->swArrowMode);
     fprintf(f, "swArrowScale %g\n", (double)impl->swArrowScale);
@@ -3074,6 +3126,14 @@ void App::loadSettings() {
     while (fgets(line, sizeof(line), f)) {
         if (sscanf(line, "pinned %63s", key) == 1) {
             if (std::string(key) != "-") impl->pinnedCode = key;
+            continue;
+        }
+        // C2b: valor de TEXTO (lista de grupos), no numerico. setGroups
+        // descarta claves desconocidas y vuelve a `active` si no queda ninguna.
+        char gbuf[64];
+        if (sscanf(line, "satellites_group %63s", gbuf) == 1) {
+            impl->satGroups = gbuf;
+            impl->satAdapter.setGroups(splitGroups(impl->satGroups));
             continue;
         }
         if (sscanf(line, "%63s %lf", key, &v) != 2) continue;
@@ -3204,6 +3264,16 @@ void App::loadSettings() {
     if (std::fabs(impl->bloomThreshold - 0.35f) <= 0.001f) {
         impl->bloomThreshold = 0.72f;
         printf("[App] settings: bloomThreshold 0.35 -> 0.72 (default M9e)\n");
+    }
+    // C2b: el ADAPTADOR manda tras el arranque. setGroups aplica el saneado
+    // completo (claves desconocidas fuera, dedup, y `active` descarta al
+    // resto); la cadena de la UI se reconstruye desde groups() para que un
+    // settings.cfg antiguo con "active,stations" no deje a la UI mostrando
+    // una cadena que no corresponde a ninguna seleccion real.
+    {
+        std::vector<std::string> keys = splitGroups(impl->satGroups);
+        if (!keys.empty()) impl->satAdapter.setGroups(keys);
+        impl->satGroups = joinGroups(impl->satAdapter.groups());
     }
     fclose(f);
     printf("[App] settings.cfg loaded\n");
@@ -5533,7 +5603,33 @@ void App::render() {
         impl->satLayer.setVisible(showSat);
         if (showSat) impl->satNextFetch = 0.0;   // evalua la puerta ya (C2a: encender no implica pedir)
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak (active objects), fallback SatNOGS, then the on-disk cache - the source label says which one is drawn. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live TLE catalogue from CelesTrak. Amateur + stations is the default small download; 'Active' fetches the full catalogue. Fallback SatNOGS, then the on-disk cache. Positions are visual-grade: TLE mean elements plus J2 secular drift, no SGP4/SDP4, so they are not for tracking. Colour by regime: LEO cyan, MEO yellow, GEO magenta, HEO orange. Orbit rings are an instantaneous snapshot for a deterministic subset (max 150). No catalogue, nothing drawn.");
+    if (impl->satVisible) {
+        // C2b: que grupos de CelesTrak se piden y se fusionan. Cambiar de
+        // seleccion no borra el catalogo actual: el siguiente pase lo sustituye.
+        int sel = -1;
+        for (int i = 0; i < kSatGroupPresetCount; ++i) {
+            if (impl->satGroups == kSatGroupPresets[i].keys) sel = i;
+        }
+        const char* label =
+            sel >= 0 ? kSatGroupPresets[sel].label : impl->satGroups.c_str();
+        ImGui::SetNextItemWidth(170.0f);
+        if (ImGui::BeginCombo("##satGroups", label)) {
+            for (int i = 0; i < kSatGroupPresetCount; ++i) {
+                const bool cur = (i == sel);
+                if (ImGui::Selectable(kSatGroupPresets[i].label, cur)) {
+                    impl->satGroups = kSatGroupPresets[i].keys;
+                    impl->satAdapter.setGroups(splitGroups(impl->satGroups));
+                    impl->satNextFetch = 0.0;   // evalua la puerta con los nuevos grupos
+                    impl->satSchedulePending = false;
+                }
+                if (cur) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetItemTooltip("CelesTrak groups fetched and merged by NORAD (duplicate keeps the newest EPOCH). Each group has its own rate-limit gate: a 403 in one does not silence the others.");
+    }
     if (impl->satAdapter.isFetching()) {
         ImGui::TextDisabled("Satellites: fetching...");
     } else if (impl->satSnap.valid) {
@@ -5543,10 +5639,20 @@ void App::render() {
         // la descarga original.
         const double snapEpoch = impl->satSnapTime > 0.0 ? impl->satSnapTime : impl->satSnap.timeUtc;
         const double ageH = snapEpoch > 0.0 ? ((double)std::time(nullptr) - snapEpoch) / 3600.0 : 0.0;
-        ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d rings)",
-                            impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
-                            impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
-                            impl->satLayer.ringCount());
+        const int nGroups = (int)impl->satAdapter.groups().size();
+        if (nGroups > 1) {
+            // C2b: con varios grupos se dice cuantos, o el recuento de filas
+            // no explica por que el catalogo es mayor que `active`.
+            ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d groups, %d rings)",
+                                impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
+                                impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
+                                nGroups, impl->satLayer.ringCount());
+        } else {
+            ImGui::TextDisabled("Satellites: %d drawn / %d (%s \u00b7 %.1f h, %d rings)",
+                                impl->satLayer.satCount(), (int)impl->satSnap.sats.size(),
+                                impl->satAdapter.getSourceLabel().c_str(), ageH < 0.0 ? 0.0 : ageH,
+                                impl->satLayer.ringCount());
+        }
     } else {
         ImGui::TextDisabled("Satellites: %s", impl->satSnap.note.empty()
                                                     ? "waiting for first fetch"

@@ -26,11 +26,13 @@
 #include "Data/TleAdapter.h"
 #include "tle_csv_fixture.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,12 @@ static int g_ok = 0, g_fail = 0;
 static void checkBool(const char* what, bool cond) {
     (cond ? g_ok : g_fail) += 1;
     std::printf("[%s] %s\n", cond ? "OK" : "FAIL", what);
+}
+
+static void checkInt(const char* what, int got, int want) {
+    const bool ok = (got == want);
+    (ok ? g_ok : g_fail) += 1;
+    std::printf("[%s] %s: got %d want %d\n", ok ? "OK" : "FAIL", what, got, want);
 }
 
 static void checkNear(const char* what, double got, double want, double tol = 1.0) {
@@ -66,6 +74,16 @@ static const double kBlock = 7200.0;   // fetchgate::kBlockSec
 // Catalogo "completo" de CelesTrak: 3 satelites en GP CSV (es lo que responde
 // gp.php?FORMAT=csv; el TLE de 5 digitos ya no admite el catalogo actual).
 static std::string celestrakCsv() { return tlefixture::catalogCsv(); }
+
+// C2b: grupos con solape. `stations` trae la ISS con un EPOCH MAS NUEVO y un
+// objeto que no esta en `active` (90003). Asi se prueba a la vez la union y el
+// dedup por NORAD (gana el EPOCH mas nuevo, no el ultimo grupo leido).
+static const char* kStationsEpochIso = "2026-10-26T15:18:26.839680";   // T0 + 1 h
+static std::string stationsCsv() {
+    return std::string(tlefixture::csvHeader()) +
+           tlefixture::csvRow("ISS-STATIONS", 25544, kStationsEpochIso) +
+           tlefixture::csvRow("SAT-90003", 90003, kStationsEpochIso);
+}
 
 // Subconjunto de SatNOGS: 2 filas, una de ellas (90003) NO esta en CelesTrak.
 static std::string satnogsJson() {
@@ -93,6 +111,11 @@ struct Mock {
     int satnogsCurl = 0;
     int celestrakCalls = 0;
     int satnogsCalls = 0;
+    // C2b: respuesta por grupo ("active", "stations", ...). Si el grupo no
+    // aparece aqui se usan los valores de arriba.
+    std::map<std::string, int> groupHttp;
+    std::map<std::string, std::string> groupBody;
+    std::vector<std::string> celestrakUrls;   // grupo de cada peticion, en orden
     // Gancho opcional que se ejecuta DENTRO de la llamada a CelesTrak (antes de
     // responder): sirve para observar el sidecar con el fetch en vuelo.
     std::function<void()> onCelestrak;
@@ -102,16 +125,29 @@ struct Mock {
             TleAdapter::HttpResult r;
             const bool isCelestrak = url.find("celestrak") != std::string::npos;
             if (isCelestrak) {
-                // C2b: la URL debe llevar FORMAT=csv (y el grupo, cuando existan
-                // amateur/stations). Esto es parte del contrato del adaptador.
+                // C2b: la URL debe llevar FORMAT=csv y el grupo pedido. Esto es
+                // parte del contrato del adaptador.
                 checkBool("Celestrak pide FORMAT=csv",
                           url.find("FORMAT=csv") != std::string::npos);
+                std::string group;
+                const size_t gpos = url.find("GROUP=");
+                if (gpos != std::string::npos) {
+                    const size_t amp = url.find('&', gpos);
+                    group = url.substr(gpos + 6, amp == std::string::npos
+                                                     ? std::string::npos
+                                                     : amp - (gpos + 6));
+                }
+                celestrakUrls.push_back(group);
                 ++celestrakCalls;
                 if (onCelestrak) onCelestrak();
                 r.http = celestrakHttp;
+                const auto hit = groupHttp.find(group);
+                if (hit != groupHttp.end()) r.http = hit->second;
                 r.curl = celestrakCurl;
                 if (r.http == 200 && r.curl == 0) {
                     body = celestrakBody;
+                    const auto bit = groupBody.find(group);
+                    if (bit != groupBody.end()) body = bit->second;
                     r.ok = !body.empty();
                 } else {
                     r.err = r.curl != 0 ? "timeout simulado" : "HTTP simulado";
@@ -164,6 +200,16 @@ static double fieldOf(const std::string& text, const std::string& key) {
     return std::atof(text.c_str() + at + key.size() + 1);
 }
 
+// C2b: busquedas por NORAD en el snapshot fusionado.
+static const TleSat* satByNorad(const TleSnapshot& s, int norad) {
+    for (const TleSat& x : s.sats) {
+        if (x.noradId == norad) return &x;
+    }
+    return nullptr;
+}
+
+static bool hasNorad(const TleSnapshot& s, int norad) { return satByNorad(s, norad) != nullptr; }
+
 int main() {
     std::printf("--- C2a-19: 403 sin cache -> SatNOGS, CelesTrak bloqueado 2 h ---\n");
     {
@@ -174,6 +220,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
 
         const bool ok = a.fetchOnce(T0);
@@ -213,6 +260,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
 
         const bool ok = a.fetchOnce(T0);
@@ -257,6 +305,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         Mock* mp = &m;
         m.onCelestrak = [&, mp]() {
@@ -284,6 +333,10 @@ int main() {
         // Reinicio: adaptador nuevo, mismo directorio. El sidecar se relee.
         TleAdapter b;
         b.setPathsForTests(p.cache, p.satnogs, p.state);
+        // C2a: seleccion explicita (setPathsForTests ya no fuerza nada). Sin
+        // esto el bloqueo leido del sidecar saldria 0.0: los grupos por
+        // defecto ni siquiera estan instalados en este reinicio simulado.
+        b.setGroups({"active"});
         b.loadStateForTests(T0 + 60.0);
         checkNear("tras el reinicio el bloqueo sigue vigente (peticion interrumpida)",
                   b.getBlockedUntilUtc(), T0 + kBlock);
@@ -307,6 +360,7 @@ int main() {
 
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         a.fetchOnce(T0);
 
@@ -351,6 +405,7 @@ int main() {
         blockBoth(T0 + 3600.0);
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         a.loadStateForTests(T0);
         checkBool("a las 0 h se sirve la cache", a.fetchOnce(T0) && a.getSnapshot().valid);
@@ -404,6 +459,7 @@ int main() {
         Mock m;   // CelesTrak responde 200 con el catalogo completo
         TleAdapter a;
         a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});   // C2a: seleccion explicita (setPathsForTests ya no fuerza nada)
         a.setTransport(m.transport());
         const bool ok = a.fetchOnce(T0 + 60.0);
         checkBool("se pide el catalogo completo en vez de servir el subconjunto",
@@ -417,6 +473,293 @@ int main() {
         fs::remove_all(p.dir, ec);
     }
 
+    std::printf("--- C2b-25: dos grupos vivos se fusionan (dedup por EPOCH) ---\n");
+    {
+        Paths p = makePaths("G1");
+        Mock m;
+        // Cuerpo PROPIO por grupo: con el mismo CSV para los dos no se puede
+        // comprobar ni la union ni el dedup por EPOCH.
+        m.groupBody["amateur"] = celestrakCsv();
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("fetch ok", ok && s.valid);
+        checkBool("una peticion por grupo", m.celestrakCalls == 2);
+        checkBool("se pidio GROUP=stations",
+                  m.celestrakUrls.size() == 2 && m.celestrakUrls[1] == "stations");
+        checkBool("3 + 2 filas con la ISS repetida = 4", s.sats.size() == 4);
+        checkBool("el origen es CelesTrak", s.source == TleSource::Celestrak);
+        const TleSat* iss = satByNorad(s, 25544);
+        checkBool("la ISS quedo una sola vez", iss != nullptr);
+        checkBool("gana el EPOCH mas nuevo (stations)",
+                  iss != nullptr && iss->name == "ISS-STATIONS");
+        checkBool("el objeto exclusivo de stations esta", hasNorad(s, 90003));
+        checkBool("sin aviso: todo vivo", a.getErrorMessage().empty());
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-26: la puerta es POR GRUPO (403 en stations no silencia amateur) ---\n");
+    {
+        Paths p = makePaths("G2");
+        Mock m;
+        m.groupHttp["stations"] = 403;
+        m.groupBody["amateur"] = celestrakCsv();   // cuerpo propio del grupo vivo
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("se sirve el grupo vivo", ok && s.valid && s.sats.size() == 3);
+        checkBool("un grupo caido no manda a SatNOGS", m.satnogsCalls == 0);
+        checkBool("el aviso nombra stations",
+                  a.getErrorMessage().find("stations") != std::string::npos);
+        checkNear("stations bloqueado 2 h", a.getBlockedUntilUtc(), T0 + 60.0 + kBlock);
+        const std::string state = readText(p.state);
+        checkNear("sidecar: stations tiene su propia clave",
+                  fieldOf(state, "celestrak.stations.blocked_until"), T0 + 60.0 + kBlock);
+        checkNear("sidecar: active no quedo bloqueado",
+                  fieldOf(state, "celestrak.active.blocked_until"), 0.0);
+        // Siguiente pase: active esta en cache joven y stations bloqueado, asi
+        // que no se toca la red para ninguno.
+        a.fetchOnce(T0 + 120.0);
+        checkBool("ningun grupo pide red otra vez", m.celestrakCalls == 2);
+        checkBool("sigue sirviendose el catalogo fusionado", a.getSnapshot().valid);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-27: cache de un grupo + vivo de otro, timeUtc el mas viejo ---\n");
+    {
+        Paths p = makePaths("G3");
+        // La cache del grupo amateur es SU fichero (no satellites.tle), con la
+        // puerta celestrak.amateur bloqueada: se sirve de cache mientras
+        // stations pide red.
+        const fs::path amateurCache = p.dir / "satellites-amateur.tle";
+        TleSnapshot disk;
+        TleAdapter::parseCelesTrakCsv(celestrakCsv(), T0, disk);
+        checkBool("cache de amateur escrita",
+                  TleAdapter::saveCache(amateurCache, disk, celestrakCsv()));
+        fetchgate::State cel;
+        cel.lastAttemptUtc = T0 - kBlock;
+        cel.lastHttp = 403;
+        cel.blockedUntilUtc = T0 + 3600.0;
+        fetchstate::save(p.state, "celestrak.amateur", cel);
+
+        Mock m;
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+        a.loadStateForTests(T0);
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("se fusiona cache + vivo", ok && s.valid && s.sats.size() == 4);
+        checkBool("solo stations toca red",
+                  m.celestrakCalls == 1 && m.celestrakUrls[0] == "stations");
+        checkBool("origenes distintos -> se declara cache", s.source == TleSource::Cache);
+        checkNear("timeUtc = el del grupo mas viejo", a.getLastFetchTime(), T0, 1.0);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-28: si NINGUN grupo responde, SatNOGS se pide UNA vez ---\n");
+    {
+        Paths p = makePaths("G4");
+        Mock m;
+        m.groupHttp["amateur"] = 403;
+        m.groupHttp["stations"] = 403;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        const TleSnapshot s = a.getSnapshot();
+        checkBool("hay subconjunto de SatNOGS", ok && s.valid);
+        checkBool("una sola peticion a SatNOGS", m.satnogsCalls == 1);
+        checkBool("origen SatNOGS", s.source == TleSource::SatNogs);
+        checkBool("2 filas del subconjunto", s.sats.size() == 2);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-29: la seleccion de grupos se sanea ---\n");
+    {
+        TleAdapter a;
+        a.setGroups({"weather", "nope", "weather"});
+        checkBool("descarta desconocidos y repetidos, conserva el orden",
+                  a.groups() == std::vector<std::string>({"weather"}));
+        // `active` es el superconjunto: su presencia descarta a los demas
+        // aunque lleguen antes en el orden (decision de producto, C2b-29).
+        a.setGroups({"weather", "nope", "weather", "active"});
+        checkBool("active descarta a los demas aunque lleguen antes",
+                  a.groups() == std::vector<std::string>({"active"}));
+        a.setGroups({});
+        checkBool("vacio vuelve a active",
+                  a.groups() == std::vector<std::string>({"active"}));
+        a.setGroups({"nope"});
+        checkBool("solo desconocidos vuelve a active",
+                  a.groups() == std::vector<std::string>({"active"}));
+    }
+
+    std::printf("--- C2b-30: cada grupo tiene su propio fichero de cache ---\n");
+    {
+        Paths p = makePaths("G5");
+        Mock m;
+        m.groupHttp["weather"] = 500;
+        m.groupBody["amateur"] = celestrakCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "weather"});
+        a.setTransport(m.transport());
+        a.fetchOnce(T0 + 60.0);
+        const fs::path amateurCache = p.dir / "satellites-amateur.tle";
+        checkBool("la cache del grupo vivo se escribe", fs::exists(amateurCache));
+        checkBool("la del grupo caido no se escribe",
+                  !fs::exists(p.dir / "satellites-weather.tle"));
+        TleSnapshot back;
+        checkBool("satellites-amateur.tle guarda el catalogo de amateur",
+                  TleAdapter::loadCelestrakCache(amateurCache, T0 + 120.0, back) &&
+                      back.sats.size() == 3);
+        checkBool("sin filas de otro grupo", !hasNorad(back, 90003));
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+    std::printf("--- C2b-31: defecto del CONSTRUCTOR sin seleccion -> amateur,stations ---\n");
+    {
+        TleAdapter a;
+        // No llamamos a setGroups; deberia iniciar con el defecto.
+        checkBool("defecto es amateur,stations", a.groups() == std::vector<std::string>({"amateur", "stations"}));
+    }
+
+    std::printf("--- C2b-32: active descarta los demas ---\n");
+    {
+        TleAdapter a;
+        a.setGroups({"active", "stations", "weather"});
+        checkBool("solo queda active", a.groups() == std::vector<std::string>({"active"}));
+    }
+
+    std::printf("--- C2b-33: alternar active y par pequeño sin contaminar caches/puertas ---\n");
+    {
+        Paths p = makePaths("Alt");
+        Mock m;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});
+        a.setTransport(m.transport());
+        a.fetchOnce(T0 + 60.0);
+        checkInt("peticiones active", m.celestrakCalls, 1);
+        
+        m.celestrakCalls = 0;
+        a.setGroups({"amateur", "stations"});
+        a.fetchOnce(T0 + 120.0);
+        checkInt("peticiones amateur+stations", m.celestrakCalls, 2);
+        
+        const std::string state = readText(p.state);
+        checkBool("sidecar tiene claves la activo", state.find("celestrak.active") != std::string::npos);
+        checkBool("sidecar tiene claves la amateur", state.find("celestrak.amateur") != std::string::npos);
+        checkBool("sidecar tiene claves la stations", state.find("celestrak.stations") != std::string::npos);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-34: la pausa entre grupos es condicional e inyectable ---\n");
+    {
+        Paths p = makePaths("P1");
+        Mock m;
+        m.groupBody["amateur"] = celestrakCsv();
+        m.groupBody["stations"] = stationsCsv();
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        int pauses = 0;
+        a.setGroupPauseForTests([&pauses] { ++pauses; });   // NO duerme: cuenta
+        a.setTransport(m.transport());
+        // Dos grupos, los dos a red: UNA pausa (solo entre el 1 y el 2).
+        a.fetchOnce(T0 + 60.0);
+        checkInt("dos grupos por red: una pausa", pauses, 1);
+        checkInt("dos grupos por red: dos peticiones", m.celestrakCalls, 2);
+
+        // Pase posterior con ambos grupos en cache JOVEN (escritas arriba):
+        // nadie toca la red, y entonces no hay NINGUNA pausa. El defecto pagaba
+        // 2 s por pase sin haber pedido nada.
+        TleAdapter b;
+        b.setPathsForTests(p.cache, p.satnogs, p.state);
+        b.setGroups({"amateur", "stations"});
+        int pausesB = 0;
+        b.setGroupPauseForTests([&pausesB] { ++pausesB; });
+        b.setTransport(m.transport());
+        b.fetchOnce(T0 + 120.0);
+        checkInt("dos grupos en cache: cero pausas", pausesB, 0);
+        checkInt("dos grupos en cache: cero peticiones nuevas",
+                 m.celestrakCalls, 2);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::printf("--- C2b-35: pase con puerta cerrada y active en cache (escala real) ---\n");
+    {
+        Paths p = makePaths("Slow");
+        // La produccion trae ~15 900 objetos; medir el pase rapido con 3 filas
+        // de juguete no mide nada. HIDRATACION: nombres y NORAD 90001+ son
+        // ficticios, con elementos del fixture ISS.
+        static const char* kBigEpochIso = "2026-10-25T13:18:26.839680";   // T0 - 1 h
+        std::string bigCsv = tlefixture::csvHeader();
+        const int kBig = 16000;
+        for (int i = 0; i < kBig; ++i) {
+            bigCsv += tlefixture::csvRow("SAT-" + std::to_string(90000 + i),
+                                         90000 + i, kBigEpochIso);
+        }
+        TleSnapshot big;
+        checkBool("catalogo grande parsea",
+                  TleAdapter::parseCelesTrakCsv(bigCsv, T0 - 3600.0, big));
+        checkInt("el catalogo grande trae 16 000 filas", (int)big.sats.size(), kBig);
+        checkBool("cache grande escrita a disco",
+                  TleAdapter::saveCache(p.cache, big, bigCsv));
+
+        // Puerta CERRADA (bloqueado 2 h) y cache de 1 h (< TTL vivo de 6 h):
+        // decide() no deja pedir red por ninguna via; el pase es solo lectura
+        // de disco + parseo. Es justo el estado estable de produccion.
+        fetchgate::State cel;
+        cel.lastAttemptUtc = T0 - 60.0;
+        cel.lastHttp = 403;
+        cel.blockedUntilUtc = T0 + kBlock;
+        fetchstate::save(p.state, "celestrak.active", cel);
+
+        Mock m;
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"active"});
+        a.setTransport(m.transport());
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = a.fetchOnce(T0);
+        const double ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+        std::printf("[medicion] pase con puerta cerrada + cache de 1 h: %.1f ms\n", ms);
+        checkBool("fetch ok tras puerta cerrada", ok);
+        checkBool("snapshot valido", a.getSnapshot().valid);
+        checkBool("fuente cache", a.getSnapshot().source == TleSource::Cache);
+        checkInt("filas servidas", (int)a.getSnapshot().sats.size(), kBig);
+        checkInt("la puerta cerrada no pide red", m.celestrakCalls, 0);
+        checkBool("el pase es barato (<2000 ms, tope para CI lenta)", ms < 2000.0);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
