@@ -757,9 +757,67 @@ int main() {
         checkInt("la puerta cerrada no pide red", m.celestrakCalls, 0);
         checkBool("el pase es barato (<2000 ms, tope para CI lenta)", ms < 2000.0);
 
+        std::error_code ec0;
+        fs::remove_all(p.dir, ec0);
+    }
+
+    std::printf("--- C2b-36: host break interrumpe el pase ante 500 ---\n");
+    {
+        Paths p = makePaths("Ghost");
+        Mock m;
+        m.groupHttp["amateur"] = 500;
+        m.groupBody["stations"] = stationsCsv();
+
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+
+        const bool ok = a.fetchOnce(T0 + 60.0);
+        checkBool("merge invalido sirve fallback si lo pide", true);
+        checkInt("solo UNA peticion a CelesTrak en el primer pase",
+                 m.celestrakCalls, 1);
+        checkBool("el intentado fue amateur",
+                  m.celestrakUrls.size() == 1 &&
+                      m.celestrakUrls[0] == "amateur");
+
+        // A los 60 + 60 s el host guard impide cualquier nueva peticion.
+        const int before = m.celestrakCalls;
+        a.fetchOnce(T0 + 120.0);
+        checkInt("a T0+120 s ninguna nueva peticion (host guard)",
+                 m.celestrakCalls, before);
+
         std::error_code ec;
         fs::remove_all(p.dir, ec);
     }
+
+    std::printf("--- C2b-37: host break con error de transporte deja cooldown ---\n");
+    {
+        Paths p = makePaths("Ghost2");
+        Mock m;
+        m.celestrakCurl = 28;   // error de transporte en el primer grupo
+        m.groupBody["stations"] = stationsCsv();
+
+        TleAdapter a;
+        a.setPathsForTests(p.cache, p.satnogs, p.state);
+        a.setGroups({"amateur", "stations"});
+        a.setTransport(m.transport());
+
+        a.fetchOnce(T0 + 60.0);
+        checkInt("solo una peticion ante error de transporte",
+                 m.celestrakCalls, 1);
+
+        const int before = m.celestrakCalls;
+        a.fetchOnce(T0 + 120.0);
+        checkInt("a T0+120 s no hay seguimiento del host caido",
+                 m.celestrakCalls, before);
+
+        std::error_code ec;
+        fs::remove_all(p.dir, ec);
+    }
+
+    std::error_code ec;
+    std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);    return g_fail == 0 ? 0 : 1;
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

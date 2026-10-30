@@ -1008,6 +1008,10 @@ bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out,
     }
     storeGate(group.key, st2);
 
+    // Fallo de CelesTrak (404/429/5xx/cuerpo ilegible/error de transporte):
+    // marcar para que fetch() parta el resto del pase — la politica del host
+    // es parar ante cualquier respuesta no-200. El siguiente pase los reintenta.
+    if (!ok) out.hostError = true;
     if (!ok) {
         // Cache (hasta 72 h) antes que SatNOGS: un catalogo completo de hace
         // 12 h es mejor que 1.7k satelites frescos, y no gasta otra cuota.
@@ -1145,7 +1149,14 @@ bool TleAdapter::fetch(double utc) {
         if (!a.note.empty()) notes.push_back(a.note);
         networkTried = networkTried || a.networkTried;
         if (a.networkTried) ++netSeen;
-    }
+        // Interrupcion por host: ante un non-200/error de CelesTrak, el resto
+        // de grupos del MISMO pase se salta (sin persistir nada: el siguiente
+        // pase reintenta los restantes). El grupo que fallo ya escribio su
+        // puerta (2 h o backoff) como corresponde.
+        if (a.networkTried && a.hostError) {
+            notes.push_back(g.key + ": pase interrumpido por host");
+            break;
+        }    }
     std::string note;
     for (const std::string& n : notes) {
         if (!note.empty()) note += "; ";

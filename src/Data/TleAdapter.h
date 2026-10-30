@@ -257,6 +257,9 @@ private:
         TleSnapshot snap;
         bool ok = false;
         bool networkTried = false;  // httpGet llego a llamarse (fallo o cuerpo ilegible)
+        bool hostError = false;    // non-200/error de CelesTrak en esta peticion:
+                                    // tras el primer hostError se para el pase (no
+                                    // persiste nada; el siguiente pase reintenta).
         std::string note;           // motivo de la puerta o del fallo (para status_/error_)
     };
     // `pauseBeforeNetwork`: cortesia de cuota — acquireGroup la invoca justo
