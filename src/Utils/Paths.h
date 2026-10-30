@@ -55,6 +55,13 @@ std::filesystem::path cacheRoot();
 // "cache" produce solo ficheros de nombre ASCII (tec_*.bin, *.gif, *.json);
 // si la raiz configurada trajera caracteres no-ASCII y una escritura fallara,
 // el fallo aparece como "open failed" del propio fichero, sin silencios.
+//
+// PORTABILIDAD DEL VALOR GUARDADO: la ruta viva como std::string (ANSI/ACP en
+// Windows), y asi se persiste en settings.cfg y se rele con fs::path(std::string).
+// La ida y vuelta es COHERENTE en una maquina (mismo ACP al escribir y leer),
+// pero un settings.cfg con cacheDir no-ASCII NO es portable entre equipos con
+// paginas de codigo distintas. La familia "cache" nunca: los ficheros son ASCII;
+// solo la raiz configurada puede diferir.
 std::string cacheRootString();
 
 }  // namespace paths

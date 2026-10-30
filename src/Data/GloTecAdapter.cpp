@@ -316,7 +316,7 @@ bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
             tf.w = g.width;
             tf.h = g.height;
             tf.v = g.values;
-            teccache::saveFrame(cacheDir_, tf);  // best-effort
+            teccache::saveFrame(effectiveCacheDir(), tf);  // best-effort
             if (!haveNewest) {
                 if (newestOut) *newestOut = g;
                 haveNewest = true;
@@ -358,7 +358,7 @@ bool GloTecAdapter::fetchTEC(double utc, int depthSlots /*=36*/) {
     if (!fetchIndex(raw)) return false;
     if (raw.empty()) { error_ = "indice vacio"; return false; }
 
-    teccache::ScanResult scan = teccache::loadCached(cacheDir_);
+    teccache::ScanResult scan = teccache::loadCached(effectiveCacheDir());
     std::vector<double> cached;
     cached.reserve(scan.frames.size());
     for (const teccache::Frame& f : scan.frames) cached.push_back(f.epoch);

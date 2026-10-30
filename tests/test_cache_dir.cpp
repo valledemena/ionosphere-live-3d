@@ -16,10 +16,17 @@
 //   (3) Plomeria end-to-end contra la raiz configurada: teccache::saveFrame,
 //       loadCached, cleanupTmpFiles y removeFrame (lo mismo que App le pasa
 //       a su familia "cache").
+//   (4) Resolucion DEFERIDA en adaptadores (el fallo de arranque que reventaba
+//       el cache): GloTecAdapter/SolImageAdapter/IrtamCoeffAdapter construidos
+//       ANTES de setCacheRoot resuelven su directorio efectivo a la raiz
+//       global EN CADA USO; caso normal (despues) y override ganando a la raiz.
 // =============================================================================
 #include "Utils/Paths.h"
 #include "Utils/AppCfg.h"
 #include "Data/TecCache.h"
+#include "Data/GloTecAdapter.h"
+#include "Data/IrtamCoeffAdapter.h"
+#include "Data/SolImageAdapter.h"
 
 #include <cmath>
 #include <cstdio>
@@ -108,6 +115,53 @@ int main() {
         restoreRoot(old);
         check_bool("restore vuelve al default", paths::cacheRootString() == "cache");
         fs::remove_all(dir, ec);
+    }
+
+    std::printf("--- (4) resolucion DEFERIDA en adaptadores (cache-partido) ---\n");
+    {
+        std::error_code ec;
+        const std::string oldRoot = paths::cacheRootString();
+        // ORDEN INVERTIDO (el caso que partia el cache): los tres objetos
+        // viven como miembros de App::Impl, construidos ANTES de que la app
+        // fije la raiz. Su directorio efectivo debe seguir a la raiz global
+        // EN CADA USO, no quedarse con el valor del momento de construccion.
+        GloTecAdapter glo;
+        SolImageAdapter sol;
+        irtamfetch::IrtamCoeffAdapter irt;
+        check_bool("los tres ven el default ANTES de fijar la raiz",
+                   glo.effectiveCacheDir() == "cache" &&
+                       sol.effectiveCacheDir() == "cache" &&
+                       irt.effectiveCacheDir() == "cache");
+        const std::string dir = freshRoot();
+        paths::setCacheRoot(dir);
+        check_bool("tras setCacheRoot, el efectivo es la raiz (construido ANTES)",
+                   glo.effectiveCacheDir() == dir &&
+                       sol.effectiveCacheDir() == dir &&
+                       irt.effectiveCacheDir() == dir);
+        // ORDEN NORMAL: instancia construida DESPUES de fijar la raiz.
+        irtamfetch::IrtamCoeffAdapter irt2;
+        check_bool("construido DESPUES tambien ve la raiz",
+                   irt2.effectiveCacheDir() == dir);
+        // El override de test (setCacheDir) SIEMPRE gana a la raiz: es el
+        // como los suites redirigen el cache a un directorio temporal.
+        const std::string over = dir + " override";
+        glo.setCacheDir(over);
+        sol.setCacheDir(over);
+        check_bool("override gana a la raiz", glo.effectiveCacheDir() == over &&
+                                                sol.effectiveCacheDir() == over);
+        // La raiz global responde si vuelve a cambiar (nadie dependia de un
+        // valor capturado): solo la instancia SIN override.
+        const std::string dir2 = freshRoot();
+        paths::setCacheRoot(dir2);
+        check_bool("cambio de raiz se refleja en efectivo sin override",
+                   irt.effectiveCacheDir() == dir2);
+        // Restore del estado global (los 3 objetos no son ya validos fuera
+        // del scope; simplemente comprobamos el default).
+        restoreRoot(oldRoot);
+        check_bool("restore global de nuevo al default",
+                   paths::cacheRootString() == "cache");
+        fs::remove_all(dir, ec);
+        fs::remove_all(dir2, ec);
     }
 
     std::printf("\n[test_cache_dir] %d OK, %d FAIL\n", g_ok, g_fail);

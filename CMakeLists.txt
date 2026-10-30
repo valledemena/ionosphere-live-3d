@@ -296,7 +296,21 @@ add_test(NAME periodic_wait COMMAND test_periodic_wait)
 # "cacheDir" de settings.cfg. Llama a PRODUCCION (paths + teccache), no
 # replica; el estado global de la raiz se restaura al final.
 add_executable(test_cache_dir tests/test_cache_dir.cpp src/Utils/Paths.cpp src/Data/TecCache.cpp)
-target_include_directories(test_cache_dir PRIVATE src)
+target_include_directories(test_cache_dir PRIVATE src libs/glad/include libs/glm libs/stb)
+target_sources(test_cache_dir PRIVATE
+    src/Data/GloTecAdapter.cpp
+    src/Data/GloTecBackfill.cpp
+    src/Data/SolImageAdapter.cpp
+    src/Data/IrtamCoeffAdapter.cpp
+    src/Data/IrtamCoeffCache.cpp
+    src/Data/IrtamCoeffParse.cpp
+    src/Data/LgdcPacing.cpp
+    src/Data/LgdcTrace.cpp
+    tests/stb_image_impl.cpp)
+target_link_libraries(test_cache_dir PRIVATE CURL::libcurl)
+if(EMSCRIPTEN)
+    target_link_libraries(test_cache_dir PRIVATE Threads::Threads)
+endif()
 add_test(NAME cache_dir COMMAND test_cache_dir)
 # M11 (SDO): matematica del disco + λs. Llama a PRODUCCION (sundisk +
 # SolarPosition::getApparentEclipticLonDeg), no replica.

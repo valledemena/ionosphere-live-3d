@@ -1099,6 +1099,12 @@ App::App() : impl(new Impl) {}
 App::~App() { delete impl; }
 
 bool App::init(int width, int height, const char* title) {
+    // PRIMERA instrucction del arranque (cache configurable, Paths.h): los
+    // adaptadores restauran ficheros de cache en sus init() y mas abajo se
+    // crean todos los hilos (histPreload/catalogPreload/irtamBackfill y
+    // fetchThread) — ninguno debe correr con otra raiz que la configurada.
+    applyCacheDirectory();
+
     winW = width;
     winH = height;
 
@@ -1712,9 +1718,8 @@ bool App::init(int width, int height, const char* title) {
     {
         App* self = this;
         impl->irtamBackfillThread = std::thread([self]() {
-            irtamfetch::IrtamCoeffAdapter irt;  // instancia propia del hilo
+            irtamfetch::IrtamCoeffAdapter irt;  // instancia propia del hilo; cache = raiz global (Paths.h)
             irt.init();  // solo curl_global_init + printf (sin red)
-            irt.setCacheDir(paths::cacheRootString());
             auto publish = [&]() {
                 auto b = std::make_shared<irtamfetch::IrtamBundle>();
                 b->dataEpoch = irt.freshestTov();
@@ -1944,12 +1949,8 @@ bool App::init(int width, int height, const char* title) {
     impl->westFord.init();
     impl->westFord.setVisible(false);
 
-    // Raiz del cache configurable (Paths.h): settings.cfg "cacheDir <ruta>".
-    // ANTES de "Lote 3" y del hilo de red de abajo: los adaptadores restauran
-    // cache en init() y el fetchThread escribe frames desde su primer ciclo.
-    applyCacheDirectory();
-
-    // Lote 3: adaptadores de red + capas (ocultas por defecto).
+    // Lote 3: adaptadores de red + capas (ocultas por defecto). La raiz del
+    // cache ya esta fijada (primera instruccion de init, arriba).
     impl->wsprAdapter.init();
     impl->cmeAdapter.init();
     impl->stormAdapter.init();
@@ -3183,9 +3184,10 @@ void App::saveSettings() {
     fprintf(f, "camRY %g\n", (double)impl->camera.rotateY);
     fprintf(f, "camDist %g\n", (double)impl->camera.distance);
     fprintf(f, "pinned %s\n", impl->pinnedCode.empty() ? "-" : impl->pinnedCode.c_str());
-    // Cache configurable: persistir la raiz actual (siempre, con su defecto
-    // "cache" o la ruta configurada; con espacios intactos).
-    fprintf(f, "cacheDir %s\n", paths::cacheRootString().c_str());
+    // Cache configurable: persistir SOLO si difiere del defecto ("cache");
+    // guardar siempre congelaria el defecto en los cfg existentes si cambiara.
+    if (paths::cacheRootString() != "cache")
+        fprintf(f, "cacheDir %s\n", paths::cacheRootString().c_str());
     fprintf(f, "hfTraceVisible %d\n", impl->hfTraceVisible ? 1 : 0);   // M8 (plan 11.4)
     fprintf(f, "hfFreqMHz %g\n", (double)impl->hfFreqMHz);
     fprintf(f, "sunVisible %d\n", impl->sunVisible ? 1 : 0);   // M11
