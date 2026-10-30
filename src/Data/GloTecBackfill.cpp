@@ -90,6 +90,10 @@ Result run(const std::vector<IndexFrame>& index,
 
         r.requested.push_back(f.timeUtc);
         const Response res = transport(f.url);
+        // Bytes de red REALES de ESTA peticion: se cuenta el cuerpo recibido
+        // sea 200 o error (una pagina de error tambien gasta cuota); un
+        // fallo de transporte puro trae cuerpo vacio y cuenta 0.
+        r.netBytes += (long long)res.body.size();
 
         if (!res.transportOk) {
             ++r.httpErrors;

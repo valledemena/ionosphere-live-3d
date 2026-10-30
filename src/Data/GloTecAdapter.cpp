@@ -297,6 +297,9 @@ bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
         r.transportOk = (lastCurl_ == 0);
         r.retryAfterSec = lastRetryAfter_;
         r.body = std::move(body);
+        // C1b/medido: bytes de red reales de ESTA peticion, en vivo (si App
+        // provee un sumidero). Cuerpo vacio por fallo de transporte = 0.
+        if (netBytesSink_) netBytesSink_->fetch_add((long long)r.body.size());
         return r;
     };
     auto store = [this, &onFrame, newestOut, &haveNewest](
@@ -335,6 +338,7 @@ bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
         stats->planned = (int)res.requested.size();
         stats->cached = res.skippedCached;
         stats->stored = (int)res.stored.size();
+        stats->netBytes = res.netBytes;
     }
     if (res.stoppedOn404) error_ = "backfill: 3 x 404 seguidos";
     else if (res.stoppedOn5xx) error_ = "backfill: 5xx del servidor";

@@ -528,6 +528,10 @@ struct App::Impl {
     // Anillo protegido (el hilo de precarga escribe mientras el render lee).
     std::mutex tecHistMutex;
     std::atomic<int> histTotal{0}, histDone{0};
+    // Bytes de RED reales descargados por los backfills (precarga + periodo):
+    // el indicador MB del Timeline ya no estima por frame (histDone x 20 760
+    // B contaba igual un frame de cache que uno descargado de la red).
+    std::atomic<long long> histNetBytes{0};
     std::atomic<bool> histLoading{false};
     // El worker la activa al publicar el primer TEC real (no mock).
     std::atomic<bool> liveTecArrived{false};
@@ -1547,9 +1551,13 @@ bool App::init(int width, int height, const char* title) {
 
             // Initial backfill
             self->impl->histLoading.store(true);
+            self->impl->histNetBytes.store(0);   // MB reales de esta pasada
             GloTecAdapter loader;   // instancia propia: sin estado compartido
             loader.setGridSize(72, 72);
             loader.setStopFlag(&self->impl->shutdownRequested);
+            // C1b/medido: el indicador muestra los bytes de red REALES de
+            // este backfill (los frames de cache no suman).
+            loader.setNetBytesSink(&self->impl->histNetBytes);
             std::vector<GloTecFrame> idx;
             if (loader.fetchIndex(idx)) {
                 // C1b: la precarga es un backfill planificado (glotbf::run):
@@ -1583,8 +1591,9 @@ bool App::init(int width, int height, const char* title) {
                             self->impl->histDone.fetch_add(1);
                         }, nullptr, &st);
                 }
-                printf("[App] History preload: %d cached + %d fetched (%d planned, depth %d)\n",
-                       st.cached, st.stored, st.planned, depth);
+                printf("[App] History preload: %d cached + %d fetched (%d planned, depth %d, %.1f MB red)\n",
+                       st.cached, st.stored, st.planned, depth,
+                       (double)self->impl->histNetBytes.load() / (1024.0 * 1024.0));
             }
             self->impl->histLoading.store(false);
 
@@ -1630,6 +1639,9 @@ bool App::init(int width, int height, const char* title) {
                 GloTecAdapter loaderPeriodic;   // instancia propia, sin estado
                 loaderPeriodic.setGridSize(72, 72);
                 loaderPeriodic.setStopFlag(&self->impl->shutdownRequested);
+                // Medido: la cuota de red real tambien se suma en el periodic
+                // (el indicador no lo muestra: histLoading sigue false).
+                loaderPeriodic.setNetBytesSink(&self->impl->histNetBytes);
                 std::vector<GloTecFrame> idxPeriodic;
                 if (loaderPeriodic.fetchIndex(idxPeriodic)) {
                     std::vector<double> cachedEp;
@@ -6524,10 +6536,12 @@ void App::render() {
         GiroAdapter::GiroNetStatus gs = impl->giro.getNetStatus();
         if (!impl->replayMode) {
             if (impl->histLoading.load()) {
-                // C1b: el progreso incluye el tamano real descargado
-                // (24 B de cabecera + 72x72 f32 por frame).
-                const double mb = (double)impl->histDone.load() * 20760.0 / (1024.0 * 1024.0);
-                ImGui::Text("LIVE  (loading history %d/%d, %.1f MB)",
+                // C1b/medido: el MB del progreso son BYTES DE RED REALES
+                // (sumidero del adaptador); antes era frames x 20 760 B, que
+                // contaba igual un frame de cache que uno descargado.
+                const double mb =
+                    (double)impl->histNetBytes.load() / (1024.0 * 1024.0);
+                ImGui::Text("LIVE  (loading history %d/%d, %.1f MB red)",
                     impl->histDone.load(), impl->histTotal.load(), mb);
                 if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay (about 1 frame/s).");
             } else {

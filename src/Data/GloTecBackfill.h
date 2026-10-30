@@ -75,6 +75,11 @@ struct Result {
     bool stoppedOnTransport = false; // 3 errores de transporte consecutivos
     bool stoppedByCaller = false;    // stop() devolvio true
     double sleptSec = 0.0;           // suma de esperas
+    // Bytes de RED reales recibidos por las peticiones de este pase (200 o
+    // error con cuerpo; 0 en fallo de transporte puro). Los frames saltados
+    // por cache NO cuentan: es la medida que protege a un usuario con
+    // conexion medida.
+    long long netBytes = 0;
 };
 
 // Puro: horizonte de `depthSlots` frames mas nuevos de la ventana de 72 h y,
