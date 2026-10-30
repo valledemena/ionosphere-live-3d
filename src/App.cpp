@@ -1604,8 +1604,14 @@ bool App::init(int width, int height, const char* title) {
                         self->impl->depthCv.wait_for(lk, std::chrono::seconds(1));
                     },
                     []() {
+                        // Reloj de PARED (system_clock, no steady): el equipo
+                        // suspendido suele no contar tiempo en steady, y el
+                        // proposito de este bucle es rellenar los huecos de
+                        // suspension — tras un salto del reloj de pared el
+                        // plazo expira al instante. NTP hacia atras: solo
+                        // espera un poco mas (aceptable).
                         return std::chrono::duration<double>(
-                                   std::chrono::steady_clock::now()
+                                   std::chrono::system_clock::now()
                                        .time_since_epoch()).count();
                     });
                 if (!runCycle)
