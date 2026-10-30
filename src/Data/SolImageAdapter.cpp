@@ -71,7 +71,7 @@ void SolImageAdapter::init() {
     SolImage b = getImage(SolProduct::DrapGlobal);
     printf("[Sol] ready: lasco=%s drap=%s (cache dir '%s')\n",
            a.valid ? (a.fromCache ? "cached" : "live") : "none",
-           b.valid ? (b.fromCache ? "cached" : "live") : "none", cacheDir_.c_str());
+           b.valid ? (b.fromCache ? "cached" : "live") : "none", effectiveCacheDir().c_str());
 }
 
 const char* SolImageAdapter::urlFor(SolProduct product) {
@@ -255,10 +255,11 @@ bool SolImageAdapter::readCacheFile(const std::string& path,
 }
 
 void SolImageAdapter::restoreCache() {
-    if (cacheDir_.empty()) return;
+    const std::string dir = effectiveCacheDir();
+    if (dir.empty()) return;   // defensa: effectiveCacheDir nunca vacio hoy
     for (int i = 0; i < 2; ++i) {
         const SolProduct prod = (SolProduct)i;
-        const std::string path = cacheDir_ + "/" + cacheFileName(prod);
+        const std::string path = dir + "/" + cacheFileName(prod);
         std::vector<unsigned char> body;
         double epoch = 0.0;
         if (!readCacheFile(path, body, epoch)) continue;
@@ -284,8 +285,9 @@ void SolImageAdapter::restoreCache() {
 
 bool SolImageAdapter::saveCache(SolProduct product, const std::vector<unsigned char>& body,
                                 double epoch) {
-    if (cacheDir_.empty()) return false;
-    const std::string path = cacheDir_ + "/" + cacheFileName(product);
+    const std::string dir = effectiveCacheDir();
+    if (dir.empty()) return false;   // defensa: effectiveCacheDir nunca vacio hoy
+    const std::string path = dir + "/" + cacheFileName(product);
     std::string err;
     if (!writeCacheFile(path, body, epoch, &err)) {
         fprintf(stderr, "[Sol] cache %s: %s\n", cacheFileName(product).c_str(),

@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "Ionosphere/GridLayer.h"  // TECGrid
+#include "Utils/Paths.h"           // cache configurable (Paths.h)
 
 // GloTecAdapter: obtiene el TEC ionosférico real desde NOAA SWPC GloTEC.
 //
@@ -52,9 +53,17 @@ public:
                       const std::function<void(const GridData&, double)>& onFrame,
                       GridData* newestOut, BackfillStats* stats);
     void setGridSize(int w, int h) { gridW_ = w; gridH_ = h; }
-    // Directorio del cache TEC en disco (teccache::saveFrame). El backfill no
-    // vuelve a pedir los frames que ya estan ahi.
-    void setCacheDir(const std::string& dir) { cacheDir_ = dir; }
+    // Override del directorio del cache TEC en disco (teccache::saveFrame). El
+    // backfill no vuelve a pedir los frames que ya estan ahi. VACIO = seguir la
+    // raiz global configurable (paths::cacheRootString, la familia "cache" de
+    // settings.cfg); los tests lo fijan a un directorio temporal. Resuelto EN
+    // CADA USO (effectiveCacheDir), no en construccion: los objetos pueden
+    // existir antes de que la app fije la raiz.
+    void setCacheDir(const std::string& dir) { cacheDirOverride_ = dir; }
+    std::string effectiveCacheDir() const {
+        return cacheDirOverride_.empty() ? paths::cacheRootString()
+                                         : cacheDirOverride_;
+    }
     // Hilo interrumpible: el backfill consulta esta bandera antes de cada
     // peticion (no hay sleeps largos no interrumpibles).
     void setStopFlag(const std::atomic<bool>* flag) { stop_ = flag; }
@@ -84,7 +93,7 @@ private:
     long lastHttp_ = 0;
     int lastCurl_ = 0;
     double lastRetryAfter_ = 0.0;
-    std::string cacheDir_ = "cache";
+    std::string cacheDirOverride_;   // vacio = seguir la raiz global (Paths.h)
     const std::atomic<bool>* stop_ = nullptr;
     std::atomic<long long>* netBytesSink_ = nullptr;   // C1b/medido: bytes reales
 };

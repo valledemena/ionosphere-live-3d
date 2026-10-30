@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 // Fuente, formato real y limites: ver la cabecera de AeAdapter.h.
 // Resumen verificado 2026-10-27: walk-back desde el dia UTC -> el fichero mas
 // reciente era 2026/10/11/ae261011 (dayOffset 16), 200 OK, 9624 bytes, 24
@@ -22,7 +24,11 @@ namespace {
 
 const char* const kBaseUrl = "https://wdc.kugi.kyoto-u.ac.jp/ae_realtime/data_dir";
 const char* const kUserAgent = "IonosphereLive3D/1.0";
-const char* const kCachePath = "cache/ae.txt";
+
+// Cache configurable (Paths.h): se resuelve EN EL PUNTO DE USO, no como
+// constante de arranque, porque init() restaura ficheros y puede correr
+// despues de que la app aplique el "cacheDir" de settings.cfg.
+std::string aeCachePath() { return paths::cacheRootString() + "/ae.txt"; }
 
 constexpr int kMaxBackDays = 35;          // tope de walk-back (dias hacia atras)
 constexpr size_t kMaxSamples = 1440;      // 24 h de 1 minuto
@@ -445,7 +451,7 @@ bool AeAdapter::fetch(double utc) {
         }
 
         // Cache best-effort: nunca fatal.
-        writeCacheFile(kCachePath, utc, dayStr, body);
+        writeCacheFile(aeCachePath(), utc, dayStr, body);
 
         {
             std::lock_guard<std::mutex> lk(mutex_);
@@ -461,7 +467,7 @@ bool AeAdapter::fetch(double utc) {
     {
         std::string cached, cachedDay;
         double cachedEpoch = 0.0;
-        if (readCacheFile(kCachePath, cached, cachedEpoch, cachedDay) && !cachedDay.empty()) {
+        if (readCacheFile(aeCachePath(), cached, cachedEpoch, cachedDay) && !cachedDay.empty()) {
             int cy = 0, cm = 0, cd = 0;
             if (parseYmd(cachedDay, cy, cm, cd)) {
                 AeSnapshot cs;

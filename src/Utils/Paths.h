@@ -33,4 +33,35 @@ std::filesystem::path userDataDir();
 // entre carpetas). La UI debe declararlo, no ocultarlo.
 bool userDataDirFallback();
 
+// Raiz del cache RELATIVO de datos (la familia "cache" de la app: frames GloTEC,
+// kc2g, IRTAM, imagenes solares, flares, AE, RBE, Voyager...). Por defecto es
+// el "cache" relativo de siempre; App::applyCacheDirectory la completa con la
+// clave "cacheDir <ruta>" de settings.cfg ANTES de crear los adaptadores (los
+// defaults de sus ficheros de cache se resuelven en cada construccion; los
+// workers que abren ficheros tambien se ejecutan despues).
+//
+// Por que global y no 7 setters: una sola fuente de verdad para todos los
+// adaptadores con cache de disco; cambiar de raiz es una sola asignacion antes
+// del arranque de hilos, sin carreras.
+//
+// NOTA: la familia "data/cache" (DataManager, EsaAdapter, SdoImageAdapter) es
+// un arbol deliberadamente DISTINTO (datos de arte/estaticos) y no pasa por
+// aqui; la cache de TLE ya vive en userDataDir().
+void setCacheRoot(const std::filesystem::path& root);
+std::filesystem::path cacheRoot();
+
+// Comodidad para adaptadores que hablan en std::string (teccache::saveFrame,
+// irtamccache::loadCached...): equivalente a cacheRoot().string(). La familia
+// "cache" produce solo ficheros de nombre ASCII (tec_*.bin, *.gif, *.json);
+// si la raiz configurada trajera caracteres no-ASCII y una escritura fallara,
+// el fallo aparece como "open failed" del propio fichero, sin silencios.
+//
+// PORTABILIDAD DEL VALOR GUARDADO: la ruta viva como std::string (ANSI/ACP en
+// Windows), y asi se persiste en settings.cfg y se rele con fs::path(std::string).
+// La ida y vuelta es COHERENTE en una maquina (mismo ACP al escribir y leer),
+// pero un settings.cfg con cacheDir no-ASCII NO es portable entre equipos con
+// paginas de codigo distintas. La familia "cache" nunca: los ficheros son ASCII;
+// solo la raiz configurada puede diferir.
+std::string cacheRootString();
+
 }  // namespace paths

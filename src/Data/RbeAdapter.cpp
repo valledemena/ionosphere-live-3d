@@ -11,6 +11,8 @@
 #include <thread>
 #include <utility>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 // Endpoints DONKI RBE, en orden de intento (ver RbeAdapter.h). El primero es
 // el verificado vivo el 2026-10-27; los otros dos son espejos del mismo
 // servicio que ya usa FlareAdapter para el mismo host.
@@ -27,9 +29,12 @@ namespace {
 constexpr double kWindowDays = 58.0;               // DONKI corta en 60 dias
 constexpr double kCacheMaxAgeSec = 24.0 * 3600.0;  // cache servible como mucho 24 h
 constexpr size_t kEventCap = 8;                    // tope de eventos publicados
-const char* const kCacheDir = "cache";
-const char* const kCacheFile = "cache/rbe.json";
-const char* const kCacheTmp = "cache/rbe.json.tmp";
+
+// Cache configurable (Paths.h): se resuelve EN EL PUNTO DE USO, no como
+// constante de arranque, porque init() restaura ficheros y puede correr
+// despues de que la app aplique el "cacheDir" de settings.cfg.
+std::string rbeCacheFile() { return paths::cacheRootString() + "/rbe.json"; }
+std::string rbeCacheTmp() { return paths::cacheRootString() + "/rbe.json.tmp"; }
 
 // ---- Utilidades de fecha (misma aritmetica que CmeAdapter/FlareAdapter) ----
 
@@ -333,7 +338,7 @@ bool RbeAdapter::parseRbe(const std::string& json, double nowUtc, RbeSnapshot& o
 }
 
 bool RbeAdapter::readCache(std::string& body, double& epoch) {
-    FILE* fp = std::fopen(kCacheFile, "rb");
+    FILE* fp = std::fopen(rbeCacheFile().c_str(), "rb");
     if (!fp) return false;
     std::string all;
     char buf[4096];
@@ -358,10 +363,10 @@ bool RbeAdapter::readCache(std::string& body, double& epoch) {
 void RbeAdapter::writeCache(double epoch, const std::string& body) {
     if (body.empty() || !(epoch > 0.0)) return;
     std::error_code ec;
-    std::filesystem::create_directories(kCacheDir, ec);
+    std::filesystem::create_directories(paths::cacheRoot(), ec);
     if (ec) return;
     // Temporal + rename: nunca dejar un cache a medias si se corta.
-    FILE* fp = std::fopen(kCacheTmp, "wb");
+    FILE* fp = std::fopen(rbeCacheTmp().c_str(), "wb");
     if (!fp) return;
     char head[48];
     const int hn = std::snprintf(head, sizeof(head), "RBE1 %.0f\n", epoch);
@@ -369,11 +374,11 @@ void RbeAdapter::writeCache(double epoch, const std::string& body) {
     ok = ok && std::fwrite(body.data(), 1, body.size(), fp) == body.size();
     if (std::fclose(fp) != 0) ok = false;
     if (!ok) {
-        std::filesystem::remove(kCacheTmp, ec);
+        std::filesystem::remove(rbeCacheTmp(), ec);
         return;
     }
-    std::filesystem::rename(kCacheTmp, kCacheFile, ec);
-    if (ec) std::filesystem::remove(kCacheTmp, ec);
+    std::filesystem::rename(rbeCacheTmp(), rbeCacheFile(), ec);
+    if (ec) std::filesystem::remove(rbeCacheTmp(), ec);
 }
 
 bool RbeAdapter::fetch(double utc) {

@@ -48,6 +48,8 @@
 #include <string>
 #include <vector>
 
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
+
 // Producto. El orden fija el indice interno (0..1).
 enum class SolProduct { LascoC2 = 0, DrapGlobal = 1 };
 
@@ -83,9 +85,16 @@ public:
     // bien). La UI lo pone bajo "No image available yet".
     std::string getErrorMessage(SolProduct product) const;
 
-    // Directorio del cache (por defecto "cache"). Debe fijarse antes de init()
-    // si se quiere otro sitio.
-    void setCacheDir(const std::string& dir) { cacheDir_ = dir; }
+    // Override del directorio del cache. VACIO = seguir la raiz global
+    // configurable (paths::cacheRootString, la familia "cache" de
+    // settings.cfg); los tests lo fijan a un directorio temporal. Resuelto EN
+    // CADA USO (effectiveCacheDir), no en construccion: el objeto es miembro
+    // de App::Impl y se construye antes de que la app fije la raiz.
+    void setCacheDir(const std::string& dir) { cacheDirOverride_ = dir; }
+    std::string effectiveCacheDir() const {
+        return cacheDirOverride_.empty() ? paths::cacheRootString()
+                                         : cacheDirOverride_;
+    }
     static std::string cacheFileName(SolProduct product);
 
     // URL y nombre/atribucion de cada producto (puros, sin red).
@@ -125,5 +134,5 @@ private:
     double lastFetchUtc_[2] = {0.0, 0.0};
     std::string err_[2];   // motivo por producto ("" = ultimo intento bien)
     std::atomic<bool> fetching_{false};
-    std::string cacheDir_ = "cache";
+    std::string cacheDirOverride_;   // vacio = seguir la raiz global (Paths.h)
 };

@@ -109,7 +109,7 @@ bool IrtamCoeffAdapter::fetchURL(const std::string& url,
 
 CacheHave IrtamCoeffAdapter::scan() {
     CacheHave have;
-    const irtamccache::ScanResult sweep = irtamccache::loadCached(dir_);
+    const irtamccache::ScanResult sweep = irtamccache::loadCached(effectiveCacheDir());
     for (const irtamccache::Bucket& b : sweep.buckets) {
         // Nombre "irtamc_<param>_<epoch>.txt": param en minusculas; el plan
         // usa forma display ("foF2"): se mapea de vuelta aqui.
@@ -168,7 +168,7 @@ bool IrtamCoeffAdapter::fetchOnce(const FetchTarget& t) {
     const std::vector<uint8_t> bytes(body.begin(), body.end());
     // serverLastMod "": el sidecar lo admite (fallback honesto P2); la edad
     // del dato (DATA-age, red line) viene del TOV del mensaje, no del HTTP.
-    if (!irtamccache::saveBucket(dir_, t.param, t.epoch, bytes.data(),
+    if (!irtamccache::saveBucket(effectiveCacheDir(), t.param, t.epoch, bytes.data(),
                                  bytes.size(), "")) {
         error_ = "cache-reject (gate tamano o escritura)";
         return false;

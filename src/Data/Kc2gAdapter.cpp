@@ -1,5 +1,6 @@
 #include "Kc2gAdapter.h"
 #include "Data/Kc2gCache.h"
+#include "Utils/Paths.h"  // cache configurable (Paths.h)
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
@@ -630,7 +631,7 @@ bool Kc2gAdapter::fetch(double nowUtc) {
             cr.cs = (int)(r.cs + 0.5f);
             f.rows.push_back(std::move(cr));
         }
-        kc2gcache::saveFrame("cache", f);
+        kc2gcache::saveFrame(paths::cacheRootString(), f);
     }
     printf("[Kc2gAdapter] failover: %d/%d usable rows (%d grid, %d stale, fresh %.1f min)\n",
            st.panelUsable, st.rows, st.gridUsable, st.stale,

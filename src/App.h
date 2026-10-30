@@ -38,6 +38,13 @@ private:
     void restoreKc2gCache();  // FASE B (P2): historia kc2g desde cache/ (init)
     void saveSettings();      // GUI -> settings.cfg (working dir)
     void loadSettings();      // settings.cfg -> GUI (si existe)
+    // Raiz del cache de datos (Paths.h) desde settings.cfg: la clave
+    // "cacheDir <ruta>" (con espacios) DEBE aplicarse como PRIMERA instruccion
+    // de App::init, antes de los init() de adaptadores (que restauran ficheros
+    // de cache) y de la creacion de hilos (histPreload, catalogPreload,
+    // irtamBackfill, fetchThread). loadSettings la re-aplica si el fichero
+    // cambio (setCacheRoot es no-op si el valor no cambio, con mutex).
+    void applyCacheDirectory();
     void fetchWorker();       // hilo background: red+parse, publica bundles
     void consumeBundles();    // hilo principal: aplica bundles frescos a capas/UI
     // M-irtam-replay-024 (ruling R2 PERF): el render NUNCA muestrea — postea

@@ -303,6 +303,26 @@ Textures and shaders are copied next to the binary automatically.
 
 Tests (no GPU needed): `ctest --test-dir build --output-on-failure`.
 
+## Cache location
+
+Data caches (GloTEC frames, kc2g history, IRTAM coefficients, solar images,
+flares/AE/RBE/Voyager) live under a `cache/` directory relative to the working
+directory. To move the whole family (big GloTEC backfills, metered connections
+or small system drives):
+
+```
+# settings.cfg, next to the executable (store on a faster/larger disk)
+cacheDir D:\IonosData\cache
+```
+
+- The key accepts paths **with spaces**; it is applied as the very first step
+  of startup, before the network threads are created, so every frame goes to
+  the same root.
+- Without the key the behaviour is unchanged (`cache/` next to the binary).
+- The satellite TLE cache and the static `data/cache` tree live elsewhere by
+  design (`%LOCALAPPDATA%\IonosphereLive3D\` and the install dir); they are
+  not affected by `cacheDir`.
+
 ## Layout
 
 ```

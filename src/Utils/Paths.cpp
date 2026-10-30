@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <string>
 
 namespace paths {
@@ -54,6 +55,33 @@ fs::path resolveBase() {
 }  // namespace
 
 bool userDataDirFallback() { return g_fallback; }
+
+// Raiz del cache relativo: por defecto el "cache" del CWD de toda la vida.
+// App la completa desde settings.cfg (cacheDir <ruta>) ANTES de crear hilos;
+// ver Paths.h.
+//
+// Acceso protegido: loadSettings re-aplica la clave mientras los workers ya
+// corren. La asignacion y la lectura replican el path bajo mutex, y
+// setCacheRoot no escribe si el valor no cambia (evita un peaje por llamada
+// repetida con el mismo valor).
+std::mutex g_cacheMutex;
+fs::path g_cacheRoot = "cache";
+
+void setCacheRoot(const fs::path& root) {
+    std::lock_guard<std::mutex> lk(g_cacheMutex);
+    if (root == g_cacheRoot) return;   // idempotente, sin escritura inutil
+    g_cacheRoot = root;
+}
+
+fs::path cacheRoot() {
+    std::lock_guard<std::mutex> lk(g_cacheMutex);
+    return g_cacheRoot;
+}
+
+std::string cacheRootString() {
+    std::lock_guard<std::mutex> lk(g_cacheMutex);
+    return g_cacheRoot.string();
+}
 
 fs::path userDataDir() {
     static const fs::path cached = []() -> fs::path {

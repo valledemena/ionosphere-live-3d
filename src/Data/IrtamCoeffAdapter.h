@@ -27,6 +27,7 @@
 // P1b hara flip aditivo (rellena + valid=true, sin tocar tipos ni wiring).
 // =============================================================================
 #include "Ionosphere/GridLayer.h"  // GridData (estructura final del bundle)
+#include "Utils/Paths.h"           // cache configurable (Paths.h)
 
 #include <map>
 #include <string>
@@ -91,7 +92,15 @@ struct IrtamBundle {
 class IrtamCoeffAdapter {
 public:
     void init();  // solo curl_global_init + printf (sin red)
-    void setCacheDir(const std::string& d) { dir_ = d; }
+    // Override del directorio del cache P2. VACIO = seguir la raiz global
+    // configurable (paths::cacheRootString, la familia "cache" de
+    // settings.cfg); los tests lo fijan a un directorio temporal. Resuelto EN
+    // CADA USO (effectiveCacheDir), no en construccion: el objeto es miembro
+    // de App::Impl y se construye antes de que la app fije la raiz.
+    void setCacheDir(const std::string& d) { dirOverride_ = d; }
+    std::string effectiveCacheDir() const {
+        return dirOverride_.empty() ? paths::cacheRootString() : dirOverride_;
+    }
 
     // Escaneo del cache P2 (have-sets + TOV fresca). Nunca lanza.
     CacheHave scan();
@@ -115,7 +124,7 @@ private:
                                 std::string* userp);
     bool fetchURL(const std::string& url, std::string& response);
 
-    std::string dir_ = "cache";
+    std::string dirOverride_;   // vacio = seguir la raiz global (Paths.h)
     double freshestTov_ = 0.0;
     std::string error_;
 };
