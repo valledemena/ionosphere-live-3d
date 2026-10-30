@@ -32,7 +32,7 @@ int main() {
         const std::string row = formatRow(s, now);
         check_str("incluye la clave", row, "stations");
         check_str("muestra edad cache", row, "cache 0.0 h");
-        check_str("bloqueo hasta HHMM", row, "bloqueado hasta");
+        check_str("bloqueo hasta HHMM", row, "blocked until");
         check_str("marca origen host", row, "(host)");
         check_str("resume HTTP", row, "HTTP 500");
     }
@@ -43,8 +43,8 @@ int main() {
         s.key = "amateur";
         s.blockedBy = "none";
         const std::string row = formatRow(s, 1793349002.0);
-        check_str("sin cache", row, "sin cache");
-        check_bool("sin texto de bloqueo", row.find("bloqueado") == std::string::npos);
+        check_str("sin cache", row, "no cache");
+        check_bool("sin texto de bloqueo", row.find("blocked until") == std::string::npos);
     }
 
     std::printf("--- (3) blocked propio (origin) ---\n");
@@ -56,7 +56,7 @@ int main() {
         s.lastHttp = 404;
         s.blockedBy = "own";
         const std::string row = formatRow(s, 1793349002.0);
-        check_str("bloqueado propio", row, "(propio)");
+        check_str("bloqueado propio", row, "(own)");
         check_str("cache mas vieja", row, "cache 6.0 h");
     }
 
@@ -66,7 +66,7 @@ int main() {
         s.key = "x";
         s.cacheEpoch = 1793349002.0 + 100.0;   // cache "del futuro"
         const std::string row = formatRow(s, 1793349002.0);
-        check_str("no dice cache negativa", row, "sin cache");
+        check_str("no dice cache negativa", row, "no cache");
         check_bool("nunca expone edad negativa en el texto", row.find("cache -") == std::string::npos);
     }
 

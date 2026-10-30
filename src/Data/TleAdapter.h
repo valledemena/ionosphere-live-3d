@@ -145,16 +145,16 @@ public:
     // Sustituye el transporte HTTP. Vaciar el function vuelve a curl.
     void setTransport(Transport t) { transport_ = std::move(t); }
     // Fija cache, cache de SatNOGS y sidecar, y limpia el estado en memoria.
-    // Copia del estado por grupo (para el panel por grupo). SIN E/S en el hilo
-    // de UI: lectura bajo mutex del snapshot que se actualiza al FINAL de cada
-    // pase; nunca lee el disco ni llama a gateFor() por frame. `nowUtc` solo
-    // sirve para calcular la edad de la cache en tiempo real.
-    using GroupStatus = tlegroupstatus::Status;
-    std::vector<GroupStatus> groupStatuses(double nowUtc);
-
     void setPathsForTests(const std::filesystem::path& cache,
                           const std::filesystem::path& satnogsCache,
                           const std::filesystem::path& state);
+
+    // Copia del estado por grupo (para el panel por grupo). SIN E/S en el hilo
+    // de UI: lectura bajo mutex del snapshot que se actualiza al FINAL de cada
+    // pase; nunca lee el disco ni llama a gateFor() por frame. `nowUtc` solo
+    // se usa para calcular edades en el texto (formatRow).
+    using GroupStatus = tlegroupstatus::Status;
+    std::vector<GroupStatus> groupStatuses();
     // Relee el sidecar con un reloj explicito (simula un reinicio sin init()).
     void loadStateForTests(double nowUtc);
     // C2b: pausa entre peticiones de red a grupos distintos. Por defecto son

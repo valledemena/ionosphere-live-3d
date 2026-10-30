@@ -5785,13 +5785,15 @@ void App::render() {
             ImGui::SetItemTooltip("CelesTrak groups fetched and merged by NORAD (duplicate keeps the newest EPOCH). Each group has its own rate-limit gate: a 403 in one does not silence the others.");
         // Panel por grupo: estado copiado del adaptador al final de cada pase,
         // bajo mutex, sin IO ni gateFor() en el hilo de UI.
-        if (impl->satVisible && !impl->satAdapter.groupStatuses(tNowUi).empty() &&
-            ImGui::TreeNode("Puertas por grupo (TLE)")) {
-            for (const auto& st : impl->satAdapter.groupStatuses(tNowUi)) {
-                ImGui::BulletText("%s",
-                                  tlegroupstatus::formatRow(st, tNowUi).c_str());
+        if (impl->satVisible) {
+            auto _g = impl->satAdapter.groupStatuses();
+            if (!_g.empty() && ImGui::TreeNode("Per-group TLE gates")) {
+                for (const auto& st : _g) {
+                    ImGui::BulletText("%s",
+                                      tlegroupstatus::formatRow(st, tNowUi).c_str());
+                }
+                ImGui::TreePop();
             }
-            ImGui::TreePop();
         }
     }
     if (impl->satAdapter.isFetching()) {

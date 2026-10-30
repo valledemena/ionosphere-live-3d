@@ -39,20 +39,26 @@ inline std::string formatRow(const Status& s, double nowUtc) {
     if (age >= 0.0) {
         char ba[32];
         std::snprintf(ba, sizeof(ba), "%.1f h", age / 3600.0);
-        out += ": cache " + string(ba) + " ago";
+        out += ": cache " + string(ba) + " old";
     } else {
-        out += ": sin cache";
+        out += ": no cache";
     }
     const double rem = s.blockedUntilUtc - nowUtc;
     if (rem > 0.0) {
         std::time_t tt = static_cast<std::time_t>(s.blockedUntilUtc);
-        std::tm* tm = std::gmtime(&tt);
-        char bt[8] = "";
-        if (tm) std::snprintf(bt, sizeof(bt), "%02d:%02d", tm->tm_hour, tm->tm_min);
-        out += ", bloqueado hasta " + string(bt);
+        std::tm bufin{};
+        std::tm* tm = nullptr;
+#if defined(_WIN32)
+        if (gmtime_s(&bufin, &tt) == 0) tm = &bufin;
+#else
+        if (gmtime_r(&tt, &bufin) != nullptr) tm = &bufin;
+#endif
+        char bt[12] = "";
+        if (tm) std::snprintf(bt, sizeof(bt), "%02d:%02d UTC", tm->tm_hour, tm->tm_min);
+        out += ", blocked until " + string(bt);
         const char* why = nullptr;
         if (s.blockedBy == "host") why = " (host)";
-        else if (s.blockedBy == "own") why = " (propio)";
+        else if (s.blockedBy == "own") why = " (own)";
         if (why) out += why;
         if (s.lastHttp > 0) {
             char hh[16];
