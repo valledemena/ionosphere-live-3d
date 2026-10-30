@@ -19,6 +19,7 @@
 #include <sstream>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -151,9 +152,15 @@ struct App::Impl {
     // M0.2: las precargas en background pasan de detach() a miembros joinables
     // (cerrar la ventana durante una precarga podia usar impl tras liberarlo).
     std::thread histPreloadThread;
-    // Mutex shared between the periodic backfill and the main fetchWorker to
-    // avoid concurrent downloads that overwrite each other's frames.
+    // Mutex compartido entre el backfill (precarga inicial y periodo) y el
+    // worker: las descargas GloTEC no pueden entrelazarse. La precarga lo
+    // Tomado EN LARGO (va a durar minutos); el worker lo intenta con
+    // try_lock y salta el pase de TEC si esta ocupado.
     std::mutex tecDownloadMutex;
+    // Despertar YA al hilo de precarga/periódico cuando la UI cambia la
+    // profundidad (no esperar al siguiente ciclo de 1 h).
+    std::mutex depthCvMutex;
+    std::condition_variable depthCv;
     std::thread catalogPreloadThread;
     std::thread irtamBackfillThread;  // M-IRTAM-F2 (P4): backfill gambit (joinable, M0.2)
     std::atomic<bool> shutdownRequested{false};
@@ -526,7 +533,11 @@ struct App::Impl {
     // M10 (cache TEC en disco): settings + estado de restore.
     bool tecCacheEnabled = true;
     double tecCacheMaxAgeH = 72.0;   // >maxAge puebla replay, no current
-    int tecDepthSlots = 36;          // C1b: 36/144/432 = 6/24/72 h de backfill
+    // C1b: 36/144/432 = 6/24/72 h de backfill. atomic: la UI lo escribe y el
+    // hilo de precarga lo lee cuando arranca cada pasada (precarga inicial y
+    // periodico; el cambio actua en la proxima pasada, y la UI despierta el
+    // hilo con depthCv para que no espere la hora).
+    std::atomic<int> tecDepthSlots{36};
     std::atomic<bool> cacheLoaded{false};     // init-read con frames reales
     std::atomic<double> cacheNewestEpoch{-1.0};
     std::atomic<int> cacheRestored{0};
@@ -1551,7 +1562,7 @@ bool App::init(int width, int height, const char* title) {
                         cachedEp.push_back(f.timestamp);
                 }
                 const double nowPre = (double)std::time(nullptr);
-                const int depth = glm::clamp(self->impl->tecDepthSlots, 36, 432);
+                const int depth = glm::clamp(self->impl->tecDepthSlots.load(), 36, 432);
                 std::vector<glotbf::IndexFrame> pure;
                 pure.reserve(idx.size());
                 for (const auto& e : idx) pure.push_back({e.url, e.timeUtc});
@@ -1560,28 +1571,46 @@ bool App::init(int width, int height, const char* title) {
                 self->impl->histDone.store(0);
                 self->impl->histTotal.store((int)todo.size());
                 GloTecAdapter::BackfillStats st;
-                loader.backfillFrom(idx, cachedEp, nowPre, depth,
-                    [self](const GridData& fr, double ts) {
-                        self->pushHistoryFrame(fr, ts, false);
-                        self->impl->histDone.fetch_add(1);
-                    }, nullptr, &st);
+                // Mismo mutex que el worker: el backfill grande del arranque
+                // no puede entrelazarse con fetchTEC del worker (el worker
+                // salta el pase con try_lock mientras esto dura).
+                {
+                    std::lock_guard<std::mutex> dlk(self->impl->tecDownloadMutex);
+                    loader.backfillFrom(idx, cachedEp, nowPre, depth,
+                        [self](const GridData& fr, double ts) {
+                            self->pushHistoryFrame(fr, ts, false);
+                            self->impl->histDone.fetch_add(1);
+                        }, nullptr, &st);
+                }
                 printf("[App] History preload: %d cached + %d fetched (%d planned, depth %d)\n",
                        st.cached, st.stored, st.planned, depth);
             }
             self->impl->histLoading.store(false);
 
-            // Periodic backfill and cleanup
+            // Periodic backfill and cleanup.
             while (!self->impl->shutdownRequested.load()) {
-                // Sleep for 1 hour (3600 seconds) but check for shutdown every second
-                for (int i = 0; i < 3600 && !self->impl->shutdownRequested.load(); i++)
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                // Espera 1 h — pero DESPIERTA YA si la UI cambia la
+                // profundidad (depthCv + atomic) o se pide cierre (max 1 s de
+                // latencia por re-chequeo, como antes). Antes: 3600 sleeps de
+                // 1 s ciegos al cambio de profundidad.
+                const int lastDepth = self->impl->tecDepthSlots.load();
+                while (!self->impl->shutdownRequested.load() &&
+                       self->impl->tecDepthSlots.load() == lastDepth) {
+                    std::unique_lock<std::mutex> lk(self->impl->depthCvMutex);
+                    self->impl->depthCv.wait_for(lk, std::chrono::seconds(1));
+                }
                 if (self->impl->shutdownRequested.load())
                     break;
 
-                // Periodic backfill: fill suspension holes in the window of the last `tecDepthSlots` frames
-                self->impl->histLoading.store(false); // We don't want to show loading for periodic backfill
+                // Periodic backfill: fill suspension holes in the last
+                // `tecDepthSlots` window. Sin contadores de UI (histLoading/
+                // histDone quedan quietos para no ensuciar el historial del
+                // arranque).
+                const int depth = glm::clamp(self->impl->tecDepthSlots.load(), 36, 432);
+                // Mismo mutex largo que la precarga inicial: serializa con el
+                // worker, que salta el pase con try_lock mientras esto dura.
                 std::lock_guard<std::mutex> dlk(self->impl->tecDownloadMutex);
-                GloTecAdapter loaderPeriodic;   // we can reuse the same loader or create a new one
+                GloTecAdapter loaderPeriodic;   // instancia propia, sin estado
                 loaderPeriodic.setGridSize(72, 72);
                 loaderPeriodic.setStopFlag(&self->impl->shutdownRequested);
                 std::vector<GloTecFrame> idxPeriodic;
@@ -1592,23 +1621,18 @@ bool App::init(int width, int height, const char* title) {
                         for (const auto& f : self->impl->tecHist)
                             cachedEp.push_back(f.timestamp);
                     }
-                    const double nowPre = (double)std::time(nullptr);
-                    const int depth = glm::clamp(self->impl->tecDepthSlots, 36, 432);
-                    std::vector<glotbf::IndexFrame> pure;
-                    pure.reserve(idxPeriodic.size());
-                    for (const auto& e : idxPeriodic) pure.push_back({e.url, e.timeUtc});
-                    const std::vector<glotbf::IndexFrame> todo =
-                        glotbf::plan(pure, cachedEp, nowPre, depth);
-                    // We don't set histLoading or histDone for periodic backfill to avoid UI noise
+                    const double nowPer = (double)std::time(nullptr);
+                    // Sin plan() aparte: backfillFrom planifica por dentro (y
+                    // reporta st.planned); el `todo` de aqui no se usaba
+                    // (warning con -Wall) y solo gastaba CPU.
                     GloTecAdapter::BackfillStats st;
-                    loaderPeriodic.backfillFrom(idxPeriodic, cachedEp, nowPre, depth,
+                    loaderPeriodic.backfillFrom(idxPeriodic, cachedEp, nowPer, depth,
                         [self](const GridData& fr, double ts) {
                             self->pushHistoryFrame(fr, ts, false);
-                            // No increment of histDone for periodic backfill
                         }, nullptr, &st);
-                    // Optionally, we can log if we stored any frames
                     if (st.stored > 0) {
-                        printf("[App] Periodic backfill: stored %d frames\n", st.stored);
+                        printf("[App] Periodic backfill: stored %d frames (planned %d, depth %d)\n",
+                               st.stored, st.planned, depth);
                     }
                 }
 
@@ -3153,7 +3177,7 @@ void App::saveSettings() {
     fprintf(f, "voyWinH %g\n", (double)impl->voyagerGeom.h);
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
-    fprintf(f, "tecDepthSlots %d\n", impl->tecDepthSlots);               // C1b
+    fprintf(f, "tecDepthSlots %d\n", impl->tecDepthSlots.load());       // C1b
     fclose(f);
 }
 
@@ -3274,7 +3298,7 @@ void App::loadSettings() {
         else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
         else if (k == "tecDepthSlots") {   // C1b: solo 36/144/432 (6/24/72 h)
             const int d = (int)v;
-            impl->tecDepthSlots = (d == 144 || d == 432) ? d : 36;
+            impl->tecDepthSlots.store((d == 144 || d == 432) ? d : 36);
         }
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
@@ -3455,6 +3479,7 @@ void App::fetchWorker() {
             {
                 static double gloLastAttemptUtc = 0.0;
                 static bool gloLastAttemptOk = false;
+                bool skip = false;   // backfill en curso: pase sin fetch
                 GridData g;
                 bool ok;
                 long long gloDt = (long long)(epoch - gloLastAttemptUtc);
@@ -3462,17 +3487,28 @@ void App::fetchWorker() {
                     ok = (gloLastAttemptOk && glo.getGrid().valid);
                 } else {
                     // C1b: profundidad minima en el worker (solo huecos
-                    // recientes); el backfill largo lo hace la precarga en su
-                    // hilo para no bloquear solar wind/aurora/Kp en este.
-                    std::lock_guard<std::mutex> dlk(impl->tecDownloadMutex);
-                    ok = glo.fetchTEC(epoch, 3);
-                    gloLastAttemptOk = ok;
-                    gloLastAttemptUtc = epoch;
+                    // recientes); el backfill largo corre en el hilo de
+                    // precarga.
+                    // try_lock (no lock): si el backfill lleva el mutex
+                    // (minutos: 1 req/s x hasta 432 frames), NO bloqueamos a
+                    // solar wind/aurora/Kp — que comparten ESTE hilo. Salto
+                    // de pase sin contar intento: el siguiente, ya libre,
+                    // reintenta (sin tocar gloLastAttemptUtc).
+                    std::unique_lock<std::mutex> dlk(impl->tecDownloadMutex,
+                                                     std::try_to_lock);
+                    if (!dlk.owns_lock()) {
+                        skip = true;
+                        ok = glo.getGrid().valid;
+                    } else {
+                        ok = glo.fetchTEC(epoch, 3);
+                        gloLastAttemptOk = ok;
+                        gloLastAttemptUtc = epoch;
+                    }
                 }
                 bool sim = false;
                 if (ok) {
                     g = glo.getGrid();
-                } else if (!haveTec && !impl->cacheLoaded.load()) {  // M10: con cache real, nada de mock
+                } else if (!skip && !haveTec && !impl->cacheLoaded.load()) {  // M10: con cache real, nada de mock
                     esa.fetchTEC(epoch);
                     g.width = esa.getData().width;
                     g.height = esa.getData().height;
@@ -6477,32 +6513,29 @@ void App::render() {
                 ImGui::Text("LIVE  (loading history %d/%d, %.1f MB)",
                     impl->histDone.load(), impl->histTotal.load(), mb);
                 if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Downloading past GloTEC frames in the background for instant replay (about 1 frame/s).");
-                // Depth selector for history
-                ImGui::Separator();
-                ImGui::Text("History depth");
-                const char* depthLabels[] = { "6h", "24h", "72h" };
-                int depthIndex = 0;
-                if (impl->tecDepthSlots == 36) depthIndex = 0;
-                else if (impl->tecDepthSlots == 144) depthIndex = 1;
-                else if (impl->tecDepthSlots == 432) depthIndex = 2;
-                else depthIndex = 0;
-                if (ImGui::Combo("##depth", &depthIndex, depthLabels, 3)) {
-                    int newSlots = 0;
-                    if (depthIndex == 0) newSlots = 36;
-                    else if (depthIndex == 1) newSlots = 144;
-                    else if (depthIndex == 2) newSlots = 432;
-                    if (newSlots != impl->tecDepthSlots) {
-                        impl->tecDepthSlots = newSlots;
-                        // Note: depth change requires restart to re-run backfill with new depth.
-                        // For immediate effect, the histPreloadThread would need to be restarted.
-                    }
-                }
-                ImGui::SameLine();
-                HelpMarker("Select how many hours of past TEC frames to keep for replay. "
-                           "Increasing depth may require re-downloading missed frames on next start.");
             } else {
                 ImGui::Text("LIVE  (%d frames)", nfr);
             }
+            // Selector de profundidad SIEMPRE visible (antes solo durante la
+            // carga del hist rico, que es justo cuando no lo buscas).
+            ImGui::Separator();
+            ImGui::Text("History depth");
+            const char* depthLabels[] = { "6h", "24h", "72h" };
+            int depthIndex = 0;
+            const int curSlots = impl->tecDepthSlots.load();
+            if (curSlots == 144) depthIndex = 1;
+            else if (curSlots == 432) depthIndex = 2;
+            if (ImGui::Combo("##depth", &depthIndex, depthLabels, 3)) {
+                const int newSlots = (depthIndex == 1) ? 144 : (depthIndex == 2) ? 432 : 36;
+                if (newSlots != curSlots) {
+                    impl->tecDepthSlots.store(newSlots);
+                    impl->depthCv.notify_all();   // el periodo actua YA (no a la hora)
+                }
+            }
+            ImGui::SameLine();
+            HelpMarker("Select how many hours of past TEC frames to keep for replay. "
+                       "The next periodic backfill (hourly, or immediately on change) "
+                       "uses this depth; also applied after app restart.");
             if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Live mode shows the latest TEC grid. Frames (live + preloaded history, up to 432) feed the replay. GIRO station history: %.1f h.", gs.histHours);
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
