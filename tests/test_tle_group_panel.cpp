@@ -32,7 +32,7 @@ int main() {
         const std::string row = formatRow(s, now);
         check_str("incluye la clave", row, "stations");
         check_str("muestra edad cache", row, "cache 0.0 h");
-        check_str("bloqueo hasta HHMM", row, "blocked until");
+        check_str("bloqueo hasta HHMM", row, "blocked until 10:30 UTC");
         check_str("marca origen host", row, "(host)");
         check_str("resume HTTP", row, "HTTP 500");
     }

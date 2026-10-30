@@ -1120,16 +1120,15 @@ bool TleAdapter::fetchSatnogs(double utc, TleSnapshot& out, std::string& err) {
 }
 
 bool TleAdapter::fetch(double utc) {
-    // Snapshot invalido si se lanza -> garantiza que el panel por grupo sea
-    // coherente incluso si acaba por cache, por SatNOGS o por error.
-    // coherente incluso si acaba por cache, por SatNOGS o por error.
-    struct _Guard {
+    // Guardián RAII: refresca el snapshot del panel por grupo al salir de
+    // fetch(), tambien en SatNOGS, cache y salidas anticipadas.
+    struct SnapshotGuard {
         TleAdapter* self = nullptr;
         double utc = 0.0;
-        ~_Guard() { if (self) self->refreshGroupStatusSnapshot(utc); }
-    } g;
-    g.self = this;
-    g.utc = utc;
+        ~SnapshotGuard() { if (self) self->refreshGroupStatusSnapshot(utc); }
+    } guard;
+    guard.self = this;
+    guard.utc = utc;
 
     std::vector<std::string> keys;
     {
@@ -1256,13 +1255,14 @@ bool TleAdapter::fetch(double utc) {
 }
 
 bool TleAdapter::serveSatnogs(double utc, const std::string& why) {
-    struct _Guard {
+    // Guardián RAII: refresco del snapshot por grupo al salir (igual que fetch).
+    struct SnapshotGuard {
         TleAdapter* self = nullptr;
         double utc = 0.0;
-        ~_Guard() { if (self) self->refreshGroupStatusSnapshot(utc); }
-    } g;
-    g.self = this;
-    g.utc = utc;
+        ~SnapshotGuard() { if (self) self->refreshGroupStatusSnapshot(utc); }
+    } guard;
+    guard.self = this;
+    guard.utc = utc;
 
     TleSnapshot snap;
     std::string err = why;
