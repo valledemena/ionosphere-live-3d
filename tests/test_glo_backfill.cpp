@@ -14,6 +14,9 @@
 //   (7) ritmo >= 1 s entre peticiones,
 //   (8) profundidad 36/144/432 limita las peticiones,
 //   (9) stop() interrumpe antes de la siguiente peticion.
+//   (10) netBytes: bytes de red REALES del pase (un 200 o un error con
+//       cuerpo gastan cuota; la cache no suma; transporte puro 0) y un 429
+//       aislado NO para el pase.
 // =============================================================================
 #include "Data/GloTecBackfill.h"
 
@@ -352,6 +355,57 @@ int main() {
         glotbf::Result r = glotbf::run(idx, {}, t0, opt, tr, countingStore, sleepFn, stop);
         check_bool("parada por el llamante", r.stoppedByCaller);
         check_int("no pide el resto", (int)r.requested.size(), 3);
+    }
+
+    std::printf("--- C1b/medido: bytes de red REALES en el pase ---\n");
+    {
+        // 4 frames, el mas viejo ya en cache. plan() filtra la cache ANTES del
+        // bucle y el pase recorre nuevo -> viejo: el transporte ve solo
+        // idx[0], idx[1], idx[2], EN ESE ORDEN (script por contador).
+        //   1o) 200 con cuerpo de 120 B      -> 120 B de red
+        //   2o) 429 SIN cuerpo, Retry-After 1 s (1 < stopAfter404=3: aislado,
+        //       NO para el pase)             -> 0 B de red (error sin cuerpo)
+        //   3o) 200 con cuerpo de 40 B       -> 40 B (prueba que SIGUE tras el 429)
+        auto idx = makeIndex(t0, 4);
+        std::vector<double> cached = {idx[3].timeUtc};
+        glotbf::Options opt;
+        opt.depthSlots = 4;
+
+        int calls = 0;
+        auto tr = [&calls](const std::string&) {
+            glotbf::Response r;
+            r.transportOk = true;
+            switch (calls++) {
+                case 0: r.http = 200; r.body = std::string(120, 'x'); break;
+                case 1: r.http = 429; r.retryAfterSec = 1.0; break;  // sin cuerpo
+                default: r.http = 200; r.body = std::string(40, '-'); break;
+            }
+            return r;
+        };
+        auto store = [](const glotbf::IndexFrame&, const std::string&) { return true; };
+        auto sleepFn = [](double) {};
+        glotbf::Result r = glotbf::run(idx, cached, t0, opt, tr, store, sleepFn, {});
+        check_int("solo se piden los no cacheados", (int)r.requested.size(), 3);
+        // La asercion fuerte de "el 429 aislado no para": el 3er frame (200)
+        // SE PIDE Y SE ALMACENA despues del 429.
+        check_int("el pase sigue tras un 429 aislado (2 200 almacenados)",
+                  (int)r.stored.size(), 2);
+        // 120 (1o) + 0 (429 sin cuerpo: una respuesta de error sin cuerpo no
+        // gasta cuota de lectura) + 40 (3o) = 160 B de red reales.
+        check_bool("netBytes = 160 (120 + 0 + 40)", r.netBytes == 160);
+
+        // Fallo de transporte puro (lastCurl_ != 0: no hay respuesta HTTP ni
+        // cuerpo). Cuenta 0 bytes, y el recuento de errores consecutivos se
+        // mantiene: al 3o (stopAfter404=3) para el pase.
+        auto trFail = [](const std::string&) {
+            glotbf::Response r;
+            r.transportOk = false;
+            return r;
+        };
+        glotbf::Result rf = glotbf::run(idx, cached, t0, opt, trFail, store, sleepFn, {});
+        check_bool("transporte puro no suma bytes", rf.netBytes == 0);
+        check_bool("para al 3er error de transporte consecutivo",
+                   rf.stoppedOnTransport);
     }
 
     std::printf("\n[test_glo_backfill] %d OK, %d FAIL\n", g_ok, g_fail);

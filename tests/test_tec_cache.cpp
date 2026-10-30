@@ -10,10 +10,12 @@
 // =============================================================================
 #include "Data/TecCache.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -214,6 +216,69 @@ int main() {
         check_bool("lleno+epoch<oldest false", !fitsInRing(C, C, 500.0, 100.0));
         check_bool("vacio true con oldest 0.0", fitsInRing(0, C, 0.0, 100.0));
         check_bool("viejo rige oldest sin ventana", !fitsInRing(C, C, 500.0, 1.0));
+    }
+
+    std::printf("--- P1b: cleanupTmpFiles (age-check) ---\n");
+    {
+        namespace fs = std::filesystem;
+        // freshDir (helper del fichero) crea y libera un directorio unico.
+        const std::string dstr = freshDir("cleanup");
+        // CASO CRITICO: un frame REAL tec_<epoch>.bin creado con saveFrame
+        // debe sobrevivir a CUALQUIER limpieza (nunca borrar datos).
+        const Frame real = makeFrame(1792937906.0, 4, 4);
+        check_bool("real frame se guarda en cache", saveFrame(dstr, real));
+        check_bool("su fichero tiene el nombre esperado",
+                   fs::exists(dstr + "/" + frameName(real.epoch)));
+        // Temporales con NOMBRES REALES de saveFrame: "tec_<epoch>.bin.tmpN"
+        // (sufijo unico: la precarga y el worker pueden guardar el mismo
+        // epoch a la vez). Uno viejo (mtime 10 h) y uno reciente, como si un
+        // escritor interrumpido dejara el .tmp a medias.
+        const std::string old =
+            dstr + "/" + frameName(real.epoch) + ".tmp7";   // saveFrame seq=7
+        {
+            std::ofstream of(old);
+            of << "chunk";
+        }
+        const std::string recent =
+            dstr + "/" + frameName(real.epoch + 600.0) + ".tmp2";
+        {
+            std::ofstream of(recent);
+            of << "chunk";
+        }
+        const std::string oldBin = dstr + "/" + frameName(1780000000.0);
+        check_bool("viejo .bin (otra epoca) se guarda tambien", saveFrame(dstr, makeFrame(1780000000.0, 2, 2)));
+        check_bool("tmp viejo existe antes de limpiar", fs::exists(old));
+        // Con mtime marcado a 10 h, maxAge 5 min: solo los tmp VIEJOS mueren.
+        auto past = fs::file_time_type::clock::now() - std::chrono::hours(10);
+        fs::last_write_time(old, past);
+        fs::last_write_time(oldBin, past);   // un .bin VIEJO sigue siendo dato
+        teccache::cleanupTmpFiles(dstr, 300.0);
+        check_bool("tmp viejo (.tmpN real) removed (maxAge check)", !fs::exists(old));
+        check_bool("tmp reciente preservado (maxAge check)", fs::exists(recent));
+        check_bool("frame REAL preservado", fs::exists(dstr + "/" + frameName(real.epoch)));
+        check_bool("bin viejo preservado (no es tmp)", fs::exists(oldBin));
+        // maxAgeSeconds=0 borra TODOS los .tmp (arranque, antes de hilos),
+        // pero los .bin NUNCA.
+        {
+            std::ofstream of(recent);   // reescribir: el anterior quedo vivo
+            of << "chunk";
+        }
+        teccache::cleanupTmpFiles(dstr, 0.0);
+        check_bool("tmp reciente removed con maxAge 0", !fs::exists(recent));
+        check_bool("frame REAL sobrevive a maxAge 0", fs::exists(dstr + "/" + frameName(real.epoch)));
+        // Fichero ajeno no tocado.
+        {
+            std::ofstream of(dstr + "/other.txt");
+            of << "x";
+        }
+        teccache::cleanupTmpFiles(dstr, 300.0);
+        check_bool("other.txt preserved after cleanup", fs::exists(dstr + "/other.txt"));
+        // Y el frame real SIGUE siendo legible despues de toda la limpieza.
+        Frame back;
+        check_bool("frame real legible tras limpiezas",
+                   loadFrame(dstr + "/" + frameName(real.epoch), back) &&
+                       back.epoch == real.epoch && back.w == 4 && back.h == 4);
+        fs::remove_all(dstr);
     }
 
     std::printf("\n[test_tec_cache] %d OK, %d FAIL\n", g_ok, g_fail);

@@ -44,6 +44,7 @@ public:
         int planned = 0;    // peticiones planificadas
         int cached = 0;     // frames del horizonte ya cacheados
         int stored = 0;     // frames obtenidos
+        long long netBytes = 0;  // bytes de red reales descargados (glotbf::Result)
     };
     bool backfillFrom(const std::vector<GloTecFrame>& index,
                       const std::vector<double>& cachedEpochs,
@@ -57,6 +58,10 @@ public:
     // Hilo interrumpible: el backfill consulta esta bandera antes de cada
     // peticion (no hay sleeps largos no interrumpibles).
     void setStopFlag(const std::atomic<bool>* flag) { stop_ = flag; }
+    // Sumidero de bytes de red REALES (C1b/medido): cada peticion del backfill
+    // (precarga o worker) suma el cuerpo recibido aqui. App lo proyecta al
+    // indicador de progreso en vivo; frames servidos de cache suman 0.
+    void setNetBytesSink(std::atomic<long long>* sink) { netBytesSink_ = sink; }
     const TECGrid& getGrid() const { return grid_; }
     double getLastFetchTime() const { return lastFetchUtc_; }
     const std::string& getErrorMessage() const { return error_; }
@@ -81,4 +86,5 @@ private:
     double lastRetryAfter_ = 0.0;
     std::string cacheDir_ = "cache";
     const std::atomic<bool>* stop_ = nullptr;
+    std::atomic<long long>* netBytesSink_ = nullptr;   // C1b/medido: bytes reales
 };

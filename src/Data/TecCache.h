@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 namespace teccache {
 
@@ -66,5 +67,9 @@ std::vector<std::size_t> missingInWindow(const std::vector<double>& cachedEpochs
 // la pena. Cabe ssi hay hueco (ringSize < cap) o epoch > oldestEpoch.
 // Puro, sin I/O ni estado; fuera-de-ventana NO es su asunto (missingInWindow).
 bool fitsInRing(std::size_t ringSize, std::size_t cap, double oldestEpoch, double epoch);
+
+// Remove temporary files matching "tec_*.tmp*" in the directory.
+// Best-effort, never throws.
+void cleanupTmpFiles(const std::string& dir, double maxAgeSeconds = 300.0);
 
 }  // namespace teccache
