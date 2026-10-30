@@ -54,7 +54,7 @@ public:
     EbroSample getLatest() const;
     double getLastFetchTime() const { return lastFetchUtc_; }
     bool isSimulated() const { return !getLatest().valid; }
-    const std::string& getErrorMessage() const { return error_; }
+    std::string getErrorMessage() const;
 
     static std::string saoFilename(double utcMinusMin);
     static bool parseSAO(const std::string& text, const std::string& fname, EbroSample& out);
