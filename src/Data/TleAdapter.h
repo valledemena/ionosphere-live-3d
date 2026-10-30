@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 #include "Data/FetchGate.h"
+#include "Utils/TleGroupStatus.h"  // panel por grupo (vista pura, sin E/S)
 #include "Data/OrbitProp.h"
 
 // Catalogo de satelites activos. Cadena de fuentes, en orden:
@@ -144,6 +145,13 @@ public:
     // Sustituye el transporte HTTP. Vaciar el function vuelve a curl.
     void setTransport(Transport t) { transport_ = std::move(t); }
     // Fija cache, cache de SatNOGS y sidecar, y limpia el estado en memoria.
+    // Copia del estado por grupo (para el panel por grupo). SIN E/S en el hilo
+    // de UI: lectura bajo mutex del snapshot que se actualiza al FINAL de cada
+    // pase; nunca lee el disco ni llama a gateFor() por frame. `nowUtc` solo
+    // sirve para calcular la edad de la cache en tiempo real.
+    using GroupStatus = tlegroupstatus::Status;
+    std::vector<GroupStatus> groupStatuses(double nowUtc);
+
     void setPathsForTests(const std::filesystem::path& cache,
                           const std::filesystem::path& satnogsCache,
                           const std::filesystem::path& state);
@@ -299,6 +307,12 @@ private:
     // Defecto sin seleccion explicita: par pequeno (C2b-31). `active` es el
     // superconjunto y solo se pide cuando alguien lo elige en la UI.
     std::vector<std::string> groupKeys_ = {"amateur", "stations"};
+
+    // Snapshot del panel por grupo, calculado en el HILO DE RED (actualizado
+    // al final de cada pase) y leido por el hilo de UI sin tocar disco ni
+    // llamar a gateFor() por frame.
+    std::vector<GroupStatus> groupStatusSnapshot_;
+    void refreshGroupStatusSnapshot(double utc);
     fetchgate::State gateSatnogs_; // puerta de SatNOGS (proveedor distinto)
     double snapshotEpoch_ = 0.0;
     std::filesystem::path cachePath_;

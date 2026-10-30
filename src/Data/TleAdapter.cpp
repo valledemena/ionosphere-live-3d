@@ -991,6 +991,7 @@ bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out,
         st2.lastHttp = (int)res.http;
         st2.lastCurl = res.curl;
         st2.retryFails = 0;
+        st2.blockedBy = "own";   // origen del bloqueo: el propio intento HTTP
         err += std::string(" [") + outcome.label + "]";
     } else if (outcome.transport || !ok) {
         // Transporte: no es una violacion de politica, solo un fallo blando
@@ -999,12 +1000,14 @@ bool TleAdapter::acquireGroup(const GroupSpec& group, double utc, Acquired& out,
         st2.retryFails = std::min(st2.retryFails + 1, 6);
         st2.lastHttp = (int)res.http;
         st2.lastCurl = res.curl;
+        if (!ok) st2.blockedBy = "own";
     } else {
         st2.blockedUntilUtc = 0.0;   // se retira el provisional
         st2.retryFails = 0;
         st2.lastHttp = 200;
         st2.lastCurl = 0;
         st2.lastSuccessUtc = utc;
+        st2.blockedBy = "none";
     }
     storeGate(group.key, st2);
 
@@ -1170,6 +1173,7 @@ bool TleAdapter::fetch(double utc) {
                 fetchgate::State s = gateFor(other.key);
                 if (hostUntil <= s.blockedUntilUtc) continue;
                 s.blockedUntilUtc = hostUntil;
+                s.blockedBy = "host";   // marcador interpretado por el panel por grupo
                 storeGate(other.key, s);
             }
             break;
@@ -1237,6 +1241,7 @@ bool TleAdapter::fetch(double utc) {
     }
 
     printf("[Tle] %s (%s)\n", merged.note.c_str(), sourceLabel(merged.source));
+    refreshGroupStatusSnapshot(utc);
     return true;
 }
 
@@ -1427,4 +1432,34 @@ void TleAdapter::loadStateForTests(double nowUtc) {
     std::lock_guard<std::mutex> lk(mutex_);
     gates_ = std::move(gates);
     gateSatnogs_ = n;
+}
+void TleAdapter::refreshGroupStatusSnapshot(double utc) {
+    std::vector<std::string> keys;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        keys = groupKeys_;
+    }
+    std::vector<TleAdapter::GroupStatus> snap;
+    snap.reserve(keys.size());
+    for (const std::string& k : keys) {
+        const GroupSpec g = groupSpec(k);
+        const fetchgate::State st = gateFor(g.key);
+        TleAdapter::GroupStatus row;
+        row.key = k;
+        row.cacheEpoch = celestrakCacheEpoch(g.cache);
+        row.lastAttemptUtc = st.lastAttemptUtc;
+        row.lastSuccessUtc = st.lastSuccessUtc;
+        row.blockedUntilUtc = st.blockedUntilUtc;
+        row.lastHttp = st.lastHttp;
+        row.lastCurl = st.lastCurl;
+        row.blockedBy = st.blockedBy.empty() ? std::string("own") : st.blockedBy;
+        snap.push_back(row);
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    groupStatusSnapshot_ = std::move(snap);
+}
+
+std::vector<TleAdapter::GroupStatus> TleAdapter::groupStatuses(double nowUtc) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return groupStatusSnapshot_;
 }

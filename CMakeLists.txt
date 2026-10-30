@@ -292,6 +292,11 @@ add_test(NAME glo_backfill COMMAND test_glo_backfill)
 add_executable(test_periodic_wait tests/test_periodic_wait.cpp)
 target_include_directories(test_periodic_wait PRIVATE src)
 add_test(NAME periodic_wait COMMAND test_periodic_wait)
+# Panel por grupo (TLE): formatter puro de la fila del panel por grupo, con
+# reloj inyectado. Solo standard library + Utils/TleGroupStatus.h.
+add_executable(test_tle_group_panel tests/test_tle_group_panel.cpp)
+target_include_directories(test_tle_group_panel PRIVATE src)
+add_test(NAME tle_group_panel COMMAND test_tle_group_panel)
 # Cache configurable (C-paths): raiz "cache" del cfg (Paths.h) + parser
 # "cacheDir" de settings.cfg. Llama a PRODUCCION (paths + teccache), no
 # replica; el estado global de la raiz se restaura al final.
