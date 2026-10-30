@@ -537,3 +537,8 @@ target_sources(test_tz_utc PRIVATE
 )
 target_link_libraries(test_tz_utc PRIVATE CURL::libcurl)
 add_test(NAME tz_utc COMMAND test_tz_utc)
+# Ebro C4: parser SAO4 con fixtures sinteticos (sin FTP/red) -> dia/noche/sin F1/con Es. Piloto de las fixtures que preceden al código de host HTTP.
+add_executable(test_ebro_parse tests/test_ebro_parse.cpp src/Data/EbroAdapter.cpp)
+target_include_directories(test_ebro_parse PRIVATE src)
+target_link_libraries(test_ebro_parse PRIVATE CURL::libcurl)
+add_test(NAME ebro_parse COMMAND test_ebro_parse)
