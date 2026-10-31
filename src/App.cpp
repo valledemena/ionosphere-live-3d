@@ -5983,6 +5983,18 @@ void App::render() {
                 }
             } else if (impl->ebro.isFetching()) {
                 ImGui::TextDisabled("Ebro FTP: fetching SAO...");
+            } else if (impl->ebro.blockedUntilUtc() > (double)std::time(nullptr)) {
+                const std::time_t tt = (std::time_t)impl->ebro.blockedUntilUtc();
+                std::tm g;
+                #ifdef _WIN32
+                gmtime_s(&g, &tt);
+                #else
+                gmtime_r(&tt, &g);
+                #endif
+                ImGui::TextDisabled("Ebro FTP: blocked until %02d:%02d UTC (unreadable body)",
+                                    g.tm_hour, g.tm_min);
+                if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(
+                    "The server answered but the SAO body could not be parsed. Fetching is paused for 2 h, like the TLE unreadable-body guard.");
             } else {
                 ImGui::TextDisabled("Ebro FTP: %s", impl->ebro.getErrorMessage().empty() ?
                     "waiting for data..." : impl->ebro.getErrorMessage().c_str());

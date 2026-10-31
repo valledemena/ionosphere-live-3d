@@ -57,6 +57,14 @@ public:
     bool isSimulated() const { return !getLatest().valid; }
     std::string getErrorMessage() const;
 
+    // "Transferencia OK pero cuerpo ilegible": mismo trato que el
+    // unreadableBody de TLE. hold de 2 h sin reintentar el FTP.
+    bool isBlocked(double utcNow) const;      // false si nunca se bloqueo
+    double blockedUntilUtc() const;           // 0.0 si no hay bloqueo
+    // Publico para poder probar el bloqueo sin red (noteUnreadable solo
+    // fija timestamps; fetch es quien lo llama con un cuerpo ilegible).
+    void noteUnreadable(double utcNow);
+
     // NLST: el servidor lista un nombre por linea (CRLF en FTP). pickCandidates
     // filtra a los SAO con la forma EB040_YYYYDDDHHMM01, orden nuevo->viejo y
     // solo <= utc (si el reloj del servidor va adelantado, los mas nuevos).
@@ -76,5 +84,6 @@ private:
     EbroSample latest_;
     std::atomic<bool> fetching_{false};
     double lastFetchUtc_ = 0.0;
+    double blockedUntilUtc_ = 0.0;
     std::string error_;
 };

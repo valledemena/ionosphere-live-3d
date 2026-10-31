@@ -203,6 +203,11 @@ bool EbroAdapter::parseSAO(const std::string& text, const std::string& fname, Eb
 }
 
 bool EbroAdapter::fetch(double utc) {
+    // Bloqueo activo (respuesta ilegible hace poco): no tocar el FTP.
+    if (isBlocked(utc)) {
+        fprintf(stderr, "[Ebro] bloqueo activo hasta %.0f\n", blockedUntilUtc());
+        return false;
+    }
     // Sesion unica: NLST (lo que hay) + RETR del mas nuevo <= utc, con un
     // fallback al anterior si el parse falla (fichero a medio escribir).
     std::vector<std::string> names;
@@ -224,16 +229,16 @@ bool EbroAdapter::fetch(double utc) {
             std::lock_guard<std::mutex> lk(mutex_);
             latest_ = s;
             lastFetchUtc_ = utc;
+            blockedUntilUtc_ = 0.0;   // hay dato bueno: el bloqueo ha decaido
             error_.clear();
             printf("[Ebro] %s: foF2=%.2f MUF=%.1f hmF2=%.0f foEs=%.2f\n",
                    fn.c_str(), s.foF2, s.muf, s.hmF2, s.foEs);
             return true;
         }
     }
-    {
-        std::lock_guard<std::mutex> lk(mutex_);
-        if (error_.empty()) error_ = "SAO reciente ilegible (cuerpo no parsea)";
-    }
+    // Los 2 candidatos van y nadie parsea: transferencia "OK" con cuerpo
+    // ilegible => bloqueo de 2 h (como el unreadableBody de TLE).
+    noteUnreadable(utc);
     fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
     return false;
 }
@@ -254,6 +259,22 @@ EbroSample EbroAdapter::getLatest() const {
 void EbroAdapter::setError(const std::string& msg) {
     std::lock_guard<std::mutex> lk(mutex_);
     error_ = msg;
+}
+
+void EbroAdapter::noteUnreadable(double utcNow) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    blockedUntilUtc_ = utcNow + 7200.0;
+    error_ = "respuesta ilegible (bloqueo 2 h)";
+}
+
+bool EbroAdapter::isBlocked(double utcNow) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return blockedUntilUtc_ > utcNow;
+}
+
+double EbroAdapter::blockedUntilUtc() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return blockedUntilUtc_;
 }
 
 std::string EbroAdapter::getErrorMessage() const {

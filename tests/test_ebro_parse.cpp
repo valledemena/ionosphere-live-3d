@@ -157,6 +157,18 @@ int main() {
                    EbroAdapter::saoNameTimeUtc("EB040_2026244120001.SAO") == s.timeUtc);
     }
 
+    // ===== Bloqueo por cuerpo ilegible (logica pura, sin red) =====
+    std::printf("--- bloqueo unreadable 2 h ---\n");
+    {
+        EbroAdapter a;
+        check_bool("sin bloqueo inicial", !a.isBlocked(1000.0) && a.blockedUntilUtc() == 0.0);
+        a.noteUnreadable(1000.0);
+        check_bool("unreadable bloquea tras noteUnreadable", a.isBlocked(1001.0));
+        check_bool("bloqueo dura 2 h", a.blockedUntilUtc() == 8200.0);
+        check_bool("el bloqueo expira a las 2 h", !a.isBlocked(8200.0));
+        check_bool("error visible para la UI", a.getErrorMessage().find("respuesta ilegible") != std::string::npos);
+    }
+
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
