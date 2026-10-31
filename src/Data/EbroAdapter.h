@@ -52,7 +52,7 @@ public:
     void fetchAsync(double utc);
     bool isFetching() const { return fetching_; }
     EbroSample getLatest() const;
-    double getLastFetchTime() const { return lastFetchUtc_; }
+    double getLastFetchTime() const { std::lock_guard<std::mutex> lk(mutex_); return lastFetchUtc_; }
     bool isSimulated() const { return !getLatest().valid; }
     std::string getErrorMessage() const;
 
