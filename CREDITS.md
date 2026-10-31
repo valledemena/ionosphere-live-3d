@@ -1,28 +1,62 @@
-CREDITS — IonosphereLive3D (C2a / C2b / C3 / C4)
-===========================================
+# CREDITS — IonosphereLive3D
 
-Revisión C2a / C2b: Claude (revisor externo) con instrucciones de orden de trabajo.
-Implementación: asistente (Inkling / openrouter).
+Fuentes de datos de las que la aplicacion lee durante su uso (todas se
+acceden en vivo; el repositorio no redistribuye sus salidas salvo la
+excepcion de las capturas del ultimo punto):
 
-Fuentes de datos (en orden de prioridad):
-  1. CelesTrak GP CSV (FORMAT=csv, cabecera real de 19 columnas, NORAD 6 dígitos).
-  2. Cache v2 (`satellites.tle`, `# tle-cache v2 epoch=... format=csv`), cuerpo crudo.
-  3. SatNOGS JSON (`https://db.satnogs.org/api/tle/?format=json`), sin paginación.
-  4. Observatori de l'Ebre (EB040 SAO) — ficheros `EB040_YYYYDDDHHMM01.SAO`,
-     formato SAO4/DPS-4D de FTP anónimo en ftpoeb.obsebre.es/ionospheric. Las
-     capturas de prueba (4 mini-muestras: día, noche, sin F1, con Es) se
-     redistribuyen en `tests/fixtures/ebro/` solo bajo el permiso del
-     Observatori, que aún debe confirmarse (CREDITS propia de cada captura).
+## Satelites / TLE
+- **CelesTrak** (Dr. T.S. Kelso, celestrak.org): GP en formato CSV
+  (`gp.php?GROUP=...&FORMAT=csv`). Condiciones de uso y notas de
+  atribucion en celestrak.org. Sin copiar al repositorio salvo cache
+  local por usuario.
+- **SatNOGS DB** (Libre Space Foundation, db.satnogs.org): TLE en JSON
+  (`/api/tle/?format=json`) como fuente de respaldo.
 
-Dependencias clave (CMakeLists.txt):
-  glfw3 3.4 (CMake `find_package`), CURL (libcurl), Threads (Linux).
+## Ionosfera (perfil, sondas y modelos)
+- **GIRO / LGDC** (UML, lgdc.uml.edu): DIDBase (`DIDBFastStationList`,
+  `fastchar/getbest`) y coeficientes IRTAM (`rix/gambit-coeffs`).
+  Datos CC BY-NC-SA 4.0 (uso no comercial y educativo); citar
+  Reinisch & Galkin (2011), *Global ionospheric radio observatory*,
+  Earth Planets Space 63, 377-381, doi:10.5047/eps.2011.03.001.
+- **KC2G** (prop.kc2g.com): modelo MUF(3000)F2 por estacion
+  (`api/stations.json`), datos comunitarios.
+- **DIAS/NOA** (electron.space.noa.gr): pager SAO de Ionoso Portugal
+  (ionostream, `idb/sao/pager`).
+- **Observatori de l'Ebre** (Roquetes, EB040): SAO4/DPS-4D via FTP
+  anonimo (ftpoeb.obsebre.es/ionospheric). Las 4 mini-capturas de
+  `tests/fixtures/ebro/` son ficheros reales sin editar; EL PERMISO
+  PARA SU REDISTRIBUCION AUN NO ESTA CONFIRMADO con el observatorio
+  (decision pendiente de David: pedirlo formalmente o sustituir las
+  capturas por un script de descarga). Cualquier otra salida del
+  adaptador va solo a cache local.
 
-Pruebas (49/50+ verde):
-  Orquestación cubre: 403 sin cache, timeout sin cache, muerte a mitad, aislamiento,
-  cache de 73 h (una sola invalidación con generación +1), herencia `source=satnogs`.
-  test_ebro_parse cubre parseo de SAO4 (dia/noche/sin F1/con Es, 11 OK).
+## Meteofisica espacial (NOAA SWPC, NASA CCMC y mas)
+- **NOAA SWPC** (services.swpc.noaa.gov): viento solar (DSCOVR/rtsw),
+  Kp/Ap 1-min, Dst 1h, rayos X GOES, Ovation Aurora, D-RAP, GloTEC,
+  sunspot/SSN y pronostico 45 dias. Trabajos del Gobierno de EE. UU.
+  (uso publico; detalles en swpc.noaa.gov).
+- **NASA CCMC DONKI** (ccmc.gsfc.nasa.gov): fulguraciones FLR,
+  WSA-Enlil (CME) y RBE.
+- **NASA JPL Horizons** (ssd.jpl.nasa.gov): posiciones de Voyager.
+- **WDC Kyoto** (wdc.kugi.kyoto-u.ac.jp): indices AE en tiempo real.
+- **NWS api.weather.gov**: alertas de tormenta.
+- **WSPRnet** (wsprnet.org): spots de radioaficionados.
+- **SDO** (sdo.gsfc.nasa.gov) e **SOHO/LASCO** (soho.nascom.nasa.gov):
+  imagenes solares en tiempo real.
+- **Copernicus Space Weather** (weather.spacedata.copernicus.eu):
+  indices ESA SSA (respaldo).
 
-Nota ética: el código no inventa datos. Si las fuentes fallan,
-`TleSnapshot::valid` es `false`, `note` indica la causa (`sin TLE validos` o
-`respuesta ilegible`), y la UI no dibuja nada. El bloqueo de 2h (`unreadableBody`)
-se aplica cuando un HTTP 200 trae una cabecera sin columna necesaria.
+## Modelos y codigo incluidos (vendored)
+- **IGRF-14**: coeficientes oficiales de NOAA NGDC
+  (ngdc.noaa.gov/IAGA/vmod/coeffs/igrf14coeffs.txt), fuente citada en
+  `src/Utils/Igrf.cpp`.
+- **NRLMSIS 2.1 port**: port propio con licencia NRL-SOF "Open Source
+  Academic Research" (uso academico/no lucrativo); detalles y avisos,
+  en `src/lib/iono/msis/README.md`.
+- **GLFW 3.4**, **Dear ImGui**, **GLAD**, **libcurl** y la biblioteca
+  estandar de C++: dependencias vendidas/externas con sus licencias
+  habituales (MIT/permisivas; ver cada directorio vendored).
+
+## Procedencia de las decisiones de revision
+- Suite de revision externa por Claude; la implementacion es del
+  asistente de OpenCode bajo la direccion de David (valledemena).
