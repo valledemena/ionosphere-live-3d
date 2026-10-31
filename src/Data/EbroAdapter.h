@@ -62,6 +62,8 @@ public:
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
     bool fetchFile(const std::string& fname, std::string& response);
+    // Escritura unica de error_, siempre bajo mutex_ (fetch async + UI leen).
+    void setError(const std::string& msg);
 
     mutable std::mutex mutex_;
     EbroSample latest_;

@@ -35,9 +35,8 @@ bool EbroAdapter::fetchFile(const std::string& fname, std::string& response) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "IonosphereLive3D/1.0");
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (res != CURLE_OK) { error_ = std::string("ftp: ") + curl_easy_strerror(res); return false; }
-    if (response.empty()) { error_ = "ftp: empty " + fname; return false; }
+    if (res != CURLE_OK) { setError(std::string("ftp: ") + curl_easy_strerror(res)); return false; }
+    if (response.empty()) { setError("ftp: empty " + fname); return false; }
     return true;
 }
 
@@ -162,9 +161,9 @@ bool EbroAdapter::fetch(double utc) {
             return true;
         }
     }
-    if (error_.empty()) {
+    {
         std::lock_guard<std::mutex> lk(mutex_);
-        error_ = "no SAO found (12 candidates)";
+        if (error_.empty()) error_ = "no SAO found (12 candidates)";
     }
     fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
     return false;
@@ -181,6 +180,11 @@ void EbroAdapter::fetchAsync(double utc) {
 EbroSample EbroAdapter::getLatest() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return latest_;
+}
+
+void EbroAdapter::setError(const std::string& msg) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    error_ = msg;
 }
 
 std::string EbroAdapter::getErrorMessage() const {
