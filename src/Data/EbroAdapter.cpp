@@ -179,10 +179,11 @@ bool EbroAdapter::parseSAO(const std::string& text, const std::string& fname, Eb
 
     out.foF2 = sfield(L6, 0);
     out.foF1 = sfield(L6, 1);
-    out.foE  = sfield(L6, 2);
+    out.mD   = sfield(L6, 2);   // M(D) escalado, directo del SAO
     out.muf  = sfield(L6, 3);
+    out.fmin = sfield(L6, 4);
     out.foEs = sfield(L6, 5);
-    out.fmin = sfield(L6, 7);
+    out.foE  = sfield(L6, 8);   // 9a cifra: antes se leia el M(D) (L6[2]) como foE
     out.fxI  = sfield(L6, 9);
     out.hF   = sfield(L6, 10);
     out.hF2  = sfield(L6, 11);
@@ -191,8 +192,8 @@ bool EbroAdapter::parseSAO(const std::string& text, const std::string& fname, Eb
     out.hmF2 = sfield(L8, 1);
     out.B0   = sfield(L8, 10);
     out.B1   = sfield(L8, 11);
-    if (!std::isnan(out.muf) && !std::isnan(out.foF2) && out.foF2 > 0.0f)
-        out.mD = out.muf / out.foF2;
+    if (std::isnan(out.mD) && !std::isnan(out.muf) && !std::isnan(out.foF2) && out.foF2 > 0.0f)
+        out.mD = out.muf / out.foF2;   // fallback si el SAO no trae M(D)
 
     // Timestamp del nombre via saoNameTimeUtc (compartido con el NLST).
     out.timeUtc = saoNameTimeUtc(fname);

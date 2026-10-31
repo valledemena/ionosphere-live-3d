@@ -6,13 +6,16 @@
 #include <vector>
 
 // Perfil ionosferico completo de EB040 (Roquetas) via FTP directo del
-// Observatori de l'Ebre. Formato SAO4 (DPS-4D ARTIST 5), verificado en
-// fof2-monitor/fof2_monitor.py::parse_sao cruzando SAO + Ion2Png:
-//   L6 (1a linea tras FF), campos de 8 chars:
-//     [0] foF2  [1] foF1  [2] foE  [3] MUF(D)  [4] foEsL  [5] foEs
-//     [6] foEsH [7] fmin [9] fxI  [10] h'F [11] h'F2 [12] h'E [13] h'Es
+// Observatori de l'Ebre. Formato SAO4 (DPS-4D ARTIST 5); el orden de
+// campos de abajo esta verificado contra las 4 capturas reales de
+// tests/fixtures/ebro/ (invariante MUF(D) = foF2 x M(D) ±1%).
+//   L6 (1a linea tras FF), campos de 8 chars. Orden verificado con las
+//   4 capturas reales (MUF(D) = foF2 x M(D) en las cuatro, ±1%):
+//     [0] foF2   [1] foF1  [2] M(D)   [3] MUF(D) [4] fmin  [5] foEs
+//     [6] fminF  [7] fminE [8] foE   [9] fxI   [10] h'F  [11] h'F2
+//     [12] h'E   [13] h'Es
 //   L8 (3a linea tras FF): [1] hmF2  [10] B0  [11] B1
-// 9999 = N/A -> NaN. M(D) = MUF(D)/foF2 (calculado).
+// 9999 = N/A -> NaN. M(D) sale del SAO (L6[2]); MUF/foF2 solo fallback.
 //
 // Fuente primaria (sin intermediarios): ftp://ftpoeb.obsebre.es/ionospheric/
 //   ficheros EB040_YYYYDDDHHMM01.SAO cada 5 min (MM redondeado a 5).
@@ -36,7 +39,7 @@ struct EbroSample {
     float hmF2 = ebro::nan();
     float B0 = ebro::nan();
     float B1 = ebro::nan();
-    float mD = ebro::nan();     // M(D) = MUF/foF2
+    float mD = ebro::nan();     // M(D) del SAO (L6[2]; fallback MUF/foF2)
     double timeUtc = 0.0;       // del nombre de fichero
     bool valid = false;
     std::string sourceFile;
