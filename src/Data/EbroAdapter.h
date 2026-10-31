@@ -3,6 +3,7 @@
 #include <mutex>
 #include <atomic>
 #include <limits>
+#include <vector>
 
 // Perfil ionosferico completo de EB040 (Roquetas) via FTP directo del
 // Observatori de l'Ebre. Formato SAO4 (DPS-4D ARTIST 5), verificado en
@@ -44,9 +45,9 @@ struct EbroSample {
 class EbroAdapter {
 public:
     void init();
-    // Prueba los ultimos 12 candidatos de 5 min (mas reciente primero).
-    // Devuelve true con el primer SAO valido. Bloqueante (hasta ~12x8 s si
-    // el servidor no responde: preferir fetchAsync desde la app).
+    // Un NLST para ver lo que hay y un RETR del mas nuevo (con 1 fallback
+    // al anterior si el parse falla). Bloqueante (2 transferencias de 8 s
+    // max: preferir fetchAsync desde la app).
     bool fetch(double utc);
     // Igual pero en hilo background (no bloquea el render). Safe concurrente.
     void fetchAsync(double utc);
@@ -56,12 +57,18 @@ public:
     bool isSimulated() const { return !getLatest().valid; }
     std::string getErrorMessage() const;
 
-    static std::string saoFilename(double utcMinusMin);
+    // NLST: el servidor lista un nombre por linea (CRLF en FTP). pickCandidates
+    // filtra a los SAO con la forma EB040_YYYYDDDHHMM01, orden nuevo->viejo y
+    // solo <= utc (si el reloj del servidor va adelantado, los mas nuevos).
+    static std::vector<std::string> pickCandidates(const std::vector<std::string>& listing, double utc, size_t maxN);
+    // Timestamp (s epoch UTC) del nombre EB040_YYYYDDDHHMM01.SAO; 0.0 si invalido.
+    static double saoNameTimeUtc(const std::string& name);
     static bool parseSAO(const std::string& text, const std::string& fname, EbroSample& out);
 
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
     bool fetchFile(const std::string& fname, std::string& response);
+    bool listFiles(std::vector<std::string>& names);   // un curl (NLST) por fetch
     // Escritura unica de error_, siempre bajo mutex_ (fetch async + UI leen).
     void setError(const std::string& msg);
 

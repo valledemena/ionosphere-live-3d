@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -121,6 +122,39 @@ int main() {
         bool threw = false;
         try { EbroAdapter::parseSAO(s, "EB040_2017001000001.SAO", out); } catch (...) { threw = true; }
         check_bool("no lanza excepcion", !threw);
+    }
+
+    // ===== NLST: pickCandidates / saoNameTimeUtc (logica pura, listing sintetico) =====
+    std::printf("--- NLST pickCandidates ---\n");
+    {
+        // _0910 = 09:10, _0905 = 09:05, _0855 = 08:55; _1100 = 11:00 (futuro)
+        const std::string t0910 = "EB040_2026244091001.SAO";
+        const double cut = EbroAdapter::saoNameTimeUtc(t0910);
+        std::vector<std::string> listing = {
+            t0910,                         // nuevo, <= cut
+            "EB040_2026244090501.SAO\n",   // fin de linea crudo de FTP: stripEol lo limpia
+            "EB040_2026244085501.SAO\r\n",
+            "EB040_2026244110001.SAO",     // > cut
+            "EB040_2026244110001.RSF",     // no SAO
+            "foo.SAO",                     // sin forma EB040_
+        };
+        std::vector<std::string> c = EbroAdapter::pickCandidates(listing, cut, 2);
+        check_bool("nlst respeta maxN=2", c.size() == 2);
+        check_bool("nlst 1o es el mas nuevo <= cut", !c.empty() && c[0] == t0910);
+        check_bool("nlst 2o es 09:05", c.size() > 1 && c[1] == "EB040_2026244090501.SAO");
+        check_bool("nlst descarta RSF/tiempo futuro", std::find(c.begin(), c.end(), "EB040_2026244110001.SAO") == c.end());
+        // Nombres invalidos dan 0.0
+        check_bool("saoNameTimeUtc invalido -> 0", EbroAdapter::saoNameTimeUtc("junk.SAO") == 0.0);
+        // Nada <= cut (reloj servidor adelantado): fallback a los nuevos.
+        std::vector<std::string> future = { "EB040_2026244110001.SAO", "EB040_2026244105501.SAO" };
+        std::vector<std::string> fb = EbroAdapter::pickCandidates(future, cut, 2);
+        check_bool("nlst fallback futuro", fb.size() == 2 && fb[0] == "EB040_2026244110001.SAO");
+        // El timestamp es estable: el propio parseSAO lo usa via nombre.
+        EbroSample s;
+        const std::string body = load("tests/fixtures/ebro/eb040_dia.SAO");
+        (void)EbroAdapter::parseSAO(body, "EB040_2026244120001.SAO", s);
+        check_bool("timeUtc del nombre coherente",
+                   EbroAdapter::saoNameTimeUtc("EB040_2026244120001.SAO") == s.timeUtc);
     }
 
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
