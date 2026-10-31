@@ -795,6 +795,19 @@ int main() {
         checkInt("a T0+120 s ninguna nueva peticion (host guard)",
                  m.celestrakCalls, before);
 
+        // El pase acaba por SatNOGS (fallo de CelesTrak); snapshot ya capto host.
+        checkBool("SatNOGS se pidio en el pase", m.satnogsCalls == 1);
+        auto gs = a.groupStatuses();
+        checkBool("snapshot poblado", gs.size() == 2);
+        TleAdapter::GroupStatus* sh = nullptr;
+        for (auto& g : gs) {
+            if (g.key == "stations") sh = &g;
+        }
+        checkBool("stations presente", sh != nullptr);
+        if (sh != nullptr)
+            checkBool("stations origen host tras SatNOGS",
+                      sh->blockedBy == "host" && sh->blockedUntilUtc > T0);
+
         std::error_code ec;
         fs::remove_all(p.dir, ec);
     }
