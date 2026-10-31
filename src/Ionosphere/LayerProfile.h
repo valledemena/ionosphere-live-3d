@@ -63,13 +63,13 @@ inline float chapmanAlpha(float Nm, float hm, float H, float h) {
     return Nm * expf(0.5f * (1.0f - z - expf(-z)));
 }
 
-// Suelo de validez F2 (ruling 124): mayor h con NeE(h) >= NeF2(h),
+// Suelo de validez F2 (): mayor h con NeE(h) >= NeF2(h),
 // clamp hmE; NINGUNO (-1.0f) sin hasE. Puro, determinista, sin estado.
 // NeE via chapmanAlpha (compartido); Epstein abajo replica 1:1 la rama
 // F2-bottomside de evalNeTotal (mantener sincronizado; el TU lo pinnea).
 static inline float f2FloorKm(const LayerProfile& p) {
     if (!(p.hasE && p.hasF2)) return -1.0f;
-    // Early-out correcto (ruling 124 sec.2, veredicto 126 sec.4):
+    // Early-out correcto ( sec.2, veredicto 126 sec.4):
     // NmE <= NeF2(hmE) => sin cruce en [hmE, hmF2] => suelo = hmE.
     // NeF2(hmE): Epstein bottomside en hmE, replica 1:1 de evalNeTotal
     // (mantener sincronizado). Cuesta 1 Epstein (3-4 trascendentes) donde

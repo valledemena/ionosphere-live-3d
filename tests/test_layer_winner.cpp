@@ -1,5 +1,5 @@
 // =============================================================================
-// test_layer_winner — banda de validez F2 del modo Chapman (ruling 124).
+// test_layer_winner — banda de validez F2 del modo Chapman ().
 //
 // Test de logica pura: sin GL, sin GLFW, sin red. Llama a PRODUCCION
 // (f2FloorKm + evalNeTotal, inline de src/Ionosphere/LayerProfile.h).
