@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Encoding guard (sin BOM, sin mojibake)
+      - name: Encoding guard (sin BOM, sin mojibake, UTF-8 estricto)
         run: |
           set -e
           if grep -rIlP '^\xEF\xBB\xBF' --include='*.cpp' --include='*.h' \
@@ -25,6 +25,19 @@ jobs:
             exit 1
           fi
           echo "encoding OK"
+          # UTF-8 estricto: todo lo trackeado, menos los binarios de .gitattributes.
+          fail=0
+          while IFS= read -r f; do
+            case "$f" in
+              *.png|*.jpg|*.jpeg|*.ico|*.bin|*.parm|*.SAO) continue ;;
+            esac
+            if ! iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1; then
+              echo "::error::no es UTF-8 valido: $f"
+              fail=1
+            fi
+          done < <(git ls-files)
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "UTF-8 estricto OK"
       - name: Dependencies
         run: |
           sudo apt-get update
@@ -49,3 +62,36 @@ jobs:
       - name: Assert 100% tests passed
         run: |
           ctest --test-dir build --output-on-failure | grep -q '100% tests passed'
+
+  tsan:
+    name: CI Ubuntu (ThreadSanitizer, tests con transporte inyectado)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libglm-dev xorg-dev libgl1-mesa-dev
+      - name: GLFW 3.4 (Ubuntu noble trae 3.3)
+        run: |
+          curl -sL https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz -o glfw.tar.gz
+          tar xzf glfw.tar.gz
+          cmake -S glfw-3.4 -B glfw-build \
+            -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF \
+            -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON \
+            -DCMAKE_INSTALL_PREFIX="$HOME/glfw"
+          cmake --build glfw-build --parallel "$(nproc)"
+          cmake --install glfw-build
+      - name: Build (ThreadSanitizer)
+        run: |
+          cmake -B build-tsan -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -Dglfw3_DIR="$HOME/glfw/lib/cmake/glfw3" \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -O1" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -O1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build-tsan --parallel "$(nproc)"
+      - name: Test (ThreadSanitizer)
+        run: ctest --test-dir build-tsan --output-on-failure -V
+      - name: Assert 100% tests passed
+        run: |
+          ctest --test-dir build-tsan --output-on-failure | grep -q '100% tests passed'
