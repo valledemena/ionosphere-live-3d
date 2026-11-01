@@ -64,3 +64,8 @@ imgui.ini
 /node_modules/
 /screenshot[0-9]*.png
 *.log
+
+# Fixtures SAO reales del Observatori de l'Ebre: NO se redistribuyen (permiso
+# pendiente). Se copian en local para correr test_ebro_parse y se quitan; el
+# test sale con 77 (ctest: SKIP) cuando no estan.
+/tests/fixtures/ebro/
