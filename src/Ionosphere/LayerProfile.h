@@ -34,20 +34,28 @@ inline float sanitizeB1(float v) {
     return v;
 }
 
+// Frecuencia critica utilizable: finita y > 0. El SAO trae 9999 = "sin
+// dato" que EbroAdapter convierte a NaN (de noche foE y foF1 suelen estar
+// ausentes), y ese NaN NO debe cruzar a NmE ni al volumen (un NmE = NaN
+// envenena el max() del perfil y el shader). NaN > 0 ya es false en IEEE;
+// usableFo() lo deja escrito y testeado (test_layer_profile), y ademas
+// rechaza +inf, que si pasaria el filtro > 0.
+inline bool usableFo(float f) { return std::isfinite(f) && f > 0.0f; }
+
 inline LayerProfile profileFromStation(const StationPoint& s) {
     LayerProfile p;
-    if (s.foE > 0.0f) {
+    if (usableFo(s.foE)) {
         p.NmE = 1.24e10f * s.foE * s.foE;
         p.hmE = 110.0f;
         p.hasE = true;
     }
-    if (s.foF1 > 0.0f) {
+    if (usableFo(s.foF1)) {
         p.NmF1 = 1.24e10f * s.foF1 * s.foF1;
         // hF1 real no disponible (solo virtual hF); aproximacion de partida:
-        p.hmF1 = (s.hmF2 > 0.0f) ? std::max(150.0f, 0.8f * s.hmF2) : 180.0f;
+        p.hmF1 = (std::isfinite(s.hmF2) && s.hmF2 > 0.0f) ? std::max(150.0f, 0.8f * s.hmF2) : 180.0f;
         p.hasF1 = true;
     }
-    if (s.foF2 > 0.0f && s.hmF2 > 0.0f) {
+    if (usableFo(s.foF2) && std::isfinite(s.hmF2) && s.hmF2 > 0.0f) {
         p.NmF2 = (s.nmF2 > 0.0f) ? s.nmF2 : 1.24e10f * s.foF2 * s.foF2;
         p.hmF2 = s.hmF2;
         p.B0 = sanitizeB0(s.B0);
@@ -63,13 +71,13 @@ inline float chapmanAlpha(float Nm, float hm, float H, float h) {
     return Nm * expf(0.5f * (1.0f - z - expf(-z)));
 }
 
-// Suelo de validez F2 (): mayor h con NeE(h) >= NeF2(h),
+// Suelo de validez F2: mayor h con NeE(h) >= NeF2(h),
 // clamp hmE; NINGUNO (-1.0f) sin hasE. Puro, determinista, sin estado.
 // NeE via chapmanAlpha (compartido); Epstein abajo replica 1:1 la rama
 // F2-bottomside de evalNeTotal (mantener sincronizado; el TU lo pinnea).
 static inline float f2FloorKm(const LayerProfile& p) {
     if (!(p.hasE && p.hasF2)) return -1.0f;
-    // Early-out correcto ( sec.2, veredicto 126 sec.4):
+    // Early-out correcto (veredicto 126 sec.4):
     // NmE <= NeF2(hmE) => sin cruce en [hmE, hmF2] => suelo = hmE.
     // NeF2(hmE): Epstein bottomside en hmE, replica 1:1 de evalNeTotal
     // (mantener sincronizado). Cuesta 1 Epstein (3-4 trascendentes) donde

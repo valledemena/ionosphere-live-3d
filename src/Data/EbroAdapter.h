@@ -50,8 +50,8 @@ class EbroAdapter {
 public:
     void init();
     // Un NLST para ver lo que hay y un RETR del mas nuevo (con 1 fallback
-    // al anterior si el parse falla). Bloqueante (2 transferencias de 8 s
-    // max: preferir fetchAsync desde la app).
+    // al anterior si el parse falla). Bloqueante: NLST + hasta 2 RETR, o sea
+    // 3 transferencias de 8 s max (preferir fetchAsync desde la app).
     bool fetch(double utc);
     // Igual pero en hilo background (no bloquea el render). Safe concurrente.
     void fetchAsync(double utc);

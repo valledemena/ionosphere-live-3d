@@ -544,3 +544,9 @@ target_link_libraries(test_ebro_parse PRIVATE CURL::libcurl)
 add_test(NAME ebro_parse COMMAND test_ebro_parse)
 set_property(TEST ebro_parse PROPERTY WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 set_property(TEST ebro_parse PROPERTY SKIP_RETURN_CODE 77)
+# Ebro C4: NaN/inf de las fo criticas (9999 = sin dato, de noche) no cruzan
+# de profileFromStation al volumen. glad/glm via IonosondeLayer.h (solo
+# cabeceras, sin contexto GL - el link no cambia).
+add_executable(test_layer_profile tests/test_layer_profile.cpp)
+target_include_directories(test_layer_profile PRIVATE src libs/glad/include)
+add_test(NAME layer_profile COMMAND test_layer_profile)

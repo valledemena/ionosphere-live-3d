@@ -828,7 +828,9 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
     auto medOf = [&](float StationSample::*m) {
         std::vector<float> v;
         v.reserve(pts.size());
-        for (const auto& p : pts) if (p.*m > 0.0f) v.push_back(p.*m);
+        // isfinite: el SAO trae 9999 = "sin dato" -> NaN (noche: foE/foF1),
+        // y un NaN en la mediana envenenaria el fondo del volumen.
+        for (const auto& p : pts) if (std::isfinite(p.*m) && p.*m > 0.0f) v.push_back(p.*m);
         if (v.empty()) return 0.0f;
         std::sort(v.begin(), v.end());
         return v[v.size() / 2];
@@ -864,9 +866,10 @@ static std::vector<LayerProfile> interpLayerProfiles(const std::vector<StationSa
                 if (d < nearDeg) nearDeg = d;
                 if (d > maxDist) continue;
                 double w = 1.0 / (d * d + 0.5);
-                if (p.foE > 0.0f)  { float v = 1.24e10f * p.foE * p.foE; wNmE += w; vNmE += w * v; }
-                if (p.foF1 > 0.0f) { float v = 1.24e10f * p.foF1 * p.foF1; wNmF1 += w; vNmF1 += w * v; }
-                if (p.foF2 > 0.0f) { float v = 1.24e10f * p.foF2 * p.foF2; wNmF2 += w; vNmF2 += w * v; }
+                // usableFo (LayerProfile.h): finita y > 0 — NaN de noche no entra
+                if (usableFo(p.foE))  { float v = 1.24e10f * p.foE * p.foE; wNmE += w; vNmE += w * v; }
+                if (usableFo(p.foF1)) { float v = 1.24e10f * p.foF1 * p.foF1; wNmF1 += w; vNmF1 += w * v; }
+                if (usableFo(p.foF2)) { float v = 1.24e10f * p.foF2 * p.foF2; wNmF2 += w; vNmF2 += w * v; }
                 if (p.hmF2 > 0.0f) { wHm += w; vHm += w * p.hmF2; }
                 if (p.B0 > 0.0f)   { wB0 += w; vB0 += w * p.B0; }
                 if (p.B1 > 0.0f)   { wB1 += w; vB1 += w * p.B1; }

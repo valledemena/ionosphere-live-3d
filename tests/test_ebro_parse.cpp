@@ -33,6 +33,25 @@ static std::string load(const char* rel) {
     return s;
 }
 
+// Campos de la linea FF del propio SAO (YY DDD MM DD HHMM ...), leidos del
+// fichero: la invariante se contrasta contra el nombre, no contra el parser.
+static bool ffLineFields(const std::string& body, int& Y, int& doy, int& mon,
+                         int& day, int& hh, int& mm) {
+    const size_t p = body.find("\nFF");
+    if (p == std::string::npos || body.size() < p + 18) return false;
+    const std::string ln = body.substr(p + 1);          // desde 'FF'
+    if (ln.compare(0, 2, "FF") != 0) return false;
+    if ((int)ln.size() < 17) return false;
+    Y   = atoi(ln.substr(2, 4).c_str());
+    doy = atoi(ln.substr(6, 3).c_str());
+    mon = atoi(ln.substr(9, 2).c_str());
+    day = atoi(ln.substr(11, 2).c_str());
+    hh  = atoi(ln.substr(13, 2).c_str());
+    mm  = atoi(ln.substr(15, 2).c_str());
+    return Y >= 1990 && doy >= 1 && doy <= 366 && mon >= 1 && mon <= 12 &&
+           day >= 1 && day <= 31 && hh <= 23 && mm <= 59;
+}
+
 int main() {
     // Si no estan los fixtures (permiso del observatorio aun pendiente o plan
     // de tres ramas), CTest interpreta el exit 77 como SKIP.
@@ -43,13 +62,14 @@ int main() {
         "tests/fixtures/ebro/eb040_cones.SAO",
     };
     bool fixturesPresent = true;
-    std::ifstream fx0(kFx[0], std::ios::binary);
-    fixturesPresent = (bool)fx0;
-    if (!fixturesPresent) {
-        std::printf("[SKIP] fixtures SAO no presentes en el arbol; pendiente del permiso del Observatori de l'Ebre\n");
-        // Las secciones sinteticas/NLST/bloqueo quedan por ejecutar si llegan.
-        return 77;
+    for (const char* p : kFx) {
+        std::ifstream fx(p, std::ios::binary);
+        if (!fx) { fixturesPresent = false; break; }
     }
+    if (!fixturesPresent)
+        std::printf("[SKIP] fixtures SAO no presentes en el arbol; pendiente del permiso del Observatori de l'Ebre\n");
+
+    if (fixturesPresent) {
 
     // ===== FIXTURES REALES (capturas del Observatori de l'Ebre, sin editar) =====
     // Valores leidos del propio fichero (L6 de 8 chars: foF2, foF1, M(D), MUF(D),
@@ -63,7 +83,7 @@ int main() {
         check_bool("dia parseSAO valid", ok && s.valid);
         check_near("dia foF2", s.foF2, 7.50f, 0.01f);
         check_near("dia foF1", s.foF1, 5.20f, 0.01f);
-        check_near("dia M(D) del SAO", s.mD, 3.074f, 0.01f);
+        check_near("dia M(D) del SAO", s.mD, 3.074f, 0.003f);   // 0.01 no separaba directo (3.0740) de derivado (3.0641)
         check_near("dia MUF(D)", s.muf, 22.981f, 0.1f);
         check_near("dia foE (9a cifra)", s.foE, 3.55f, 0.01f);
         check_near("dia fmin (5a cifra)", s.fmin, 2.35f, 0.01f);
@@ -83,9 +103,9 @@ int main() {
         check_near("noche foF2", s.foF2, 4.20f, 0.01f);
         check_nan("noche foF1 ausente", s.foF1, true);   // 9999 -> NaN
         check_nan("noche foE ausente", s.foE, true);     // 9999 en la 9a cifra
-        check_near("noche M(D) directo del SAO", s.mD, 12.084f / 4.20f, 0.01f);
+        check_near("noche M(D) directo del SAO (L6[2], sin fallback)", s.mD, 2.877f, 0.005f);
         check_near("noche fxI", s.fxI, 4.95f, 0.01f);
-        // no Es check: foEs NaN (s.foEs == nan) checked via check_nan above
+        check_nan("noche foEs ausente", s.foEs, true);   // 9999 en la 6a cifra
         check_near("noche hmF2", s.hmF2, 339.233f, 0.5f);
     }
     std::printf("--- fixture sin F1 ---\n");
@@ -145,12 +165,44 @@ int main() {
             // h'F2 >= h'F cuando aparecen ambos: alturas coherentes (leidas del SAO real).
             if (!std::isnan(s.hF) && !std::isnan(s.hF2))
                 check_bool((std::string(c.name) + ": hF2 >= hF").c_str(), s.hF2 >= s.hF);
-            // La hora UT del nombre coincide con la que codifica la linea FF del fichero.
-            const long long rem = (long long)s.timeUtc % 86400;
-            check_bool((std::string(c.name) + ": timeUtc hora FF").c_str(),
-                       std::llabs(rem - c.hourSec) <= 1);
+            // Nombre vs LINEA FF del propio fichero (no constantes escritas a
+            // mano): saoNameTimeUtc solo ve el nombre; gmtime ve el epoch.
+            int fY = 0, fdoy = 0, fmon = 0, fday = 0, fhh = 0, fmm = 0;
+            check_bool((std::string(c.name) + ": linea FF legible").c_str(),
+                       ffLineFields(body, fY, fdoy, fmon, fday, fhh, fmm));
+            std::time_t tt = (std::time_t)EbroAdapter::saoNameTimeUtc(c.fname);
+            std::tm g;
+#ifdef _WIN32
+            gmtime_s(&g, &tt);
+#else
+            gmtime_r(&tt, &g);
+#endif
+            check_bool((std::string(c.name) + ": FF anio == nombre").c_str(),
+                       g.tm_year + 1900 == fY);
+            check_bool((std::string(c.name) + ": FF dia-del-ano == nombre").c_str(),
+                       g.tm_yday + 1 == fdoy);
+            check_bool((std::string(c.name) + ": FF HHMM == nombre").c_str(),
+                       g.tm_hour == fhh && g.tm_min == fmm);
+            // Coherencia interna del FF: el DDD es el dia real de (MM, DD).
+            std::tm c0{};
+            c0.tm_year = fY - 1900; c0.tm_mon = fmon - 1; c0.tm_mday = fday;
+#ifdef _WIN32
+            const std::time_t tc = _mkgmtime(&c0);
+#else
+            const std::time_t tc = timegm(&c0);
+#endif
+            std::tm gc;
+#ifdef _WIN32
+            gmtime_s(&gc, &tc);
+#else
+            gmtime_r(&tc, &gc);
+#endif
+            check_bool((std::string(c.name) + ": FF DDD coherente con MM-DD").c_str(),
+                       gc.tm_yday + 1 == fdoy);
         }
     }
+
+    }   // fin del bloque de fixtures reales
 
     // ===== NEGATIVOS SINTETICOS =====
     std::printf("--- casos sinteticos (error) ---\n");
@@ -214,11 +266,14 @@ int main() {
         std::vector<std::string> fb = EbroAdapter::pickCandidates(future, cut, 2);
         check_bool("nlst fallback futuro", fb.size() == 2 && fb[0] == "EB040_2026244110001.SAO");
         // El timestamp es estable: el propio parseSAO lo usa via nombre.
-        EbroSample s;
-        const std::string body = load("tests/fixtures/ebro/eb040_dia.SAO");
-        (void)EbroAdapter::parseSAO(body, "EB040_2026244120001.SAO", s);
-        check_bool("timeUtc del nombre coherente",
-                   EbroAdapter::saoNameTimeUtc("EB040_2026244120001.SAO") == s.timeUtc);
+        // Depende del fixture del dia; sin fixtures no corre (no false FAIL).
+        if (fixturesPresent) {
+            EbroSample s;
+            const std::string body = load("tests/fixtures/ebro/eb040_dia.SAO");
+            (void)EbroAdapter::parseSAO(body, "EB040_2026244120001.SAO", s);
+            check_bool("timeUtc del nombre coherente",
+                       EbroAdapter::saoNameTimeUtc("EB040_2026244120001.SAO") == s.timeUtc);
+        }
     }
 
     // ===== Bloqueo por cuerpo ilegible (logica pura, sin red) =====
@@ -285,11 +340,31 @@ int main() {
         check_bool("T2: baseline isBlocked usable", !a.isBlocked(1000.0));
         a.noteUnreadable(1000.0);
         check_bool("T2: noteUnreadable deja error_", a.getErrorMessage().find("respuesta ilegible") != std::string::npos);
-        std::thread worker([&](){ for (int i=0;i<1000;i++) b.noteUnreadable(1000.0); });
-        worker.join();
-        check_bool("T2: fin sin excepcion (single-thread)", true);
+        // Dos hilos concurrentes de verdad: uno escribe el bloqueo, el otro lee
+        // isBlocked/blockedUntilUtc/getErrorMessage. Con el mutex puesto no hay
+        // carrera; el experimento de deteccion (quitar el lock + TSan) va aparte,
+        // en un binario instrumentado (no en el arbol: el lock es el fix).
+        std::atomic<bool> writerDone{false};
+        std::thread writer([&](){
+            for (int i = 0; i < 5000; ++i) b.noteUnreadable(1000.0 + i * 0.001);
+            writerDone.store(true);
+        });
+        std::thread reader([&](){
+            for (int i = 0; i < 5000; ++i) {
+                (void)b.isBlocked(1000.0);
+                (void)b.blockedUntilUtc();
+                (void)b.getErrorMessage();
+            }
+        });
+        writer.join();
+        reader.join();
+        check_bool("T2: 2 hilos de verdad terminan (5000+5000)", writerDone.load() && true);
+        check_bool("T2: estado final coherente (bloqueo vigente)", b.isBlocked(2000.0));
+        check_bool("T2: error_ legible tras concurrencia", b.getErrorMessage().size() > 0);
     }
 
     std::printf("\n%d OK, %d FAIL\n", g_ok, g_fail);
-    return g_fail == 0 ? 0 : 1;
+    if (g_fail != 0) return 1;
+    // Sin fixtures: los sinteticos ya han corrido y ctest marca SKIP (77).
+    return fixturesPresent ? 0 : 77;
 }
