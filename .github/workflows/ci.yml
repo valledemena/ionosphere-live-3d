@@ -59,17 +59,7 @@ jobs:
           cmake --build build --parallel "$(nproc)"
       - name: Test
         run: ctest --test-dir build --output-on-failure -V
-      # ebro_parse puede salir con 77 (fixtures SAO ausentes: permiso de
-      # redistribucion pendiente) => ctest lo marca "not run", NO falla.
-      # Solo falla la CI si hay tests fallidos de verdad.
-      - name: Assert sin fallos (skips OK)
-        run: |
-          out=$(ctest --test-dir build --output-on-failure)
-          printf '%s\n' "$out" | tail -n 4
-          printf '%s\n' "$out" | grep -q 'tests passed' || { echo "::error::ctest no genero resumen"; exit 1; }
-          if printf '%s\n' "$out" | grep -qE '[1-9][0-9]* tests? failed'; then
-            echo "::error::hay tests fallidos"; exit 1
-          fi
+      # (paso 'Test' arriba ya falla ante ctest != 0; no se re-ejecuta la suite)
 
   tsan:
     name: CI Ubuntu (ThreadSanitizer, tests con transporte inyectado)
@@ -100,12 +90,4 @@ jobs:
           cmake --build build-tsan --parallel "$(nproc)"
       - name: Test (ThreadSanitizer)
         run: ctest --test-dir build-tsan --output-on-failure -V
-      # Skips por fixtures ausentes son OK tambien bajo TSan.
-      - name: Assert sin fallos (skips OK)
-        run: |
-          out=$(ctest --test-dir build-tsan --output-on-failure)
-          printf '%s\n' "$out" | tail -n 4
-          printf '%s\n' "$out" | grep -q 'tests passed' || { echo "::error::ctest no genero resumen"; exit 1; }
-          if printf '%s\n' "$out" | grep -qE '[1-9][0-9]* tests? failed'; then
-            echo "::error::hay tests fallidos"; exit 1
-          fi
+      # (suite ya ejecutada arriba; no re-corre)
