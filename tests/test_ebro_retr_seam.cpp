@@ -115,6 +115,22 @@ int main() {
         a.fetch(100000.0);
         if (!ok(a.listCalls >= 1, true, "P5 expired list -> NLST (startup)")) fails++;
     }
+    // P3 (GLM): fresh list + 1 net fail + 1 ilegible -> NO NLST + 2h block
+    {
+        StubEbro a; a.policy = StubEbro::HalfAndFail;
+        a.setLastListUtc(100000.0);
+        a.fetch(100000.0);
+        if (!ok(a.listCalls == 0 && a.isBlocked(100000.0), true,
+                "P3 fresh list + ilegible -> block, NO NLST")) fails++;
+    }
+    // P6 (GLM): fresh list + 2 ilegibles -> NO NLST + 2h block (control de P5)
+    {
+        StubEbro a; a.policy = StubEbro::BadBody;
+        a.setLastListUtc(100000.0);
+        a.fetch(100000.0);
+        if (!ok(a.listCalls == 0 && a.isBlocked(100000.0), true,
+                "P6 fresh list + 2 ilegibles -> block, NO NLST")) fails++;
+    }
     // saoFilename year roll (2026 -> 2027)
     {
         std::string s2026 = EbroAdapter::saoFilename(1767139200.0); // near 2026 end
