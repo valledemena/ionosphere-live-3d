@@ -98,5 +98,4 @@ protected:
     double blockedUntilUtc_ = 0.0;
     std::string error_;
     double lastListUtc_ = 0.0;
-    int consecutiveFailures_ = 0;
 };

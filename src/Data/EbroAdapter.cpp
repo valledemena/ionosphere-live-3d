@@ -276,10 +276,8 @@ bool EbroAdapter::fetch(double utc) {
     bool expiredList = lastListUtc_ == 0.0 || (utc - lastListUtc_ > 3600.0);
     bool needsList = !succeeded && (netFailures >= 2 || expiredList);
     if (needsList) {
-        consecutiveFailures_++;
         std::vector<std::string> names;
         if (listFiles(names)) {
-            consecutiveFailures_ = 0;
             lastListUtc_ = utc;
             const std::vector<std::string> cands = pickCandidates(names, utc, 2);
             for (const std::string& fn : cands) {
