@@ -10,7 +10,9 @@
 #include <utility>
 
 #define EBRO_FTP_BASE "ftp://ftpoeb.obsebre.es/ionospheric/"
-#define EBRO_USERPWD  "anonymous:m@obs.es"
+// FTP anonimo: password = quien somos (convencion de cortesia). La via de
+// contacto real para el observatorio es Issues del repositorio (ver README).
+#define EBRO_USERPWD  "anonymous:ionosphere-live-3d@users.noreply.github.com"
 
 std::size_t ebro::appendCapped(std::string& buf, const char* data, std::size_t len, std::size_t cap) {
     if (len == 0) return 0;
@@ -241,9 +243,11 @@ bool EbroAdapter::fetch(double utc) {
         fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
         return false;
     }
+    bool anyBody = false;   // llego algun cuerpo? (distingue red caida de ilegible)
     for (const std::string& fn : cands) {
         std::string body;
         if (!fetchFile(fn, body)) continue;   // RETR perdido -> siguiente
+        anyBody = true;
         EbroSample s;
         if (parseSAO(body, fn, s)) {
             std::lock_guard<std::mutex> lk(mutex_);
@@ -255,10 +259,13 @@ bool EbroAdapter::fetch(double utc) {
                    fn.c_str(), s.foF2, s.muf, s.hmF2, s.foEs);
             return true;
         }
+        // cuerpo ilegible (p.ej. SAO a medio escribir en el servidor):
+        // cae al candidato anterior, no es bloqueo todavia.
     }
-    // Los 2 candidatos van y nadie parsea: transferencia "OK" con cuerpo
-    // ilegible => bloqueo de 2 h (como el unreadableBody de TLE).
-    noteUnreadable(utc);
+    // Bloqueo de 2 h SOLO si de verdad llego un cuerpo y nadie parseo
+    // (servidor reescribiendo sus ficheros). Un fallo de red puro no
+    // bloquea: error_ ya lleva el mensaje de curl y el fetch se reintentara.
+    if (anyBody) noteUnreadable(utc);
     fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
     return false;
 }

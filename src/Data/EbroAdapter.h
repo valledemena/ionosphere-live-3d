@@ -79,10 +79,14 @@ public:
 
 private:
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
-    bool fetchFile(const std::string& fname, std::string& response);
-    bool listFiles(std::vector<std::string>& names);   // un curl (NLST) por fetch
     // Escritura unica de error_, siempre bajo mutex_ (fetch async + UI leen).
     void setError(const std::string& msg);
+
+protected:
+    // Seam de transporte: los tests los sobreescriben con stubs para cubrir
+    // fetch() sin red. El codigo real de curl sigue siendo este por defecto.
+    virtual bool fetchFile(const std::string& fname, std::string& response);
+    virtual bool listFiles(std::vector<std::string>& names);   // un curl (NLST) por fetch
 
     mutable std::mutex mutex_;
     EbroSample latest_;

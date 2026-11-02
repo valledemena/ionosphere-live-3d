@@ -544,6 +544,15 @@ target_link_libraries(test_ebro_parse PRIVATE CURL::libcurl)
 add_test(NAME ebro_parse COMMAND test_ebro_parse)
 set_property(TEST ebro_parse PROPERTY WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 set_property(TEST ebro_parse PROPERTY SKIP_RETURN_CODE 77)
+
+# PR-D: fetch() con seam de transporte (sin red). Cubre los cuatro casos que el
+# arbol anterior no podia probar: RETR caido por red -> sin bloqueo; cuerpo
+# ilegible -> bloqueo; aborto por tope de 2 MiB -> sin bloqueo (simulado por
+# RETR abortado); candidato a medio escribir + otro caido -> bloqueo.
+add_executable(test_ebro_fetch tests/test_ebro_fetch_seam.cpp src/Data/EbroAdapter.cpp)
+target_include_directories(test_ebro_fetch PRIVATE src)
+target_link_libraries(test_ebro_fetch PRIVATE CURL::libcurl)
+add_test(NAME ebro_fetch COMMAND test_ebro_fetch)
 # Ebro C4: NaN/inf de las fo criticas (9999 = sin dato, de noche) no cruzan
 # de profileFromStation al volumen. glad/glm via IonosondeLayer.h (solo
 # cabeceras, sin contexto GL - el link no cambia).
