@@ -75,6 +75,9 @@ public:
     static std::vector<std::string> pickCandidates(const std::vector<std::string>& listing, double utc, size_t maxN);
     // Timestamp (s epoch UTC) del nombre EB040_YYYYDDDHHMM01.SAO; 0.0 si invalido.
     static double saoNameTimeUtc(const std::string& name);
+    // Nombre previsible para un utc dado (franja de 5 min, minuto redondeado abajo).
+    // Camino normal del adaptador: un RETR por sondeo, sin leer el directory.
+    static std::string saoFilename(double utc);
     static bool parseSAO(const std::string& text, const std::string& fname, EbroSample& out);
 
 private:
@@ -94,4 +97,6 @@ protected:
     double lastFetchUtc_ = 0.0;
     double blockedUntilUtc_ = 0.0;
     std::string error_;
+    double lastListUtc_ = 0.0;
+    int consecutiveFailures_ = 0;
 };

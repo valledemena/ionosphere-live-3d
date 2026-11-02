@@ -8,6 +8,7 @@
 #include <string>
 #include <algorithm>
 #include <utility>
+#include <ctime>
 
 #define EBRO_FTP_BASE "ftp://ftpoeb.obsebre.es/ionospheric/"
 // FTP anonimo: password = quien somos (convencion de cortesia). La via de
@@ -161,6 +162,19 @@ static float sfield(const std::vector<std::string>& L, size_t k) {
     return f;
 }
 
+std::string EbroAdapter::saoFilename(double utc) {
+    if (utc < 0.0) return {};
+    std::time_t raw = (std::time_t)utc;
+    std::tm* tm = std::gmtime(&raw);
+    if (!tm) return {};
+    char buf[64];
+    // EB040_YYYYDDDHHMM01.SAO : minute rounded down to nearest 5
+    int min5 = (tm->tm_min / 5) * 5;
+    std::snprintf(buf, sizeof(buf), "EB040_%04d%03d%02d%02d01.SAO",
+                  1900 + tm->tm_year, tm->tm_yday + 1, tm->tm_hour, min5);
+    return std::string(buf);
+}
+
 bool EbroAdapter::parseSAO(const std::string& text, const std::string& fname, EbroSample& out) {
     out = EbroSample{};
     // Quitar \r y partir en lineas.
@@ -220,54 +234,72 @@ bool EbroAdapter::parseSAO(const std::string& text, const std::string& fname, Eb
 }
 
 bool EbroAdapter::fetch(double utc) {
-    // Flujo real de bytes: 1 NLST del directorio + hasta 2 RETR
-    // (el mas nuevo <= utc, con un reintento sobre el anterior si el primer
-    //  parse falla por un fichero a medio escribir). 2 transferencias en el
-    // caso habitual; 3 con el reintento. Antes de tocar el FTP, bloqueo
-    // de 2 h si una transferencia previa trajo cuerpo ilegible.
+    // Camino normal (RETR del nombre previsible): no lee el NLST (792 KB por
+    // sondeo del directorio). Si el RETR cuelga/caea se prueba la franja de
+    // 5 min anterior; el NLST solo sirve de resyncronizacion (arranque, dos
+    // fallos en red seguidos o expiracion de 1 h).
     // Bloqueo activo (respuesta ilegible hace poco): no tocar el FTP.
     if (isBlocked(utc)) {
         fprintf(stderr, "[Ebro] bloqueo activo hasta %.0f\n", blockedUntilUtc());
         return false;
     }
-    // Sesion unica: NLST (lo que hay) + RETR del mas nuevo <= utc, con un
-    // fallback al anterior si el parse falla (fichero a medio escribir).
-    std::vector<std::string> names;
-    if (!listFiles(names)) {
-        fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
-        return false;
-    }
-    const std::vector<std::string> cands = pickCandidates(names, utc, 2);
-    if (cands.empty()) {
-        setError("no SAO en el listado");
-        fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
-        return false;
-    }
-    bool anyBody = false;   // llego algun cuerpo? (distingue red caida de ilegible)
-    for (const std::string& fn : cands) {
+    bool anyBody = false;           // llego algun cuerpo?
+    bool succeeded = false;
+    int  netFailures = 0;
+    std::string lastError;
+
+    auto tryCandidate = [&](const std::string& fn) {
+        if (fn.empty()) return false;
         std::string body;
-        if (!fetchFile(fn, body)) continue;   // RETR perdido -> siguiente
+        if (!fetchFile(fn, body)) { netFailures++; return false; }   // red/poke -> siguiente
         anyBody = true;
         EbroSample s;
         if (parseSAO(body, fn, s)) {
             std::lock_guard<std::mutex> lk(mutex_);
-            latest_ = s;
-            lastFetchUtc_ = utc;
-            blockedUntilUtc_ = 0.0;   // hay dato bueno: el bloqueo ha decaido
+            latest_ = s; lastFetchUtc_ = utc; blockedUntilUtc_ = 0.0;
             error_.clear();
             printf("[Ebro] %s: foF2=%.2f MUF=%.1f hmF2=%.0f foEs=%.2f\n",
                    fn.c_str(), s.foF2, s.muf, s.hmF2, s.foEs);
             return true;
         }
-        // cuerpo ilegible (p.ej. SAO a medio escribir en el servidor):
-        // cae al candidato anterior, no es bloqueo todavia.
+        // cuerpo ilegible (SAO a medio escribir): cae al siguiente.
+        return false;
+    };
+
+    // 1) Camino normal: el nombre sale de la franja de 5 min.
+    for (int i = 0; i < 2 && !succeeded; ++i) {
+        if (tryCandidate(saoFilename(utc - i * 300.0))) succeeded = true;
     }
-    // Bloqueo de 2 h SOLO si de verdad llego un cuerpo y nadie parseo
-    // (servidor reescribiendo sus ficheros). Un fallo de red puro no
-    // bloquea: error_ ya lleva el mensaje de curl y el fetch se reintentara.
-    if (anyBody) noteUnreadable(utc);
+
+    // 2) Resincronizacion por NLST solo si hace falta: arranque, dos fallos
+    // seguidos, una hora sin listar, o no hubo dato.
+    bool expiredList = lastListUtc_ == 0.0 || (utc - lastListUtc_ > 3600.0);
+    bool needsList = !succeeded && (netFailures >= 2 || expiredList);
+    if (needsList) {
+        consecutiveFailures_++;
+        std::vector<std::string> names;
+        if (listFiles(names)) {
+            consecutiveFailures_ = 0;
+            lastListUtc_ = utc;
+            const std::vector<std::string> cands = pickCandidates(names, utc, 2);
+            for (const std::string& fn : cands) {
+                if (succeeded) break;
+                if (tryCandidate(fn)) succeeded = true;
+            }
+        } else {
+            netFailures++;
+        }
+    }
+
+    // 3) Contra el colapso de error_: si ni un body llego, error_ ya lleva
+    // el mensaje de curl (o se pone uno generico); si alguno llego y nadie
+    // parseo, es ilegible -> bloqueo 2h.
+    if (!succeeded) {
+        if (anyBody) noteUnreadable(utc);
+        else if (error_.empty()) setError("no SAO found (expected + NLST)");
+    }
     fprintf(stderr, "[Ebro] %s\n", getErrorMessage().c_str());
-    return false;
+    return succeeded;
 }
 
 void EbroAdapter::fetchAsync(double utc) {
