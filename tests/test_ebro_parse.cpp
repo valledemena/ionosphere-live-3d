@@ -323,8 +323,8 @@ int main() {
     {
         auto B = ebro::appendCapped;
         std::string s;
-        check_bool("T4 ok: append 3 bytes (3 <= 4)", B(s, "abc", 3, 4) == 3);
-        std::string t; check_bool("T4 ok: append 3 de 4", B(t, "abc", 3, 4) == 3 && t == "abc");
+        check_bool("T4 ok: append 3 bytes y sin sobrepasar (3 <= 4)", B(s, "abc", 3, 4) == 3 && s == "abc");
+
         std::string u = "ab"; check_bool("T4: a tope sin sobrepasar", B(u, "cd", 2, 4) == 2 && u == "abcd");
         std::string v = "abcd"; check_bool("T4 corte: devuelve 0 al tope", B(v, "x", 1, 4) == 0 && v.size() == 4);
     }

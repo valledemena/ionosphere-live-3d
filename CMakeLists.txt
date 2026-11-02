@@ -553,6 +553,10 @@ add_executable(test_ebro_fetch tests/test_ebro_fetch_seam.cpp src/Data/EbroAdapt
 target_include_directories(test_ebro_fetch PRIVATE src)
 target_link_libraries(test_ebro_fetch PRIVATE CURL::libcurl)
 add_test(NAME ebro_fetch COMMAND test_ebro_fetch)
+add_executable(test_ebro_retr tests/test_ebro_retr_seam.cpp src/Data/EbroAdapter.cpp)
+target_include_directories(test_ebro_retr PRIVATE src)
+target_link_libraries(test_ebro_retr PRIVATE CURL::libcurl)
+add_test(NAME ebro_retr COMMAND test_ebro_retr)
 # Ebro C4: NaN/inf de las fo criticas (9999 = sin dato, de noche) no cruzan
 # de profileFromStation al volumen. glad/glm via IonosondeLayer.h (solo
 # cabeceras, sin contexto GL - el link no cambia).

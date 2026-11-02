@@ -11,7 +11,6 @@ struct StubEbro : EbroAdapter {
     bool listOk = true;
     std::vector<std::string> listing;
     bool listFiles(std::vector<std::string>& names) override {
-        if (policy == NetFail) { /* lista devuelve contenido; fallara RETR */ }
         if (!listOk) { return false; }
         if (listing.empty()) {
             names.push_back("EB040_2026245000001.SAO");
