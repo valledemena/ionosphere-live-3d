@@ -5,12 +5,14 @@ reference package (NRL-SOF-014-1), for **research, academic, and
 non-profit purposes only**. Any commercial use is prohibited.
 
 - Reference mirror pinned at `jacobwilliams/NRLMSIS2.1` commit `9124144`.
-- Own new code in this directory is GPL-3.0-or-later (see `LICENSE` at
-  the repository root).
+- The translated files (`msisConstants.ts`, `msisUtils.ts`, `msisInit.ts`)
+  are DERIVATIVE WORKS of the NRL-SOF (a translation to another programming
+  language is a derivative work per section 4(b)): they carry the NRL-SOF
+  terms, are NOT GPL, and cannot be relicensed under the GPL-3 of the
+  repository root. The fence applies to the whole directory.
 - The NRL-SOF originals (`msis21.parm`, `nrlmsis2.1_license.txt`) are
-  fenced here, byte-exact, and NOT GPL: `msis21.parm` is the parameter
-  data of the NRL-SOF; the translation files carry the section 4(b)
-  change notices.
+  fenced here, byte-exact. Any genuinely new, non-derivative glue code
+  added to this directory may be GPL-3.0-or-later.
 - HWM14 is out of scope for v1 (no port, no call path).
 
 NRL-SOF section 4(c) verbatim statement:
@@ -25,8 +27,8 @@ Upstream: https://github.com/jacobwilliams/NRLMSIS2.1
 Section 4(b) obligations acknowledged for this derivative work:
 prominent change notices are carried in each translated file header;
 delivery of the modified portion to NRL Code 7630 and the open-source
-availability of the derivative are tracked by the project (relay drop
-301); the modified software is NOT identified as "MSIS" (it is called
+availability of the derivative are tracked by the project; the modified
+software is NOT identified as "MSIS" (it is called
 "ionosphere-live-3d NRLMSIS 2.1 port"), while the MSIS acronym is kept
 in the individual files to document provenance.
 

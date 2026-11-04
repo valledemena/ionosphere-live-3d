@@ -15,7 +15,7 @@ CMake 3.20+, C++17. Dependencias (CMake `find_package`):
 
 Backfill GloTEC (por defecto): 6 h, de nuevo a viejo (`newest -> oldest`), parando tras 3 respuestas 404 consecutivas.
 
-Ver `CREDITS.md` para el detalle de los commits de revisión.
+Ver `CREDITS.md` para las fuentes de datos, texturas incluidas y licencias.
 
 Real-time 3D ionosphere and space-weather visualizer (C++17 / OpenGL 4.0).
 A textured Earth with day/night terminator, city lights and animated clouds,
@@ -269,6 +269,16 @@ Access policy: polite cadence and mirrors lower the risk; they don't remove
 it — we have measured 429/504 under load, which is why the kc2g failover exists.
 LGDC traffic (catalog/getbest/gambit) shares one 15 s pacing gate with
 timestamped `stderr` trace lines (`[LGDC …] launch / gate-consult / result`).
+Ebre `.SAO` captures are never redistributed: `test_ebro_parse` skips
+(CTest 77) when `tests/fixtures/ebro/` is absent, so a plain clone builds
+green without them.
+
+## Contact
+
+Data-source issues, permission requests or questions: open an issue at
+https://github.com/valledemena/ionosphere-live-3d/issues (English or
+Spanish). This is also the contact channel referenced by the app's
+anonymous FTP fetches (Ebre observatory).
 
 ## Honest states
 
