@@ -1,4 +1,5 @@
 #include "App.h"
+#include "Utils/FieldFormat.h"
 
 #include <glad/glad.h>
 #include <imgui.h>
@@ -714,22 +715,6 @@ static GridData giroInterpGrid(const std::vector<StationSample>& samples, int va
     g.valid = true;
     g.timestamp = 0.0;
     return g;
-}
-
-// Formatea un campo del perfil Ebro ("---" si NaN).
-static std::string ebFmt(float v, int dec) {
-    if (std::isnan(v)) return "---";
-    char b[32];
-    if (dec <= 0) snprintf(b, sizeof(b), "%.0f", v);
-    else if (dec == 1) snprintf(b, sizeof(b), "%.1f", v);
-    else snprintf(b, sizeof(b), "%.2f", v);
-    return std::string(b);
-}
-
-// Igual para GIRO (ausente = 0).
-static std::string giroFmt(float v, int dec) {
-    if (!(v > 0.0f)) return "---";
-    return ebFmt(v, dec);
 }
 
 // Marcador "(?)" con tooltip de ayuda. Usar tras el item al que documenta.
