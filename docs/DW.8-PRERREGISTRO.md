@@ -111,8 +111,8 @@ Predicciones lineadas del POST fijadas ANTES de ver la evidencia: el
 cuerpo de los tres segmentos se mueve byte-identico al header; las
 **definiciones** desaparecen de `App.cpp` y aparecen en `IdwInterp.h`;
 los **comentarios y usos** de `App.cpp` se desplazan: -63 para todo lo
-posterior a 632 y -61 adicional para lo posterior a 706 —regla
-INCOMPLETA, sustituida por la de abajo—. En particular:
+posterior a 632 y -61 adicional para lo posterior a 706 regla
+INCOMPLETA, sustituida por la de abajo. En particular:
 
 **Regla completa de desplazamiento (ERRATA acta `0477` D1)**: +1 si
 L>2 (include en linea 3); -63 si L>632 (S1); -61 adicional si L>706
