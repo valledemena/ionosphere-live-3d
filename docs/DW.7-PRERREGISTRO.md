@@ -72,10 +72,10 @@ Justificacion de cada dependencia directa:
 
 PRE (`ba8a4c1`), `git grep -n -w "blendGrids" -- src tests`:
 
-- **2 lineas** - 808 (comentario, contiene el simbolo), 809 (definicion)
-  y 2362 (uso). Total **3 lineas** (el comentario 808 tambien mencion
-  el nombre); todas en `src/App.cpp`; **0 en tests**; 0 en otros
-  ficheros de `src/`.
+- **2 lineas** - 809 (definicion) y 2362 (uso). El comentario 808
+  (`// Mezcla lineal de dos grids TEC...`) **no** contiene el simbolo:
+  `git grep -n -w blendGrids` devuelve exactamente 2 lineas, no 3.
+  Todas en `src/App.cpp`; **0 en tests**; 0 en otros ficheros.
 
 Predicciones lineadas del POST, fijadas ANTES de ver la evidencia:
 
@@ -85,8 +85,7 @@ Predicciones lineadas del POST, fijadas ANTES de ver la evidencia:
   - fin del bloque (vieja 823) -> `GridBlend.h:21`.
 - Desplazamiento en `App.cpp`: **-16 neto** (+1 include, -17 retirada)
   para todo lo posterior a 824: uso en 2362 -> **2346**.
-- Totales por simbolo sin cambio: 3 (comentario + def + uso); 0 en
-  tests. La evidencia muestra el listado completo lineado pre/post y
+- Totales por simbolo sin cambio: **2** (def + uso); 0 en tests. La evidencia muestra el listado completo lineado pre/post y
   tabla prediccion/observado.
 
 ## 5. Anclajes re-medidos (baseline `ba8a4c1`, worktree limpio)
@@ -130,3 +129,13 @@ PR a `master` con el checklist completo en el cuerpo; rama conservada;
 5. David da GO para el PR y el merge a master (protegido) con CI 2/2.
 
 Sin ejecucion de codigo antes de los puntos 1 y 2.
+
+## 8. Errada corregida (commit adicional, regla 0455)
+
+El commit `a27fec8` publico el pre-registro con un recuento erroneo de
+3 lineas en el grep PRE (suponia que el comentario 808 contenia el
+simbolo). Verificacion por ejecucion: `git grep -n -w blendGrids
+ba8a4c1 -- src tests` devuelve **2 lineas** (809 definicion, 2362 uso).
+La seccion 4 queda corregida a 2 lineas, con los totales POST
+ajustados. Ningun sha publicado se reescribe: esta correccion es un
+commit adicional sobre `a27fec8`, conforme al acta 0455 seccion 2.
