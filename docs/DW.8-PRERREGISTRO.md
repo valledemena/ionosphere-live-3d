@@ -46,7 +46,7 @@ en el repo C++ (`valledemena/ionosphere-live-3d`), tras DW.7 cerrada en
 
 ## 2. Andamiaje enumerado (regla del acta 0465 seccion 2)
 
-`src/Utils/IdwInterp.h` queda con **H = 223 + S**, con S=12:
+`src/Utils/IdwInterp.h` queda con **H = 223 + S**, con S=13 (ERRATA D2):
 
 ```
   1 [guarda]:  #pragma once
@@ -56,14 +56,15 @@ en el repo C++ (`valledemena/ionosphere-live-3d`), tras DW.7 cerrada en
   5 [include]: #include <vector>
   6 [include]: #include <glm/glm.hpp>    (glm::vec3)
   7 [include]: "Data/GiroAdapter.h"      (struct StationSample)
-  8 [include]: "Data/RadioPropagationAdapter.h"  (stationValue, linea 38)
+  8 [include]: "Data/RadioPropagationAdapter.h"  (stationValue, linea 88)
   9 [include]: "Ionosphere/GridLayer.h"  (struct GridData)
  10 [include]: "Ionosphere/LayerProfile.h" (LayerProfile, sanitizeB0/B1,
                                           usableFo, havDeg, smoothstep,
                                           dayOfYear, modelFoF2/HmF2)
  11 [include]: "Ionosphere/DensityVolume.h" (densityDir, linea 60)
- 12 [blank]
- 13..  [S1 62 lineas = App.cpp 570..631, byte-identicas]
+ 12 [include]: "Utils/GiroHelpers.h" (giroValueOf, linea 40)
+ 13 [blank]
+ 14..  [S1 62 lineas = App.cpp 570..631, byte-identicas]
   +1 blank
   [S2 60 lineas = App.cpp 646..705, byte-identicas]
   +1 blank
@@ -75,9 +76,11 @@ verificada por ejecucion (`git grep -w`): las funciones auxiliares
 `sanitizeB0/B1`, `usableFo`, `havDeg`, `smoothstep`, `dayOfYear`,
 `modelFoF2/HmF2` son `inline` en `LayerProfile.h`; `densityDir` es
 `inline` en `DensityVolume.h`; `stationValue` es metodo de
-`RadioPropagationAdapter` (header); `giroValueOf` ya vive en
-`Utils/GiroHelpers.h`, **que se incluye explicitamente ademas** como
-dependencia directa. `static` se conserva: un solo includer (`App.cpp`).
+`RadioPropagationAdapter` (header); `giroValueOf` vive en
+`Utils/GiroHelpers.h` (linea 40) y es dependencia directa: se incluye
+**como decimo include** del esqueleto (ERRATA D2). Ninguno de los otros
+9 lo aporta transitivamente (GiroAdapter.h solo incluye headers std):
+sin este include el header NO compila. `static` se conserva: un solo includer (`App.cpp`).
 Nota de higiene permanente (acta 0461 seccion 5): si un segundo fichero
 llega a incluir el header, decidir `inline` o namespace.
 
@@ -85,12 +88,11 @@ llega a incluir el header, decidir `inline` o namespace.
 
 - `src/App.cpp`: **+1 / -226** exacto (include anadido; 63+61+102
   lineas retiradas). Cualquier otra edicion: fallo.
-- `src/Utils/IdwInterp.h`: **+H / -0**, con H = 223 + 12 + 2 blanks
-  separadores entre segmentos = **237 lineas** (si GLM admite los dos
-  blanks separadores; en caso contrario se declara la desviacion y se
-  enumera). Cada linea enumerada en `04-header-enumerado.txt`.
+- `src/Utils/IdwInterp.h`: **+H / -0**, con H = 223 + 13 + 2 blanks
+  separadores entre segmentos = **238 lineas** (los dos
+  blanks separadores quedan admitidos, como en la serie). Cada linea enumerada en `04-header-enumerado.txt`.
 - `docs/DW.8-PRERREGISTRO.md`: +N / -0 (N se declara en el relay).
-- PR acumulado desde `38ef6e3`: **3 ficheros, +(N+1+H)/-226**.
+- PR acumulado desde `38ef6e3`: **3 ficheros, +(161+1+238)/-226 = +400/-226**.
 
 ## 4. Cierre grep por simbolo y predicciones del POST
 
@@ -109,13 +111,23 @@ Predicciones lineadas del POST fijadas ANTES de ver la evidencia: el
 cuerpo de los tres segmentos se mueve byte-identico al header; las
 **definiciones** desaparecen de `App.cpp` y aparecen en `IdwInterp.h`;
 los **comentarios y usos** de `App.cpp` se desplazan: -63 para todo lo
-posterior a 632, -61 adicional para lo posterior a 706. En particular:
+posterior a 632 y -61 adicional para lo posterior a 706 —regla
+INCOMPLETA, sustituida por la de abajo—. En particular:
 
-- Uso `giroInterpGrid` 2439 -> **2315**; 2545 -> **2421**; 2546 ->
-  **2422**; 4108 -> **3984**.
-- Uso `radioInterpGrid` 2449 -> **2325**; 2547 -> **2423**; 4125 ->
-  **4001**.
-- Uso `interpLayerProfiles` 2619 -> **2495**.
+**Regla completa de desplazamiento (ERRATA acta `0477` D1)**: +1 si
+L>2 (include en linea 3); -63 si L>632 (S1); -61 adicional si L>706
+(S2); -102 adicional si L>808 (S3). Los 8 usos son >808: **neto -225**.
+Predicciones CORREGIDAS (el borrador `4c1cdf0` estaba +101 en cada una):
+
+- Uso `giroInterpGrid` 2439 -> **2214**; 2545 -> **2320**; 2546 ->
+  **2321**; 4108 -> **3883**.
+- Uso `radioInterpGrid` 2449 -> **2224**; 2547 -> **2322**; 4125 ->
+  **3900**.
+- Uso `interpLayerProfiles` 2619 -> **2394**.
+- Invariantes congelados: `HelpMarker` 633..644 -> **571..582**;
+  comentario 373 -> **374** (solo +1); comentario 809 -> **584**;
+  las definiciones 575/650/714 y el comentario 707 migran al header;
+  `#include "Utils/IdwInterp.h"` es la nueva linea 3 de `App.cpp`.
 - Totales por simbolo sin cambio (11/6/4), 0 usos nuevos en tests.
 
 La evidencia muestra el listado completo lineado pre/post con tabla
@@ -143,9 +155,12 @@ Ferry `to-glm/files/DW.8/` con: `01-grep-pre.txt`, `02-grep-post.txt`,
 `08-build.txt`, `09-ctest.txt`, `10-status.txt`, `MANIFEST.md`,
 `SHA256SUMS` (11 entradas, 11/11 OK, convencion acta `0466` seccion 3).
 
-Bundle delta `38ef6e3..<head del change>` con sha256 publicado,
-verificado con `git bundle verify`, entregado en `upload/` **y en el
-relay** `to-glm/files/DW-BUNDLES/` (delegacion de David, to-glm/0486).
+Bundle delta `38ef6e3..<head del change>` con sha256 publicado y
+verificado con `git bundle verify`. El ferry `01..10` y el bundle de
+ejecucion se entregan **con la fase de ejecucion**, como en DW.6 y
+DW.7 (el `02-grep-post` solo puede existir tras ejecutar). Con este
+pre-registro se entrega en el relay el bundle delta del propio
+pre-registro `38ef6e3..<head>` (ERRATA D3).
 
 PR a `master` con el checklist completo; rama conservada; **sin amend
 ni force-push** (regla del acta `0455`).
@@ -159,3 +174,19 @@ ni force-push** (regla del acta `0455`).
 5. David da GO para el PR y el merge a master (protegido) con CI 2/2.
 
 Sin ejecucion de codigo antes de los puntos 1 y 2.
+
+
+## 9. Errata de pre-registro (commit adicional, regla del acta `0455`)
+
+El head `4c1cdf0` fue dictaminado **NO FAVORABLE** por el acta `0477`
+(2 defectos materiales D1/D2 y entrega no materializada D3). Este
+commit corrige sin amend ni force-push, conservando `4c1cdf0`:
+
+1. **D1**: regla completa (+1/-63/-61/-102, neto -225), 8 predicciones
+   correctas e invariantes (`HelpMarker` 571..582, comentario 374,
+   comentario 809->584).
+2. **D2**: decimo include `Utils/GiroHelpers.h`, S=13, H=238,
+   `IdwInterp.h +238/-0`, PR +400/-226, `stationValue` en linea 88.
+3. **D3**: ferry y bundle declarados como entregas de la fase de
+   ejecucion (precedente DW.6/DW.7); bundle del pre-registro entregado
+   en el relay.
