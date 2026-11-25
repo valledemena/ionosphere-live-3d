@@ -60,11 +60,12 @@ hallazgos, sin corregir en este slice.
 
 - `cmake --build build --parallel 4` rc=0.
 - `ctest --test-dir build --output-on-failure` rc=0.
-- Anclaje dual: local **62 passed + 1 skipped** (54 existentes +
-  8 nuevos; `ebro_parse` sigue Skip por fixtures gitignored); CI
-  **61 passed + 1 skipped** (53+8 y 1 skip). Rango previsto por GLM:
-  5961 passed + 1 skipped; el valor exacto se mide en la ejecucion
-  y se declara, sin reescribir este documento.
+- Anclaje dual: **total local 62** (54 existentes + 8 nuevos) con
+  rc=0; la tupla exacta passed/skipped se mide y declara en la
+  ejecucion (62+0 con fixtures copiados; 61+1 si `ebro_parse` hiciera
+  skip). CI **61 passed + 1 skipped** (53+8 y 1 skip), rango GLM
+  59-61 + 1. Correccion E2 del acta `0484`: el literal anterior
+  "62 passed + 1 skipped" daba total 63, inconsistente.
 - 0 duplicados de simbolos entre las seis cabeceras.
 - `App.cpp` y las seis cabeceras byte-identicos a master: `git diff
   --stat` sobre ellos, vacio.
@@ -79,9 +80,21 @@ hallazgos, sin corregir en este slice.
   audita contra el plan real, no contra un literal pre-errata:
   la nota de lectura se calculara sobre los ficheros realmente
   anadidos, como en DW.9 (N2 del acta `0482`).
-- Correcciones permitidas: solo anadir includes que faltaran en
-  los TUs de test; cualquier parche de higiene se registra y no
-  reabre la dieta.
+- **Wiring de fuentes (E3, acta `0484` — verificacion por enlace)**:
+  A1..A4 enlazan tal cual. `IdwInterp.h` (A5), `IrtamBracket.h` (A6)
+  y B (las seis juntas) NO enlazan con `main` vacio: sus `static`
+  emiten y referencian simbolos fuera de cabecera. Cada target de
+  test debe llevar sus fuentes de soporte, patron `test_exporter`:
+  - A5 `test_hdr_idwinterp.cpp` + `src/Data/RadioPropagationAdapter.cpp`
+    + `src/Utils/Igrf.cpp` + `CURL::libcurl`.
+  - A6 `test_hdr_irtambracket.cpp` +
+    `src/Data/IrtamCoeffCache.cpp` + `src/Data/IrtamCoeffParse.cpp` +
+    `src/Data/IrtamGridEval.cpp` + `src/Data/IrtamState.cpp`
+    (verificado LINK OK en el acta `0484`).
+  - B `test_hdr_all_six.cpp` + las cinco fuentes de A5 y A6.
+  Produccion intacta. Correcciones permitidas ampliadas: anadir
+  includes que falten **y anadir fuentes .cpp de soporte al target
+  del test**; parches de higiene registrados, dieta no reabierta.
 
 ## 5. Anclajes re-medidos (baseline `25098f3`, worktree limpio)
 
@@ -105,8 +118,12 @@ las 6 cabeceras vs master), `05-duplicados.txt` (0), `06-iwyu.txt`,
 post-normalizacion, leccion `0479`).
 
 Bundle delta `25098f3..<head del change>` con sha256 publicado y
-`git bundle verify`; entregado en `upload/` y en el relay
-`to-glm/files/DW-BUNDLES/` (delegacion de David, to-glm/0486).
+`git bundle verify`. Entregado en `upload/` y en el relay
+`to-glm/files/DW-BUNDLES/` (delegacion de David, to-glm/0486) **con
+la ejecucion**, como en DW.6/DW.7/DW.8/DW.9; el ferry completo de
+11 entradas solo puede existir tras ejecutar. Correccion E4 del
+acta `0484`: el pre-registro no puede declarar entregas no
+materializadas (clase D3 del acta `0481`).
 
 PR a `master` con el checklist; rama conservada; **sin amend ni
 force-push** (regla `0455`).
@@ -120,3 +137,20 @@ force-push** (regla `0455`).
 5. David da GO para el PR y el merge a master (protegido) con CI 2/2.
 
 Sin codigo tocado antes de los puntos 1 y 2.
+
+
+## 8. Errata de pre-registro (commit adicional, regla del acta `0455`)
+
+El head `25860b3` fue dictaminado **NO FAVORABLE** por el acta `0484`
+(E1 literal, E2 aritmetica, E3 enlace de A5/A6/B, E4 entrega
+declarada). Esta errata corrige sin amend ni force-push, conservando
+`25860b3`:
+
+1. **E1**: rango `59-61` (no `5961`).
+2. **E2**: total local 62 con rc=0; tupla exacta medida en ejecucion;
+   CI 61+1.
+3. **E3**: fuentes de soporte en los targets de A5/A6/B (patron
+   `test_exporter`), verificacion por ENLACE real, no solo
+   `-fsyntax-only`. Produccion intacta.
+4. **E4**: entrega de ferry y bundle declarada con la fase de
+   ejecucion; no se declara entregado lo que no esta en el relay.
