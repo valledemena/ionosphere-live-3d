@@ -91,7 +91,14 @@ hallazgos, sin corregir en este slice.
     `src/Data/IrtamCoeffCache.cpp` + `src/Data/IrtamCoeffParse.cpp` +
     `src/Data/IrtamGridEval.cpp` + `src/Data/IrtamState.cpp`
     (verificado LINK OK en el acta `0484`).
-  - B `test_hdr_all_six.cpp` + las cinco fuentes de A5 y A6.
+  - B `test_hdr_all_six.cpp` + las SEIS fuentes: A5
+  (`RadioPropagationAdapter.cpp` + `Igrf.cpp` + `CURL::libcurl`) y
+  A6 (las cuatro fuentes Irtam). **Micro-errata** (nota `0512` del
+  lado auditor): con cinco fuentes (sin `Igrf.cpp`) el enlace de B
+  FALLA por `igrf::fieldNed` / `igrf::faradayK` referenciadas desde
+  `RadioPropagationAdapter.cpp`; verificado LINK OK solo con seis.
+  La prosa anterior «las cinco fuentes de A5 y A6» era ambigua: el
+ .target B lista explicitamente `Igrf.cpp`, que A5 ya incluia.
   Produccion intacta. Correcciones permitidas ampliadas: anadir
   includes que falten **y anadir fuentes .cpp de soporte al target
   del test**; parches de higiene registrados, dieta no reabierta.
