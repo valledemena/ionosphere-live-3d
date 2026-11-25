@@ -80,7 +80,7 @@ hallazgos, sin corregir en este slice.
   audita contra el plan real, no contra un literal pre-errata:
   la nota de lectura se calculara sobre los ficheros realmente
   anadidos, como en DW.9 (N2 del acta `0482`).
-- **Wiring de fuentes (E3, acta `0484` — verificacion por enlace)**:
+- **Wiring de fuentes (E3, acta `0484`  verificacion por enlace)**:
   A1..A4 enlazan tal cual. `IdwInterp.h` (A5), `IrtamBracket.h` (A6)
   y B (las seis juntas) NO enlazan con `main` vacio: sus `static`
   emiten y referencian simbolos fuera de cabecera. Cada target de
