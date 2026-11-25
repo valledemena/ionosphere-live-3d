@@ -97,7 +97,7 @@ hallazgos, sin corregir en este slice.
   lado auditor): con cinco fuentes (sin `Igrf.cpp`) el enlace de B
   FALLA por `igrf::fieldNed` / `igrf::faradayK` referenciadas desde
   `RadioPropagationAdapter.cpp`; verificado LINK OK solo con seis.
-  La prosa anterior «las cinco fuentes de A5 y A6» era ambigua: el
+  La prosa anterior las cinco fuentes de A5 y A6 era ambigua: el
  .target B lista explicitamente `Igrf.cpp`, que A5 ya incluia.
   Produccion intacta. Correcciones permitidas ampliadas: anadir
   includes que falten **y anadir fuentes .cpp de soporte al target
