@@ -24,12 +24,12 @@ aplicacion tocado.**
 - Worktree limpio separado:
   `C:\Users\unknown\Desktop\ionosphere-dw9-cpp`.
 - Bloque: `src/App.cpp`, **dos segmentos no contiguos**, 35 lineas:
-  - S1 `585..602` (18 lineas): 4 lineas de comentario (585-588) +
+  - S1 `584..602` (19 lineas): 5 lineas de comentario (584-588) +
     `evalTovGrid` (589-602, 14 lineas).
   - S2 `720..736` (17 lineas): 3 lineas de comentario (720-722) +
     `lerpBracketGrid` (723-736, 14 lineas).
   - Entre S1 y S2 queda intacto `sampleIrtamBracketWorker` (604-718).
-- Se retiran `585..603` (19) y `720..737` (18) = **37 lineas**
+- Se retiran `584..603` (20) y `720..737` (18) = **38 lineas**
   (bloque + blank adyacente en cada caso); blanks unicos entre vecinos.
 - Se mueven literalmente las 35 lineas a `src/Utils/IrtamBracket.h`.
 - Se anade **una** linea `#include "Utils/IrtamBracket.h"` tras la
@@ -37,8 +37,8 @@ aplicacion tocado.**
 
 ## 2. Andamiaje enumerado (regla del acta 0465 seccion 2)
 
-`src/Utils/IrtamBracket.h` con **H = 47 = 35 lineas movidas + 12 de
-andamiaje (S=12)**: 1 guarda + 1 blank + 8 includes directos + 1
+`src/Utils/IrtamBracket.h` con **H = 48 = 36 lineas movidas + 12 de
+yandamiaje (S=12)**: 1 guarda + 1 blank + 8 includes directos + 1
 blank separador entre segmentos = 11 lineas de esqueleto antes de S1
 (mas 1 blank entre S1 y S2). Esquema:
 
@@ -55,12 +55,12 @@ blank separador entre segmentos = 11 lineas de esqueleto antes de S1
   9 [include]: "Data/IrtamState.h"         (irtamstate::lerpValues)
  10 [include]: "Ionosphere/GridLayer.h"    (struct GridData)
  11 [blank]
- 12..29 [S1 18 lineas = App.cpp 585..602, byte-identicas]
- 30 [blank separador]
- 31..47 [S2 17 lineas = App.cpp 720..736, byte-identicas]
+ 12..30 [S1 19 lineas = App.cpp 584..602, byte-identicas]
+ 31 [blank separador]
+ 32..48 [S2 17 lineas = App.cpp 720..736, byte-identicas]
 ```
 
-H = 11 (esqueleto) + 18 (S1) + 1 (separador) + 17 (S2) = **47**.
+H = 11 (esqueleto) + 19 (S1) + 1 (separador) + 17 (S2) = **48**.
 Cada include es dependencia DIRECTA verificada por `git grep -w`:
 `std::floor` (<cmath>), `std::string` (<string>), `std::vector`
 (<vector>), `irtamccache::Bucket/loadBucket` (IrtamCoeffCache.h),
@@ -73,10 +73,10 @@ fichero incluyera el header.
 
 ## 3. Diffstat esperado y nota de lectura
 
-- `src/App.cpp`: **+1 / -37** exacto.
+- `src/App.cpp`: **+1 / -38** exacto.
 - `src/Utils/IrtamBracket.h`: **+H / -0** (H se fija en el relay).
 - `docs/DW.9-PRERREGISTRO.md`: +N / -0.
-- PR acumulado desde `87313c5`: **3 ficheros, +(N+1+H)/-37** (H=47).
+- PR acumulado desde `87313c5`: **3 ficheros, +(N+1+H)/-38** (H=48).
 - **Nota de lectura (calculada sobre el plan real, ver seccion 0)**:
   el acumulado desde `e680d01` y desde `d9fb809` se audita contra el
   resultado real de la ejecucion, no contra un literal pre-errata.
@@ -94,15 +94,16 @@ PRE (`87313c5`), `git grep -n -w -- src tests`:
 
 Predicciones del POST (congeladas antes de la evidencia):
 
-- Header S1 (`nueva = vieja - 573`): comentario 585 -> `:12`,
-  def 589 -> `:16`, fin 602 -> `:29`.
-- Header S2 (`nueva = vieja - 689`): comentario 720 -> `:31`,
-  def 723 -> `:34`, fin 736 -> `:47`.
-- App.cpp: desplazamiento neto = +1 - 19 (S1) = -18 para lineas
-  posteriores a 603, y -18 - 18 = -36 para posteriores a 737.
-  Uso `evalTovGrid` 657 -> **639**; usos `lerpBracketGrid`
-  2241 -> **2223**, 2265 -> **2247**, 3920 -> **3892**,
-  3951 -> **3923**.
+- Header S1 (`nueva = vieja - 572`): comentario 584 -> `:12`,
+  def 589 -> `:17`, fin 602 -> `:30`.
+- Header S2 (`nueva = vieja - 688`): comentario 720 -> `:32`,
+  def 723 -> `:35`, fin 736 -> `:48`.
+- App.cpp: desplazamiento neto = +1 - 20 (S1) = -19 para lineas
+  posteriores a 603, y -19 - 18 = -37 para posteriores a 737.
+  Uso `evalTovGrid` 657 -> **638**; usos `lerpBracketGrid`
+  2241 -> **2204**, 2265 -> **2228**, 3920 -> **3883**,
+  3951 -> **3914**. Calculados con SIMULADOR MECANICO (plan
+  aplicado al App.cpp real), no a mano: leccion de DW.8 y 0481.
 - Totales 2/5 sin cambio; 0 usos nuevos en tests.
 
 La evidencia muestra listado lineado completo pre/post y tabla
@@ -123,7 +124,8 @@ prediccion/observado.
 Ferry `to-glm/files/DW.9/`: 01-grep-pre, 02-grep-post,
 03-bloque-byte-identico, 04-header-enumerado, 05-numstat, 06-head,
 07-predicciones-post, 08-build, 09-ctest, 10-status, MANIFEST y
-SHA256SUMS (11 entradas, 11/11 OK, convencion acta `0466` seccion 3).
+  SHA256SUMS (11 entradas, 11/11 OK, convencion acta `0466` seccion 3),
+  ENTREGADO EN EL RELAY con esta errata (precedente DW.8 `dd803ff`).
 **Recomendacion 0479 aplicada**: los ficheros 08/09/10 se hashean
 sobre los bytes post-normalizacion (LF) para evitar la dual-track
 CRLF recurrente en DW.5-8.
@@ -144,3 +146,20 @@ force-push** (regla `0455`).
 5. David da GO para el PR y el merge a master (protegido) con CI 2/2.
 
 Sin ejecucion de codigo antes de los puntos 1 y 2.
+
+
+## 8. Errata de pre-registro (commit adicional, regla del acta `0455`)
+
+El head `4eded11` fue dictaminado **NO FAVORABLE** por el acta `0481`
+(D1 predicciones imposibles, D2 off-by-one del comentario, D3 entrega
+no materializada). Este commit corrige sin amend ni force-push,
+conservando `4eded11`:
+
+1. **D2**: S1 pasa a 584..602 (19 lineas, comentario de 5), retirada
+   584..603 (20), `App.cpp +1/-38`, H=48, esquema 12..30 / 32..48.
+2. **D1**: shifts `-572/-688` y usos **638/2204/2228/3883/3914**,
+   obtenidos con un simulador mecanico que aplica el plan al App.cpp
+   real y lee los greps resultantes (leccion transversal `0481`).
+3. **D3**: ferry y bundle entregados en el relay con esta errata.
+4. Acumulado corregido: era `e680d01..merge9` 13 ficheros +1292/-387;
+   total `d9fb809..merge9` 29 ficheros +4545/-387.
