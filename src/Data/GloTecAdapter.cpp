@@ -261,8 +261,13 @@ bool GloTecAdapter::fetchIndex(std::vector<GloTecFrame>& out) {
     }
     std::sort(out.begin(), out.end(),
               [](const GloTecFrame& a, const GloTecFrame& b) { return a.timeUtc < b.timeUtc; });
+    if (out.empty()) {   // DW.11-B: HTTP 200 con [] deja de ser exito silencioso
+        error_ = "indice vacio (0 frames)";
+        fprintf(stderr, "[GloTecAdapter] Index empty: HTTP 200, 0 frames\n");
+        return false;
+    }
     printf("[GloTecAdapter] Index OK: %d frames\n", (int)out.size());
-    return !out.empty();
+    return true;
 }
 
 bool GloTecAdapter::fetchFrame(const std::string& url, double timeUtc, GridData& out) {
@@ -346,7 +351,12 @@ bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
     else if (res.stoppedOnRetryAfter) error_ = "backfill: Retry-After > tope";
     else if (res.stoppedOnTransport) error_ = "backfill: 3 fallos de transporte";
     else if (res.stoppedByCaller) error_ = "backfill interrumpido";
-    else error_.clear();
+    else if (res.httpErrors > 0) {   // DW.11-E': 202/no-200 no es un run limpio
+        char eb[64];
+        std::snprintf(eb, sizeof(eb), "backfill: %d respuestas no-200 (ultima %ld)",
+                      res.httpErrors, lastHttp_);
+        error_ = eb;
+    } else error_.clear();
 
     return !res.stored.empty();
 }
