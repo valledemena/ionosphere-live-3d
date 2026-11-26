@@ -260,3 +260,30 @@ No se localizan otros consumidores. La rama de cache no fresca
 Sin codigo tocado antes de 1 y 2. El despliegue del binario
 (`4b1ada55` -> `2a4568b2`) es independiente del slice y se ejecuta con
 el GO ya dado, dejando copia de seguridad del anterior.
+
+## 9. Errata de ejecucion (commit adicional, regla del acta `0455`)
+
+1. **Aritmetica del plan, corregida por medicion**: el pre-registro conto
+   el `return true` de B como linea no modificada. Es una linea
+   sustituida (`return !out.empty()` -> `return true`), asi que B es
+   **+6/-1**, no +5/-1, y `GloTecAdapter.cpp` da **+12/-2** (no +11/-2).
+   Total de produccion **+22/-4**. Ninguna linea de codigo cambia por
+   esta errata: es contabilidad, medida con
+   `git diff --numstat master -- src` (App.cpp 10/2,
+   GloTecAdapter.cpp 12/2).
+2. **E-2 del acta `0495` no adoptada, con razon de bytes**: `out.empty()`
+   solo es alcanzable si `fetchURL` devolvio `true`, porque `fetchIndex`
+   retorna antes en 228-230 cuando falla; y `fetchURL` solo devuelve
+   `true` con `CURLE_OK` y HTTP 200 exacto (124-139). El texto
+   "HTTP 200" no es una suposicion: es la unica rama posible, y no hay
+   `error_` previo de esa ruta que pisar. Si en el futuro se relaja
+   `fetchURL`, la afirmacion deja de ser cierta: queda anotado.
+3. **E-1 (acta `0495`, vinculante) verificada con sonda**: en arranque
+   en frio con cache fresca, antes del primer `Index OK` del worker, la
+   fila `PROV_TEC` ya presenta `hasData=1`, `data=72x72`,
+   `error="cache"` y edad real (117 s en la corrida). Sonda de 6 lineas
+   sobre copia de trabajo, no commiteada; el arbol entregado es este.
+4. **Enlace no determinista, declarado**: tres enlaces consecutivos del
+   mismo arbol dan sha256 distintos (`4e87b5d1`, `2cb83e30`, `d0f420a7`).
+   El sha256 de un exe identifica UNA construccion; no es ancla
+   reproducible. La identidad del slice es arbol + numstat + tests.
