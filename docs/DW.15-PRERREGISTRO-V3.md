@@ -95,3 +95,17 @@ bool circuitHasFreshDataInRange(double epoch, double oldest, double newest,
 PRE-REGISTRO v3 a **re-veredicto del VERIFICADOR**. Solo despues de
 CONFORME se pide GO para modificar codigo. Sin amend del v1/v2; esta
 version es un commit adicional.
+
+## Nota de formato del re-veredicto (commit posterior, sin amend)
+
+`VEREDICTO_PRERREGISTRO_V3.md`: **CONFORME CON UNA NOTA DE FORMATO**.
+En modo **kc2g**, el `hist X.X h` de los textos **no** debe tomarse de
+`giro.getNetStatus().histHours` (puede ser 0 aunque la fuente activa
+tenga datos): se calcula como **amplitud del rango activo**
+`(t1 - t0) / 3600`, donde `t0`/`t1` vienen de `kc2g.historyStats` (o
+del min/max de `giroReplayCache`). Esta misma amplitud se usa en la
+rama "antes del historial". En modo **GIRO** se mantiene
+`histHours` como hasta ahora. El verificador confirmo que
+`Kc2gAdapter.cpp:354-367` devuelve `t0=min`, `t1=max` (el log
+`22:30..20:45` es min->max formateado, no inversion), y que
+`circuitHasFreshData` v2 se conserva como wrapper con sus 10 tests.
