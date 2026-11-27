@@ -205,6 +205,20 @@ std::string staleSuffix(const LayerDataTime& ldt, bool samplerBusy) {
     return s;
 }
 
+bool circuitHasFreshDataInRange(double epoch, double oldest, double newest,
+                                bool samplerBusy) {
+    if (samplerBusy) return false;  // layerDataTime lo ignora en vars 1-7
+    if (!(oldest > 0.0) || !(newest > oldest)) return false;
+    return epoch >= oldest && epoch <= newest;  // bordes inclusive
+}
+
+bool circuitHasFreshData(double epoch, double nowUtc, const LayerRanges& r,
+                         bool samplerBusy) {
+    (void)nowUtc;
+    return circuitHasFreshDataInRange(epoch, r.giroOldest, r.giroNewest,
+                                      samplerBusy);
+}
+
 LayerDataTime layerDataTime(int mapVariable, double replayEpoch, double nowUtc,
                             const LayerRanges& r, bool samplerBusy) {
     if (mapVariable >= 8 && mapVariable <= 11) {

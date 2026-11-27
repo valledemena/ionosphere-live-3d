@@ -371,6 +371,12 @@ struct App::Impl {
     bool hfPickRx = false;         // «Pick RX...» activo (consume el click, no toca el pin)
     bool hfCircuitDirty = true;    // freq/TX/RX cambiados -> rebuild al proximo update
     bool hfPanelOpen = false;      // panel «Circuit» desplegado (alimenta el update)
+    // DW.15: frescura del dato GIRO en el epoch del circuito; si no hay
+    // dato real, el panel dice "sin datos" y no se dibuja ribbon/marcadores.
+    bool hfCircuitFresh = true;
+    double hfCircuitGapSec = 0.0;
+    double hfCircuitHistSpan = 0.0;   // amplitud del rango de la fuente activa
+    std::string hfCircuitSource = "GIRO";  // "GIRO" o "kc2g"
     long long hfGridStamp = 0;     // identidad de los grids cacheados del circuito
     GridData hfFoF2Grid, hfHmF2Grid, hfLufGrid;   // caches (giroInterpGrid x2 + LUF M7)
 
@@ -2328,6 +2334,49 @@ void App::update(float dt) {
                                : (replayEpoch > 0.0)                         ? replayEpoch
                                                                              : (double)std::time(nullptr);
         const bool hfEpochJump = (lastHfEpoch < 0.0) || std::fabs(hfEpoch - lastHfEpoch) > 30.0;
+        // DW.15 v3: estado del circuito contra el rango de la FUENTE ACTIVA
+        // (kc2g en failover, GIRO en modo normal). El gap se calcula aqui
+        // porque layerDataTime da gapSec=0 antes del borde.
+        {
+            const double hfNow = (double)std::time(nullptr);
+            double hfOldest = -1.0, hfNewest = -1.0;
+            if (kc2gMode) {
+                int nSt = 0;
+                double t0 = 0.0, t1 = 0.0;
+                if (impl->kc2g.historyStats(nSt, t0, t1) && nSt > 0 && t1 > t0) {
+                    hfOldest = t0;
+                    hfNewest = t1;   // historyStats: t0=min, t1=max
+                } else {
+                    // Fallback: min/max real de la fuente mergeada.
+                    for (const auto& hs : impl->giroReplayCache) {
+                        if (hs.timeUtc <= 0.0) continue;
+                        if (hfOldest < 0.0 || hs.timeUtc < hfOldest)
+                            hfOldest = hs.timeUtc;
+                        if (hs.timeUtc > hfNewest) hfNewest = hs.timeUtc;
+                    }
+                }
+                impl->hfCircuitSource = "kc2g";
+            } else {
+                const GiroAdapter::GiroNetStatus hfGs = impl->giro.getNetStatus();
+                if (hfGs.histHours > 0.0) {
+                    hfNewest = hfNow;
+                    hfOldest = hfNow - hfGs.histHours * 3600.0;
+                }
+                impl->hfCircuitSource = "GIRO";
+            }
+            // Nota de formato: en kc2g NO usar histHours (puede ser 0);
+            // la amplitud mostrada es la del rango activo (t1-t0)/3600.
+            impl->hfCircuitHistSpan =
+                (hfOldest > 0.0 && hfNewest > hfOldest)
+                    ? (hfNewest - hfOldest) / 3600.0 : 0.0;
+            impl->hfCircuitFresh = irtamstate::circuitHasFreshDataInRange(
+                hfEpoch, hfOldest, hfNewest, impl->irtamSampleBusy.load());
+            impl->hfCircuitGapSec = 0.0;
+            if (hfOldest > 0.0 && hfEpoch < hfOldest)
+                impl->hfCircuitGapSec = hfOldest - hfEpoch;
+            else if (hfNewest > 0.0 && hfEpoch > hfNewest)
+                impl->hfCircuitGapSec = hfEpoch - hfNewest;
+        }
         if (lastHfGrid < 0.0 || (now - lastHfGrid) > 1.0 || hfEpochJump || impl->hfCircuitDirty) {
             lastHfGrid = now;
             lastHfEpoch = hfEpoch;
@@ -4080,7 +4129,7 @@ void App::render() {
     // antes del resolve) para que alimente el bloom como el TubeGeometry
     // de la demo — en overlays post-bloom jamas lo hacia. Estado propio
     // (el bloque fija el suyo despues); depth test de escena intacto.
-    if (impl->hfTraceVisible) {
+    if (impl->hfTraceVisible && impl->hfCircuitFresh) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         glDepthMask(GL_FALSE);
@@ -5965,7 +6014,7 @@ void App::render() {
             HelpMarker("Great-circle path with N hops at virtual height h'. Hop MUF = foF2 at the reflection point times M(D) (Dudeney/ITU-R P.1240). Circuit LUF comes from the M7 D-region absorption grid (max over hops). Bands: open between LUF and FOT, marginal up to MUF, closed beyond. Drag the frequency slider or replay the timeline and the circuit follows.");
             if (ImGui::Checkbox("HF trace layer", &impl->hfTraceVisible))
                 impl->hfCircuitDirty = true;   // encender pide grids frescos
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Draw the ray path as a camera-facing ribbon: green = hop open at the panel frequency, amber = marginal, red = closed. A brightness pulse travels along the arc.");
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Draw the ray path as a camera-facing ribbon: green = hop open at the panel frequency, amber = marginal, red = closed. A brightness pulse travels along the arc. The ribbon, markers and labels are drawn only when GIRO has real data at the replay epoch.");
 
             // TX/RX: combos sobre las estaciones visibles (catalogo incluido).
             std::vector<const StationPoint*> hfSts;
@@ -6014,7 +6063,29 @@ void App::render() {
                                  (double)(impl->altKm - 300.0f));
 
             const HFCircuitResult& hfR = impl->hfTrace.result();
-            if (!hfR.valid) {
+            if (!impl->hfCircuitFresh) {
+                char hfWhy[192];
+                const char* src = impl->hfCircuitSource.c_str();
+                if (impl->hfCircuitHistSpan <= 0.0) {
+                    std::snprintf(hfWhy, sizeof(hfWhy),
+                                  "HF circuit: sin datos %s (historial vacio)",
+                                  src);
+                } else if (impl->hfCircuitGapSec <= 0.0) {
+                    std::snprintf(hfWhy, sizeof(hfWhy),
+                                  "HF circuit: sin datos %s en este epoch "
+                                  "(antes del historial; hist %.1f h)",
+                                  src, impl->hfCircuitHistSpan);
+                } else {
+                    std::snprintf(hfWhy, sizeof(hfWhy),
+                                  "HF circuit: sin datos %s en este epoch "
+                                  "(hist %.1f h; %s)",
+                                  src, impl->hfCircuitHistSpan,
+                                  irtamstate::staleGapText(
+                                      impl->hfCircuitGapSec).c_str());
+                }
+                ImGui::TextDisabled("%s", hfWhy);
+                ImGui::TextDisabled("sin datos: MUF/FOT/LUF y matriz no disponibles");
+            } else if (!hfR.valid) {
                 ImGui::TextDisabled("Waiting for TX/RX coordinates + grids...");
             } else {
                 ImGui::Text("D %.0f km   %d hop(s)", hfR.distKm, hfR.nHops);
@@ -6047,7 +6118,7 @@ void App::render() {
         // Marcadores + etiquetas proyectadas TX/RX (plan 11.3: discos en
         // espacio de pantalla — proyeccion mundo->NDC->pixel del frame).
         const HFCircuitResult& hfR2 = impl->hfTrace.result();
-        if (impl->hfTraceVisible && hfR2.valid) {
+        if (impl->hfTraceVisible && hfR2.valid && impl->hfCircuitFresh) {
             auto hfMarker = [&](const char* label, double lat, double lon, const ImVec4& col) {
                 const glm::vec3 wp = densityDir((float)lat, (float)lon);
                 const glm::vec4 cp = proj * view * glm::vec4(wp, 1.0f);
