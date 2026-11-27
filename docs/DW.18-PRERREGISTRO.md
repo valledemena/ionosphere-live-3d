@@ -89,3 +89,13 @@ dos capturas con frecuencias 1,0 y 5,3 MHz, `handoff.py check` limpio.
 - `buildPolyline` se ejecuta solo cuando cambia la firma (P7): el color
   sigue al slider de frecuencia porque `in.freqMHz` ya entra en la
   firma (`sigFreq_`).
+
+## Nota del veredicto v1 (incorporada, commit adicional sin amend)
+
+Cada caso del test debe **declarar el `mufHop concreto`**, no dejarlo
+implicito. Se fija `mufHop = 8,3` para los cuatro casos principales:
+`1,0 -> 0`, `5,3 -> 1`, `7,5 -> 0,5`, `9,0 -> 0`. Ademas se anade un
+caso con MUF distinto para demostrar que el **gate LUF actua antes**
+que el MUF: `f=5,3`, `mufHop=6,0`, `luf=6,5` -> `0` (LUF cierra aunque
+el MUF daria viable). Y su control `f=5,3`, `mufHop=6,0`, `luf=0` ->
+`1` (solo MUF). Asi el criterio no depende de valores no escritos.
