@@ -68,15 +68,22 @@ color de banda; channels casi iguales entre si (neutral).
 
 ## 3. Criterio binario (falsable)
 
-1. **Unitarios**: `traceColorNoData()` neutral y distinto de los 3
-   colores de banda; `ctest` rc=0 con el total de la base + tests.
+1. **Unitarios**: `traceColorNoData()` neutral (max-min <= 0.10; el
+   gris propuesto da 0.07) y **distinto por distancia euclidea** de
+   los 3 colores de banda (distancia > 0.5: verde ~0.59, ambar ~0.69,
+   rojo ~0.74). La comparacion "diferencia por canal > 0.3" es falsa
+   (azul gris 0.62 vs verde 0.55 = 0.07); se usa euclidea, no por
+   canal. `ctest` rc=0 con el total de la base + tests.
 2. **Build**: `cmake --build` rc=0; diff de shaders y fallback
    sincronizados (mismo `u_noData`/`u_noDataColor`).
 3. **Runtime** (sonda de replay con failover kc2g, reutilizando el
    metodo de DW.15):
    - sin dato fresco: ribbon **visible en gris**, sin pulso (dos
      capturas separadas 2 s con el mismo aspecto), marcadores grises,
-     panel `sin datos kc2g ...`;
+     panel `sin datos kc2g ...`. **El cursor del replay debe estar
+     congelado** (`replayPlaying=false` en la sonda) en esas dos
+     capturas, para que el aspecto identico no dependa del epoch;
+     se declara el epoch en cada captura;
    - con dato fresco: mismos colores y pulso que DW.15 (captura de
      control);
    - capturas con `PrintWindow` del propio proceso, con timestamp.
@@ -110,3 +117,22 @@ color de banda; channels casi iguales entre si (neutral).
   mensaje deseado: inerte sin dato).
 - Los shaders en disco y el fallback inline deben cambiar juntos; se
   verifica con grep de los dos uniforms en ambos ficheros.
+
+## Notas del veredicto v1 (incorporadas, commit adicional sin amend)
+
+1. Distancia euclidea (no por canal) en el test del gris; ver criterio 1.
+2. `HFTraceLayer::update` (`HFTraceLayer.cpp:135-150`) tiene un
+   early-return por firma que NO incluye `noData`. Se asigna
+   `noData_ = in.noData;` **antes** de ese early-return (o se anade a
+   la firma), si no el paso de "sin dato" a "con dato" puede dejar el
+   trazo gris.
+3. Las dos capturas separadas 2 s congelan el epoch del cursor;
+   ver criterio 3.
+4. El gate de marcadores vuelve a `hfR2.valid` (`App.cpp:6121`). En
+   failover kc2g el caso probado en DW.15 tenia `result.valid=true`
+   con panel MUF/FOT; se declara y verifica en la corrida, si no los
+   marcadores no aparecerian.
+5. Alcance del grep: se **permite** el simbolo nuevo
+   `traceColorNoData` dentro de `hfc` (es color de estilo, no fisica)
+   y se **prohibe** cualquier cambio en `mufForHopMHz`, `fotOfMHz`,
+   `hopViable`, `legAltitudeKm` y `bandState`.
