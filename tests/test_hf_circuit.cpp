@@ -475,6 +475,29 @@ int main() {
     }
     check_near("Q21 bypass V del bloom = -1.0 (M9f: smoothstep(-1,-0.75,l>=0)=1 passthrough)",
                (double)hfc::bloomBypassThreshold(), -1.0, 0.0);
+    printf("--- DW.16: ruta visible en gris sin dato ---\n");
+    {
+        const glm::vec3 g = hfc::traceColorNoData();
+        float lo = g.x, hi = g.x;
+        if (g.y < lo) lo = g.y;
+        if (g.y > hi) hi = g.y;
+        if (g.z < lo) lo = g.z;
+        if (g.z > hi) hi = g.z;
+        check_bool("DW.16-1: gris neutro (max-min <= 0.10)",
+                   (double)(hi - lo) <= 0.10);
+        auto dist = [&](const glm::vec3& c) {
+            const double dx = (double)(g.x - c.x);
+            const double dy = (double)(g.y - c.y);
+            const double dz = (double)(g.z - c.z);
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        };
+        check_bool("DW.16-2: distancia euclidea al verde > 0.5",
+                   dist(hfc::traceColorOpen()) > 0.5);
+        check_bool("DW.16-3: distancia euclidea al ambar > 0.5",
+                   dist(hfc::traceColorMarginal()) > 0.5);
+        check_bool("DW.16-4: distancia euclidea al rojo > 0.5",
+                   dist(hfc::traceColorClosed()) > 0.5);
+    }
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
