@@ -7,6 +7,16 @@ Estado: PRE-REGISTRO (sin codigo). Base `origin/master` =
 Decision de David: opcion 1 (estado explicito "sin datos" / borde). No se
 alimenta el circuito desde IRTAM ni desde TEC en este slice.
 
+Veredicto del pre-registro v1: **CONFORME CON NOTAS CONDICIONANTES**
+(`VEREDICTO_PRERREGISTRO.md`). Esta v2 incorpora las cuatro condiciones:
+(1) `samplerBusy` se checkea explicitamente en `circuitHasFreshData`
+porque `layerDataTime` no lo aplica a vars 1-7; (2) texto alternativo
+cuando `gapSec <= 0`; (3) `staleGapText` se usa verbatim admitiendo
+`+N min` y `+A.B h`; (4) el gate de frescura se anade al ribbon,
+marcadores y etiquetas (`App.cpp:6047+`) sin tocar `hfTraceVisible`.
+Respuestas del verificador: ocultar el ribbon es aceptable, el texto
+basta con (2) y (3), y `layerDataTime(1,...)` sirve sin helper para hmF2.
+
 ## 1. Problema medido / leido (no inferido)
 
 En replay con TEC animando 72 h, el panel `Circuit` y el ribbon de hops
@@ -50,9 +60,13 @@ bool circuitHasFreshData(double epoch, double nowUtc,
                          const LayerRanges& r, bool samplerBusy);
 ```
 
-Semantica: `false` si `layerDataTime(1,...).dataEpoch < 0` o `.stale`
-(epoch fuera de `[giroOldest, giroNewest]` o worker ocupado); `true` en
-el interior. Sin red, sin reloj, sin GL.
+Semantica (condicion 1 del veredicto): **primero**
+`if (samplerBusy) return false;` explicitamente. `layerDataTime` solo
+aplica `samplerBusy` a las vars 8-11 (IRTAM), **no** a 1-7 (GIRO), asi
+que no basta `ldt.stale`. Despues: `false` si
+`layerDataTime(1,...).dataEpoch < 0` o `.stale` (epoch fuera de
+`[giroOldest, giroNewest]`); `true` en el interior. Sin red, sin reloj,
+sin GL.
 
 ### 2.2 Cableado en `App.cpp`
 
@@ -62,11 +76,19 @@ el interior. Sin red, sin reloj, sin GL.
 - Guardar `impl->hfCircuitFresh` (bool) y `impl->hfCircuitGapSec`.
 - Si `hfCircuitFresh == false`:
   - panel: **no mostrar MUF/FOT/LUF/h' como frescos**; mostrar
-    `HF circuit: sin datos GIRO en este epoch (hist X.X h; +Y h)`,
-    donde `+Y h` sale de `staleGapText(gapSec)`;
+    `HF circuit: sin datos GIRO en este epoch (hist X.X h; +Y)`, donde
+    `+Y` es `staleGapText(gapSec)` **verbatim** (condicion 3: puede ser
+    `+N min` si gap < 3600 s o `+A.B h` si gap >= 3600 s; no forzar
+    horas). Condicion 2: con epoch < `giroOldest`, `stale=true` pero
+    `gapSec=0` y `staleGapText` devuelve vacio; en ese caso mostrar
+    `HF circuit: sin datos GIRO en este epoch (antes del historial; hist X.X h)`.
+    Si `histHours<=0`: `HF circuit: sin datos GIRO (historial vacio)`;
   - matriz de bandas: mostrar `sin datos` en vez de `open/marginal/closed`;
-  - ribbon: **no dibujar** (mismo criterio P5: sin dato → sin capa), sin
-    cambiar el checkbox del usuario (`hfTraceVisible` intacto).
+  - ribbon, **marcadores TX/RX y etiquetas**: **no dibujar** (mismo
+    criterio P5: sin dato → sin capa). El gate existente esta en
+    `App.cpp:6047+` bajo `hfTraceVisible && hfR2.valid`; anadir
+    `hfCircuitFresh` a esa condicion y a marcadores/etiquetas, **sin
+    tocar** `hfTraceVisible` (condicion 4).
 - Si `hfCircuitFresh == true`: comportamiento **byte-identico** al actual
   (mismos numeros, colores y alturas).
 
@@ -75,9 +97,12 @@ tocan**. Solo se decide si se presenta su resultado como dato fresco.
 
 ### 2.3 UI / textos
 
-- Texto exacto a validar (ASCII): `HF circuit: sin datos GIRO en este
-  epoch (hist X.X h; +Y h)`. Si no hay historial alguno (`histHours<=0`):
-  `HF circuit: sin datos GIRO (historial vacio)`.
+- Textos exactos a validar (ASCII): con gap > 0,
+  `HF circuit: sin datos GIRO en este epoch (hist X.X h; +Y)`, donde
+  `+Y` = `staleGapText(gapSec)` sin transformar (`+N min` o `+A.B h`).
+  Con `gapSec <= 0` (epoch anterior al inicio del historial):
+  `HF circuit: sin datos GIRO en este epoch (antes del historial; hist X.X h)`.
+  Sin historial (`histHours<=0`): `HF circuit: sin datos GIRO (historial vacio)`.
 - Tooltip del checkbox `HF trace layer` anade una frase: el trazo solo se
   dibuja con dato GIRO fresco en el cursor.
 
@@ -93,7 +118,8 @@ PASS solo si:
 3. **Runtime con la app en replay**: con cursor **dentro** de las 24 h,
    panel con MUF/FOT/h' y ribbon verde/ambar/rojo (sin cambios); con
    cursor **fuera** (p. ej. ~40 h, donde TEC si tiene frames), panel con
-   `sin datos GIRO ...` y **ribbon ausente**. Evidencia: capturas con el
+   `sin datos GIRO ...` y **ribbon, marcadores y etiquetas ausentes**;
+   ningun MUF/FOT/h' presentado como fresco. Evidencia: capturas con el
    epoch del cursor y grep de los simbolos nuevos.
 4. **Alcance**: `git diff` no toca `hfc::` (MUF/FOT/LUF formulas, colores,
    `hopViable`, `legAltitudeKm`, `kPulseRateHz`), no toca TEC ni GIRO
