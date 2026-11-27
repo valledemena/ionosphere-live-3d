@@ -3213,14 +3213,13 @@ void App::fetchWorker() {
                 if (g.valid) {
                     auto b = std::make_shared<Impl::TecBundle>();
                     b->grid = g;
-                    b->grid.timestamp = epoch;
                     b->simulated = sim;
                     { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
                     // M-prov-matrix: fila GloTEC (solo lectura del fetch ya hecho).
                     provstatus::Snapshot st;
                     st.id = provstatus::PROV_TEC;
                     st.hasData = g.valid && !sim;
-                    st.dataEpoch = epoch;
+                    st.dataEpoch = g.timestamp;   // DW.11-C: edad del dato, no del fetch
                     char sdb[32];
                     std::snprintf(sdb, sizeof(sdb), "%dx%d", g.width, g.height);
                     st.data = sdb;
@@ -3604,6 +3603,15 @@ void App::restoreTecCache() {
         b->simulated = false;
         b->fromCache = true;
         { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->tec = b; }
+        provstatus::Snapshot st;   // DW.11-A: fila GloTEC desde cache fresca
+        st.id = provstatus::PROV_TEC;
+        st.hasData = true;
+        st.dataEpoch = newest;
+        char sdb[32];
+        std::snprintf(sdb, sizeof(sdb), "%dx%d", b->grid.width, b->grid.height);
+        st.data = sdb;
+        st.error = "cache";
+        { std::lock_guard<std::mutex> lk(impl->bundleMutex); impl->provBoard[provstatus::PROV_TEC] = st; }
     }
     char cbuf[16] = "--:--";
     { std::time_t tt = (std::time_t)newest; std::tm gg;
