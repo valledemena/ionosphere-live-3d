@@ -402,6 +402,11 @@ struct App::Impl {
     // (false = union 168 h, defecto R2-023). NO se persiste en settings
     // (lección partición).
     bool replayLayerLoop = false;
+    // DW.14: contadores del loop por capa (se reinician al cerrar cada loop).
+    int replayLoopClusters = 0;
+    int replayLoopJumps = 0;
+    double replayLoopSkippedSec = 0.0;
+    long long replayLoopIntervalsNoData = 0;
     // Muestra IRTAM = BRACKET entregado por el worker (M-irtam-replay-028):
     // endpoints para lerp en render por cursor; pairKind 0 = F/H, 1 = B0B1.
     struct IrtamReplaySample {
@@ -2041,9 +2046,59 @@ void App::update(float dt) {
                 // SOLO para este avance (rompe la amplificacion miss->dt
                 // gigante->salto multi-slot->miss); el dt global intacto.
                 const double advDt = dt > 0.1 ? 0.1 : (double)dt;
-                impl->replayEpoch +=
-                    advDt * impl->replaySpeed * 1200.0;
-                if (impl->replayEpoch > hiBound) impl->replayEpoch = loBound;
+                const double step = advDt * impl->replaySpeed * 1200.0;
+                const double prevEpoch = impl->replayEpoch;
+                // DW.14: en modo por capa TEC, saltar los huecos sin datos en
+                // vez de reproducir vacio. No fabrica frames ni toca
+                // timestamps; solo mueve el cursor al inicio del cluster
+                // siguiente cuando el hueco supera kLoopGapJoinSec.
+                if (impl->replayLayerLoop && impl->mapVariable == 0) {
+                    std::vector<double> epochs;
+                    {
+                        std::lock_guard<std::mutex> tlk(impl->tecHistMutex);
+                        epochs.reserve(impl->tecHist.size());
+                        for (const auto& g : impl->tecHist)
+                            epochs.push_back(g.timestamp);
+                    }
+                    const std::vector<irtamstate::LoopCluster> cl =
+                        irtamstate::loopClusters(epochs,
+                                                 irtamstate::kLoopGapJoinSec);
+                    impl->replayLoopClusters = (int)cl.size();
+                    double skipped = 0.0;
+                    impl->replayEpoch = irtamstate::advanceLoopEpoch(
+                        prevEpoch, step, cl, loBound, hiBound,
+                        irtamstate::kLoopGapJoinSec, &skipped);
+                    if (skipped > 0.0) {
+                        ++impl->replayLoopJumps;
+                        impl->replayLoopSkippedSec += skipped;
+                        std::fprintf(
+                            stderr,
+                            "[Replay] skip hueco %.1f h (%.0f s) clusters=%d\n",
+                            skipped / 3600.0, skipped, (int)cl.size());
+                    }
+                    if (!irtamstate::insideLoopData(
+                            impl->replayEpoch, cl,
+                            irtamstate::kLoopGapJoinSec)) {
+                        ++impl->replayLoopIntervalsNoData;
+                    }
+                } else {
+                    impl->replayEpoch += step;
+                    if (impl->replayEpoch > hiBound) impl->replayEpoch = loBound;
+                }
+                // Cierre de loop: contadores del slice y reinicio.
+                if (impl->replayEpoch == loBound && prevEpoch != loBound) {
+                    std::fprintf(
+                        stderr,
+                        "[Replay] loop stats clusters=%d jumps=%d "
+                        "skippedSec=%.0f intervalsNoData=%lld speed=%.1f\n",
+                        impl->replayLoopClusters, impl->replayLoopJumps,
+                        impl->replayLoopSkippedSec,
+                        (long long)impl->replayLoopIntervalsNoData,
+                        (double)impl->replaySpeed);
+                    impl->replayLoopJumps = 0;
+                    impl->replayLoopSkippedSec = 0.0;
+                    impl->replayLoopIntervalsNoData = 0;
+                }
             }
             if (impl->replayEpoch <= 0.0) impl->replayEpoch = loBound;
             if (impl->replayEpoch < loBound) impl->replayEpoch = loBound;

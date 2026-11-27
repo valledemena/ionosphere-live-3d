@@ -281,4 +281,71 @@ LayerLoopRange layerLoopRange(int mapVariable, double nowUtc,
     return out;
 }
 
+std::vector<LoopCluster> loopClusters(const std::vector<double>& epochsAsc,
+                                      double joinSec) {
+    std::vector<LoopCluster> out;
+    for (const double t : epochsAsc) {
+        if (!std::isfinite(t)) continue;
+        if (!out.empty() && (t - out.back().last) <= joinSec) {
+            out.back().last = t;
+        } else {
+            LoopCluster c;
+            c.first = t;
+            c.last = t;
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+double advanceLoopEpoch(double epoch, double stepSec,
+                        const std::vector<LoopCluster>& clusters, double lo,
+                        double hi, double joinSec, double* skippedSec) {
+    if (skippedSec) *skippedSec = 0.0;
+    if (!(stepSec > 0.0) || !(hi > lo)) return epoch;
+    const double e = epoch + stepSec;
+    if (e > hi) return lo;  // wrap: no es un hueco
+    if (clusters.empty()) return e;
+
+    // Cluster actual: ultimo cuyo first <= epoch.
+    std::size_t cur = 0;
+    bool found = false;
+    for (std::size_t i = 0; i < clusters.size(); i++) {
+        if (clusters[i].first <= epoch) {
+            cur = i;
+            found = true;
+        }
+    }
+    if (!found) return e;  // antes del primer cluster: avance normal
+
+    const LoopCluster& c = clusters[cur];
+    if (cur + 1 < clusters.size()) {
+        const LoopCluster& nxt = clusters[cur + 1];
+        const double gap = nxt.first - c.last;
+        // Cruza el final del cluster actual y el hueco es real (> joinSec):
+        // salta al inicio del siguiente cluster. Cubre tambien el caso de un
+        // cursor ya dentro del hueco (p. ej. tras un cambio de capa).
+        if (gap > joinSec && epoch <= c.last && e > c.last) {
+            if (skippedSec) *skippedSec = gap;
+            return nxt.first;
+        }
+        if (gap > joinSec && epoch > c.last && epoch < nxt.first) {
+            if (skippedSec) *skippedSec = gap;
+            return nxt.first;
+        }
+    }
+    return e;
+}
+
+bool insideLoopData(double epoch, const std::vector<LoopCluster>& clusters,
+                    double joinSec) {
+    // Margen de joinSec en los bordes: un frame del borde sigue siendo
+    // interpolable a esa distancia (misma tolerancia que el salto).
+    for (const LoopCluster& c : clusters) {
+        if (epoch >= c.first - joinSec && epoch <= c.last + joinSec)
+            return true;
+    }
+    return false;
+}
+
 }  // namespace irtamstate
