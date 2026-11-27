@@ -2392,6 +2392,7 @@ void App::update(float dt) {
             // TX = override del dropdown o estacion pineada o DB049 (default
             // demo); RX = override (dropdown/pick) o EG931 (plan 11.4, P0).
             HFTraceLayer::Input hfIn;
+            hfIn.noData = !impl->hfCircuitFresh;   // DW.16: ruta gris sin dato
             std::string hfWantTx = impl->hfTxCode;
             if (hfWantTx.empty()) hfWantTx = impl->pinnedCode;
             if (hfWantTx.empty()) hfWantTx = "DB049";
@@ -4129,7 +4130,7 @@ void App::render() {
     // antes del resolve) para que alimente el bloom como el TubeGeometry
     // de la demo — en overlays post-bloom jamas lo hacia. Estado propio
     // (el bloque fija el suyo despues); depth test de escena intacto.
-    if (impl->hfTraceVisible && impl->hfCircuitFresh) {
+    if (impl->hfTraceVisible) {   // DW.16: ruta siempre visible (gris sin dato)
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         glDepthMask(GL_FALSE);
@@ -6014,7 +6015,7 @@ void App::render() {
             HelpMarker("Great-circle path with N hops at virtual height h'. Hop MUF = foF2 at the reflection point times M(D) (Dudeney/ITU-R P.1240). Circuit LUF comes from the M7 D-region absorption grid (max over hops). Bands: open between LUF and FOT, marginal up to MUF, closed beyond. Drag the frequency slider or replay the timeline and the circuit follows.");
             if (ImGui::Checkbox("HF trace layer", &impl->hfTraceVisible))
                 impl->hfCircuitDirty = true;   // encender pide grids frescos
-            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Draw the ray path as a camera-facing ribbon: green = hop open at the panel frequency, amber = marginal, red = closed. A brightness pulse travels along the arc. The ribbon, markers and labels are drawn only when GIRO has real data at the replay epoch.");
+            if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Draw the ray path as a camera-facing ribbon: green = hop open at the panel frequency, amber = marginal, red = closed. A brightness pulse travels along the arc. Without fresh data the route is still drawn in neutral grey, without pulse; markers are grey too and the attributes are not computed.");
 
             // TX/RX: combos sobre las estaciones visibles (catalogo incluido).
             std::vector<const StationPoint*> hfSts;
@@ -6118,7 +6119,7 @@ void App::render() {
         // Marcadores + etiquetas proyectadas TX/RX (plan 11.3: discos en
         // espacio de pantalla — proyeccion mundo->NDC->pixel del frame).
         const HFCircuitResult& hfR2 = impl->hfTrace.result();
-        if (impl->hfTraceVisible && hfR2.valid && impl->hfCircuitFresh) {
+        if (impl->hfTraceVisible && hfR2.valid) {
             auto hfMarker = [&](const char* label, double lat, double lon, const ImVec4& col) {
                 const glm::vec3 wp = densityDir((float)lat, (float)lon);
                 const glm::vec4 cp = proj * view * glm::vec4(wp, 1.0f);
@@ -6129,8 +6130,12 @@ void App::render() {
                 dl->AddCircleFilled(ImVec2(sx, sy), 5.0f, ImGui::GetColorU32(col));
                 dl->AddText(ImVec2(sx + 8.0f, sy - 7.0f), ImGui::GetColorU32(col), label);
             };
-            hfMarker("TX", hfR2.txLatDeg, hfR2.txLonDeg, ImVec4(0.4f, 1.0f, 0.5f, 1.0f));
-            hfMarker("RX", hfR2.rxLatDeg, hfR2.rxLonDeg, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+            const glm::vec3 hfGrey = hfc::traceColorNoData();
+            const ImVec4 hfMarkerCol(hfGrey.x, hfGrey.y, hfGrey.z, 1.0f);
+            hfMarker("TX", hfR2.txLatDeg, hfR2.txLonDeg,
+                     impl->hfCircuitFresh ? ImVec4(0.4f, 1.0f, 0.5f, 1.0f) : hfMarkerCol);
+            hfMarker("RX", hfR2.rxLatDeg, hfR2.rxLonDeg,
+                     impl->hfCircuitFresh ? ImVec4(0.5f, 0.8f, 1.0f, 1.0f) : hfMarkerCol);
         }
     }
 

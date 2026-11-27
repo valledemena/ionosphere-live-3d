@@ -351,6 +351,8 @@ inline float glowSpill(float s, float env) {
 inline glm::vec3 traceColorOpen()     { return glm::vec3(0.10f, 0.95f, 0.55f); }
 inline glm::vec3 traceColorMarginal() { return glm::vec3(0.98f, 0.72f, 0.10f); }
 inline glm::vec3 traceColorClosed()   { return glm::vec3(0.95f, 0.16f, 0.16f); }
+// DW.16: gris neutro de "ruta visible sin dato fresco" (estilo, no fisica).
+inline glm::vec3 traceColorNoData()   { return glm::vec3(0.55f, 0.58f, 0.62f); }
 
 // Literales del pulso (shaders.ts:450, demo-verbatim desde M9):
 // p = fract(u_time*0.22 - aT*2.5) — ciclo de emision 4.545 s, cada
@@ -390,6 +392,7 @@ public:
         float freqMHz = 14.0f;
         float heightExag = 1.0f;             // M9: multiplicador visual de altura (App: explodeFactor)
         float apexOffsetKm = 0.0f;           // M9fix: offset del apice sobre h' (App: altKm - 300, slider de capa)
+        bool noData = false;                 // DW.16: ruta gris (sin dato fresco)
         long long gridStamp = 0;             // identidad de los grids (P7)
         const float* foF2Grid = nullptr;     // giroInterpGrid var 0 (72x72)
         const float* hmF2Grid = nullptr;     // giroInterpGrid var 2
@@ -426,6 +429,7 @@ private:
     float sigFreq_ = -1.0f;
     float sigExag_ = 0.0f;                   // M9 (sentinela: fuera de [1,5])
     float sigOffset_ = -1.0e30f;             // M9fix (sentinela: fuera de [-200,500])
+    bool noData_ = false;                    // DW.16: estilo gris, sin pulso/neon
     long long sigStamp_ = -1;
     bool sigValid_ = false;
 };
