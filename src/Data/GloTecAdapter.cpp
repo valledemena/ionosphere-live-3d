@@ -297,7 +297,9 @@ bool GloTecAdapter::backfillFrom(const std::vector<GloTecFrame>& index,
     auto transport = [this](const std::string& url) {
         glotbf::Response r;
         std::string body;
-        fetchURL(url, body);
+        std::string full = (!url.empty() && url[0] == '/')
+                           ? "https://services.swpc.noaa.gov" + url : url;
+        fetchURL(full, body);
         r.http = lastHttp_;
         r.transportOk = (lastCurl_ == 0);
         r.retryAfterSec = lastRetryAfter_;
