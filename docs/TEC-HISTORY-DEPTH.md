@@ -92,8 +92,17 @@ Estado final:
 n = 432  (tope de kCapFrames)
 oldest = 2026-11-24 21:15 UTC
 newest = 2026-11-27 18:55 UTC
-frames en ultimas 72 h = 432  -> ventana completa y continua
+frames en ultimas 72 h = 432  (rango nominal 72 h; span real 69,67 h)
 ```
+
+Precision (veredicto `VEREDICTO_PR26_CIERRE.md`): "ventana completa y
+continua" era una afirmacion demasiado fuerte. Con `n=432` hay **8 huecos
+mayores que 600 s** (618-1200 s, es decir 10-20 min) y 383 intervalos de
+600 s; todos los huecos son menores que `kLoopGapJoinSec=3600`, por lo que
+DW.14 no tiene nada que saltar en esta sesion. Ademas `planned=207` pero
+`stored=204`, sin errores de transporte, y dos lineas de stderr
+`[GloTecAdapter] Index empty: HTTP 200, 0 frames` conviven con los
+`Index OK`: el log no esta limpio, aunque la precarga principal funciono.
 
 El bloque antiguo del 15 de septiembre desaparecio: al llenarse el anillo
 de 432 frames, los frames mas viejos se descartan. Es esperado y sano.
@@ -105,7 +114,8 @@ de 432 frames, los frames mas viejos se descartan. Es esperado y sano.
   profundidad en la precarga inicial.
 - Una vez descargados, los frames permanecen en `cache/` aunque se cierre
   la app. El anillo de 432 descarta los mas viejos cuando entran nuevos.
-- Con la ventana de 72 h llena no hay hueco interno; DW.14 (salto de
-  huecos en modo capa) sigue siendo util para sesiones anteriores o
-  suspensiones que dejen huecos.
+- Con 432 frames no hay hueco mayor que 3600 s (el umbral de DW.14),
+  pero si 8 huecos de 10-20 min; la cobertura no es estrictamente
+  continua. DW.14 sigue siendo util para suspensiones que dejen huecos
+  mayores que ese umbral.
 - No se modifico codigo para este hallazgo: es comportamiento documentado.
