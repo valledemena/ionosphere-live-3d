@@ -15,6 +15,8 @@ CMake 3.20+, C++17. Dependencias (CMake `find_package`):
 
 Backfill GloTEC (por defecto): 6 h, de nuevo a viejo (`newest -> oldest`), parando tras 3 respuestas 404 consecutivas.
 
+El selector `Timeline > History depth` (6 / 24 / 72 h) **solo se persiste al cerrar la app**: cambiarlo en caliente no rehace la precarga inicial. Para aplicar 72 h desde el arranque, seleccionarlo, cerrar la app y volver a abrirla. Detalle y evidencia: `docs/TEC-HISTORY-DEPTH.md`.
+
 Ver `CREDITS.md` para el detalle de los commits de revisión.
 
 Real-time 3D ionosphere and space-weather visualizer (C++17 / OpenGL 4.0).
@@ -227,7 +229,7 @@ synthetic fallback, `off` until the source is actually used.
 
 | Data | Source | Refresh |
 |---|---|---|
-| TEC | NOAA SWPC GloTEC (GeoJSON 72×72) | 5 min + 3 h preload |
+| TEC | NOAA SWPC GloTEC (GeoJSON 72×72) | 5 min + preload 6/24/72 h (se guarda al cerrar) |
 | foF2/MUF/hmF2/… | GIRO DIDBase `scaled.php` (129 stations) | 5 min |
 | foF2/MUF/hmF2/… (failover) | prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds) | on GIRO failure only, 1 req/10 min |
 | EB040 profile | Ebre Observatory FTP (`EB040_*.SAO`) | 5 min, background |
