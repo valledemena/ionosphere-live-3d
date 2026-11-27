@@ -73,3 +73,23 @@ corrida con `depth 432`, captura del panel, `handoff.py check` limpio.
 - El periodicwait usaba el atomico como "cambio" para despertar; al
   dejarlo constante el ciclo horario sigue activo por su plazo de 1 h
   (`PeriodicWait.h`), sin depender del notify del Combo.
+
+## Notas del veredicto v1 (incorporadas, commit adicional sin amend)
+
+1. Si se decide eliminar el atomico `tecDepthSlots`, se revisan **todas**
+   sus referencias (`564`, `1215`, `1276`, `2948`, `3090-3092`,
+   `6376-6385`). En esta v2 se conserva el atomico fijo a 432 para
+   minimizar el diff.
+2. `saveSettings` (**:2948**) escribe **literalmente 432**, no el valor
+   cargado; `loadSettings` (**:3089-3091**) ignora 36/144 sin dejarlos
+   en memoria (no hace `store` del valor antiguo). Criterio 2 queda
+   auditable: 36/144 en disco -> 432 tras arrancar y cerrar.
+3. El `notify_all()` del Combo desaparece junto con el Combo; para no
+   dejar `depthCv`/mutex sin productor se sustituye el `waitStep` de
+   `waitNextCycle` por `std::this_thread::sleep_for(1 s)` y se retiran
+   `depthCv` y su mutex. El ciclo horario sigue activo por su plazo
+   de 3600 s. Se declara: **no queda codigo muerto ni productor
+   huerfano**.
+4. Los logs ya existentes `History preload ... depth` (`:1235`) y
+   `Periodic backfill ... depth` (`:1304`) imprimiran 432; no hace
+   falta anadir logs nuevos.
