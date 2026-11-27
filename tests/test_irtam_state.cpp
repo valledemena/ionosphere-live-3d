@@ -364,6 +364,101 @@ int main() {
                        staleSuffix(e2e, false) == "(stale, +8.0 h)");
     }
 
+    std::printf("--- DW.14: replay salta huecos sin datos ---\n");
+    {
+        // 75 frames de septiembre con el hueco real de 2010 s (17:45-18:18:30).
+        std::vector<double> sep75;
+        for (int i = 0; i < 72; i++) sep75.push_back(1000.0 + 600.0 * i);
+        sep75.push_back(sep75.back() + 2010.0);
+        sep75.push_back(sep75.back() + 600.0);
+        sep75.push_back(sep75.back() + 600.0);
+        check_bool("d14-1: hueco 2010 s con 1800 -> 2 clusters",
+                   loopClusters(sep75, 1800.0).size() == 2);
+        check_bool("d14-2: hueco 2010 s con 3600 -> 1 cluster",
+                   loopClusters(sep75, 3600.0).size() == 1);
+
+        // Cache real modelada: 75 frames Sep + salto 6160905 s + 245 Nov.
+        std::vector<double> two;
+        const double x0 = 1000.0;
+        for (int i = 0; i < 75; i++) two.push_back(x0 + 600.0 * i);
+        const double sepLast = two.back();
+        const double novFirst = sepLast + 6160905.0;
+        for (int i = 0; i < 245; i++) two.push_back(novFirst + 600.0 * i);
+        const std::vector<LoopCluster> cl2 = loopClusters(two, kLoopGapJoinSec);
+        check_bool("d14-3: 320 epochs -> 2 clusters", cl2.size() == 2);
+        check_bool("d14-4: bordes 75/245 correctos",
+                   cl2[0].first == x0 && cl2[0].last == sepLast &&
+                       cl2[1].first == novFirst);
+
+        double skipped = -1.0;
+        const double jumped =
+            advanceLoopEpoch(sepLast - 300.0, 600.0, cl2, x0, cl2[1].last,
+                             kLoopGapJoinSec, &skipped);
+        check_bool("d14-5: salto exacto al inicio del siguiente cluster",
+                   jumped == novFirst);
+        check_bool("d14-6: skippedSec = hueco real 6160905",
+                   skipped == 6160905.0);
+
+        const std::vector<LoopCluster> one{{0.0, 2000.0}};
+        double s2 = -1.0;
+        check_bool("d14-7: single cluster avance lineal",
+                   advanceLoopEpoch(1000.0, 600.0, one, 0.0, 2000.0, 3600.0,
+                                    &s2) == 1600.0 &&
+                       s2 == 0.0);
+        check_bool("d14-8: wrap a lo",
+                   advanceLoopEpoch(1900.0, 600.0, one, 0.0, 2000.0, 3600.0,
+                                    &s2) == 0.0);
+
+        auto gapSkip = [&](double gap) {
+            const std::vector<LoopCluster> cs{
+                {0.0, 1000.0}, {1000.0 + gap, 2000.0 + gap}};
+            double sk = -1.0;
+            const double r = advanceLoopEpoch(900.0, 200.0, cs, 0.0,
+                                              2000.0 + gap, kLoopGapJoinSec,
+                                              &sk);
+            return r * 1e6 + sk;  // empaqueta para comparar sin std::pair
+        };
+        const double b3599 = gapSkip(3599.0);
+        const double b3600 = gapSkip(3600.0);
+        const double b3601 = gapSkip(3601.0);
+        check_bool("d14-9: gap 3599 no salta",
+                   b3599 == 1100.0 * 1e6 + 0.0);
+        check_bool("d14-10: gap 3600 no salta (<= join)",
+                   b3600 == 1100.0 * 1e6 + 0.0);
+        check_bool("d14-11: gap 3601 salta",
+                   b3601 == 4601.0 * 1e6 + 3601.0);
+
+        double cur = x0;
+        bool ok = true;
+        bool wrapped = false;
+        int jumps = 0;
+        for (int i = 0; i < 5000; i++) {
+            double sk = 0.0;
+            const double nx = advanceLoopEpoch(cur, 1200.0, cl2, x0,
+                                              cl2[1].last, kLoopGapJoinSec, &sk);
+            if (nx == x0 && cur != x0) {
+                wrapped = true;  // cierre de un loop completo
+                break;
+            }
+            if (!insideLoopData(nx, cl2, 0.0)) {
+                ok = false;
+                break;
+            }
+            if (sk > 0.0) ++jumps;
+            cur = nx;
+        }
+        check_bool("d14-12: ningun paso cae en hueco > join", ok);
+        check_bool("d14-13: un loop completo, un unico salto",
+                   wrapped && jumps == 1);
+
+        check_bool("d14-14: cursor en cluster -> con dato",
+                   insideLoopData(sepLast, cl2, 0.0));
+        check_bool("d14-15: cursor en el hueco -> sin dato",
+                   !insideLoopData(sepLast + 3000.0, cl2, 0.0));
+        check_bool("d14-16: margen join cubre 3000 s",
+                   insideLoopData(sepLast + 3000.0, cl2, kLoopGapJoinSec));
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

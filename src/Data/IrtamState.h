@@ -137,4 +137,34 @@ struct LayerLoopRange {
 LayerLoopRange layerLoopRange(int mapVariable, double nowUtc,
                               const LayerRanges& r);
 
+// DW.14 (replay por capa): el cursor NO se detiene en huecos sin datos.
+// 3600 s = 60 min. Justificado por el hueco real de 2010 s medido en la
+// cache (Sep15 17:45 -> 18:18:30): con 1800 el cluster de septiembre se
+// parte en 72+3 y habria dos saltos por loop. 3600 da 2 clusters y 1 salto.
+inline constexpr double kLoopGapJoinSec = 3600.0;
+
+// Cluster contiguo de epochs (saltos <= joinSec se absorben). Puro.
+struct LoopCluster {
+    double first = 0.0;
+    double last = 0.0;
+};
+// epochsAsc debe venir ordenado ascendente; ignora no finitos. Puro.
+std::vector<LoopCluster> loopClusters(const std::vector<double>& epochsAsc,
+                                      double joinSec);
+
+// Avanza el cursor stepSec; si el tramo cruza el final de un cluster y el
+// siguiente empieza mas alla de joinSec, salta al inicio del siguiente
+// cluster (nunca se salta un cluster entero). Wrap a lo al pasar hi.
+// skippedSec (opcional) = hueco real saltado (next.first - prev.last), 0 si
+// no hubo salto. Puro, sin estado, sin reloj.
+double advanceLoopEpoch(double epoch, double stepSec,
+                        const std::vector<LoopCluster>& clusters,
+                        double lo, double hi, double joinSec,
+                        double* skippedSec);
+
+// Cursor con dato interpolable: dentro de [first,last] o a <= joinSec de un
+// borde (misma tolerancia que el salto). Puro.
+bool insideLoopData(double epoch, const std::vector<LoopCluster>& clusters,
+                    double joinSec);
+
 }  // namespace irtamstate
