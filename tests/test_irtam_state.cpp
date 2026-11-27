@@ -459,6 +459,60 @@ int main() {
                    insideLoopData(sepLast + 3000.0, cl2, kLoopGapJoinSec));
     }
 
+    std::printf("--- DW.15: circuito HF con dato GIRO fresco ---\n");
+    {
+        LayerRanges g;
+        g.giroOldest = 1000.0;
+        g.giroNewest = 96400.0;   // 26.5 h
+        check_bool("d15-1: dentro del rango -> fresco",
+                   circuitHasFreshData(50000.0, 100000.0, g, false));
+        check_bool("d15-2: borde oldest exacto -> fresco",
+                   circuitHasFreshData(1000.0, 100000.0, g, false));
+        check_bool("d15-3: borde newest exacto -> fresco",
+                   circuitHasFreshData(96400.0, 100000.0, g, false));
+        check_bool("d15-4: 1 s antes de oldest -> sin dato",
+                   !circuitHasFreshData(999.0, 100000.0, g, false));
+        check_bool("d15-5: 1 s despues de newest -> sin dato",
+                   !circuitHasFreshData(96401.0, 100000.0, g, false));
+        check_bool("d15-6: worker ocupado -> sin dato (aunque ldt.stale=false)",
+                   !circuitHasFreshData(50000.0, 100000.0, g, true));
+        LayerRanges empty;
+        check_bool("d15-7: historial vacio -> sin dato",
+                   !circuitHasFreshData(50000.0, 100000.0, empty, false));
+        const double gap = g.giroOldest - 999.0;
+        check_bool("d15-8: gapSec=1 -> +1 min", staleGapText(gap) == "+1 min");
+        check_bool("d15-9: gapSec=5400 -> +1.5 h",
+                   staleGapText(5400.0) == "+1.5 h");
+        const LayerDataTime before = layerDataTime(1, 999.0, 100000.0, g, false);
+        check_bool("d15-10: antes del borde stale=true y gapSec=0",
+                   before.stale && before.gapSec == 0.0);
+    }
+
+    std::printf("--- DW.15 v3: rango de la fuente activa ---\n");
+    {
+        // Rango kc2g sintetico (historyStats t0=min, t1=max).
+        const double t0 = 1000.0, t1 = 96400.0;
+        check_bool("d15-11: kc2g interior -> fresco",
+                   circuitHasFreshDataInRange(50000.0, t0, t1, false));
+        check_bool("d15-12: kc2g borde t0 exacto -> fresco",
+                   circuitHasFreshDataInRange(t0, t0, t1, false));
+        check_bool("d15-13: kc2g borde t1 exacto -> fresco",
+                   circuitHasFreshDataInRange(t1, t0, t1, false));
+        check_bool("d15-14: 1 s antes de t0 -> sin dato",
+                   !circuitHasFreshDataInRange(t0 - 1.0, t0, t1, false));
+        check_bool("d15-15: 1 s despues de t1 -> sin dato",
+                   !circuitHasFreshDataInRange(t1 + 1.0, t0, t1, false));
+        check_bool("d15-16: worker ocupado -> sin dato",
+                   !circuitHasFreshDataInRange(50000.0, t0, t1, true));
+        check_bool("d15-17: rango invalido -> sin dato",
+                   !circuitHasFreshDataInRange(50000.0, 0.0, 0.0, false));
+        LayerRanges kg;
+        kg.giroOldest = t0; kg.giroNewest = t1;
+        check_bool("d15-18: wrapper v2 conserva semantica GIRO",
+                   circuitHasFreshData(50000.0, 100000.0, kg, false) &&
+                       !circuitHasFreshData(999.0, 100000.0, kg, false));
+    }
+
     std::printf("\n[test_irtam_state] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

@@ -100,6 +100,18 @@ std::string staleGapText(double gapSec);
 // 8-11 (TEC/GIRO lo ignoran). Puro.
 std::string staleSuffix(const LayerDataTime& ldt, bool samplerBusy);
 
+// DW.15 v3: frescura contra el rango de la FUENTE ACTIVA (GIRO o kc2g).
+// No asume GIRO: el llamador aporta oldest/newest reales de la fuente.
+// Puro: sin red, sin reloj, sin GL. false = presentar "sin datos".
+bool circuitHasFreshDataInRange(double epoch, double oldest, double newest,
+                                bool samplerBusy);
+
+// DW.15 v2 (se conserva como wrapper de GIRO; 10 tests existentes):
+// layerDataTime solo aplica samplerBusy a vars 8-11 (IRTAM), no a 1-7
+// (GIRO), por eso el worker ocupado se comprueba explicitamente.
+bool circuitHasFreshData(double epoch, double nowUtc, const LayerRanges& r,
+                         bool samplerBusy);
+
 // M-irtam-replay-038 (ruling coherencia Zone/DATA, familia 022): conjunto de
 // fuentes con dato REAL en el epoch del cursor (no la familia activa).
 // Orden canonico TEC+GIRO+IRTAM, prefijo "solo-" en singleton. TEC/GIRO por
