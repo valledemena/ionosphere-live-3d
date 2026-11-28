@@ -51,6 +51,7 @@
 #include "Ionosphere/AuroraCurtains.h"   // DW.28 V7
 #include "Ionosphere/LowerIonoLayers.h"  // DW.29 V10a
 #include "Ionosphere/MidIonoLayers.h"    // DW.30 V10b
+#include "Ionosphere/HeliosphereView.h"  // DW.33 V11a
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
@@ -299,6 +300,8 @@ struct App::Impl {
     bool plasmaEnabled = false;
     bool anomalyEnabled = false;
     bool toiEnabled = false;
+    HeliosphereView helio;             // DW.33 V11a: flag OFF por defecto
+    bool heliosphereView = false;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
@@ -1824,6 +1827,7 @@ void main() {
     impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
     impl->lowerLayers.init();
     impl->midLayers.init();
+    impl->helio.init();
     impl->auroraLayer.setColormap("aurora");
     impl->auroraLayer.setAltitude(110.0f / 6371.0f);  // ~110 km, bajo la capa TEC
     impl->auroraLayer.setOpacity(0.85f);
@@ -2162,7 +2166,8 @@ void App::processInput() {
 
     // Lote 5E: el limite sube de 20 a 45 R_E para que quepa el rio de viento
     // solar (18-28 R_E). La magnetopausa sigue igual; solo cambia el zoom maximo.
-    impl->camera.distance = glm::clamp(impl->camera.distance, 1.5f, 45.0f);
+    impl->camera.distance = glm::clamp(impl->camera.distance, 1.5f,
+                                       impl->heliosphereView ? 200.0f : 45.0f);
 }
 
 void App::update(float dt) {
@@ -3196,6 +3201,7 @@ void App::saveSettings() {
     fprintf(f, "plasmaEnabled %d\n", impl->plasmaEnabled ? 1 : 0);
     fprintf(f, "anomalyEnabled %d\n", impl->anomalyEnabled ? 1 : 0);
     fprintf(f, "toiEnabled %d\n", impl->toiEnabled ? 1 : 0);
+    fprintf(f, "heliosphereView %d\n", impl->heliosphereView ? 1 : 0);
     fprintf(f, "es3dEnabled %d\n", impl->es3dEnabled ? 1 : 0);
     fprintf(f, "tecVisible %d\n", impl->tecVisible ? 1 : 0);
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
@@ -3408,6 +3414,7 @@ void App::loadSettings() {
         else if (k == "plasmaEnabled") impl->plasmaEnabled = clB(v);
         else if (k == "anomalyEnabled") impl->anomalyEnabled = clB(v);
         else if (k == "toiEnabled") impl->toiEnabled = clB(v);
+        else if (k == "heliosphereView") impl->heliosphereView = clB(v);
         else if (k == "es3dEnabled") impl->es3dEnabled = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
         else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
@@ -3459,7 +3466,8 @@ void App::loadSettings() {
         else if (k == "sliceOn") impl->sliceOn = clB(v);
         else if (k == "camRX") impl->camera.rotateX = glm::clamp((float)v, -1.5f, 1.5f);
         else if (k == "camRY") impl->camera.rotateY = (float)v;
-        else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f, 45.0f);
+        else if (k == "camDist") impl->camera.distance = glm::clamp((float)v, 1.5f,
+                                                                    impl->heliosphereView ? 200.0f : 45.0f);
         else if (k == "hfTraceVisible") impl->hfTraceVisible = clB(v);   // M8 (plan 11.4)
         else if (k == "hfFreqMHz") impl->hfFreqMHz = glm::clamp((float)v, 1.0f, 30.0f);
     }
@@ -4714,6 +4722,11 @@ void App::render() {
         if (impl->plasmaEnabled) impl->midLayers.renderPlasmasphere(view, proj);
         if (impl->anomalyEnabled) impl->midLayers.renderAnomaly(view, proj);
         if (impl->toiEnabled) impl->midLayers.renderToi(view, proj);
+        // DW.33 V11a: un draw con flag ON, cero con OFF.
+        if (impl->heliosphereView) {
+            impl->helio.setSunDirection(impl->sunDirection);
+            impl->helio.render(view, proj);
+        }
         // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
         // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5890,6 +5903,15 @@ void App::render() {
     ImGui::Checkbox("TOI wave", &impl->toiEnabled);
     if (ImGui::IsItemHovered())
         ImGui::SetItemTooltip("DW.30 V10b: off by default. Animated analytic travelling wave sin(6*lon - 0.5*t) at 320 km, amplitude from Kp. Animation only: no measured TID data.");
+    bool helio = impl->heliosphereView;
+    if (ImGui::Checkbox("Heliosphere view (Parker)", &helio)) {
+        impl->heliosphereView = helio;
+        // Al apagarse se re-clampa la distancia guardada al limite clasico.
+        impl->camera.distance = glm::clamp(impl->camera.distance, 1.5f,
+                                           helio ? 200.0f : 45.0f);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.33 V11a: off by default. On extends the camera limit from 45 to 200 R_E and draws 12 analytic Parker spirals (parker:: sidereal omega, v_sw=400 km/s declared, visual compression x0.129 because 1 AU does not fit in R_E). Parametric, not MHD. Turning it off re-clamps the saved distance to 45 R_E.");
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
@@ -5980,7 +6002,7 @@ void App::render() {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Subsolar standoff r0, flaring alpha and night-side stretch factor of the current Shue fit. r0 shrinks with dynamic pressure and with southward Bz.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Fit##mag")) impl->camera.distance = 20.0f;
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Pull the camera back to 20 R_E. That fits the dayside cavity and the L <= 6 shells; the real tail is longer than 20 R_E, so its far end always runs off screen. The zoom limit is 45 R_E (see the solar wind river).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip(impl->heliosphereView ? "Pull the camera back to 20 R_E. With the heliosphere view ON the zoom limit is 200 R_E (45 R_E when it is OFF)." : "Pull the camera back to 20 R_E. That fits the dayside cavity and the L <= 6 shells; the real tail is longer than 20 R_E, so its far end always runs off screen. The zoom limit is 45 R_E (see the solar wind river).");
 
     // Lote 5E: rio de viento solar (particulas). Vive entre 18 y 28 R_E del
     // centro, asi que el primer encendido aleja la camara a 38 R_E.

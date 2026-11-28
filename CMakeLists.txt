@@ -65,6 +65,7 @@ set(SOURCES
     src/Ionosphere/AuroraCurtains.cpp  # DW.28 V7: cortinas de aurora 100-250 km
     src/Ionosphere/LowerIonoLayers.cpp  # DW.29 V10a: D-layer + Es 3D
     src/Ionosphere/MidIonoLayers.cpp    # DW.30 V10b: plasmasfera + anomalia + TOI
+    src/Ionosphere/HeliosphereView.cpp  # DW.33 V11a: espirales Parker
     src/Ionosphere/VanAllenBelts.cpp
     src/Ionosphere/WestFordRing.cpp
     src/Data/WsprAdapter.cpp
