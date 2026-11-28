@@ -37,6 +37,8 @@ public:
     bool visible() const { return visible_; }
     void setInstanced(bool v);              // DW.23 V3a: flag OFF por defecto
     bool instanced() const { return instanced_; }
+    void setTransformFeedback(bool v);      // DW.24 V3b: flag OFF por defecto
+    bool transformFeedback() const { return tf_; }
 
     // Viento vivo. Cada valor no finito se ignora (conserva el ultimo valido).
     void setSolarWind(float speedKms, float densityCm3, float bzNT);
@@ -58,6 +60,9 @@ private:
     void refreshColors();
     void refreshRotation();
     void upload();
+    void initTf();                          // DW.24: recursos de transform feedback
+    void stepTf(float dt);
+    void refreshTfColors();
 
     GLuint vao_ = 0;
     GLuint instVao_ = 0;      // DW.23: mismo VBO, divisor 1
@@ -65,6 +70,19 @@ private:
     GLuint shader_ = 0;
     GLuint instShader_ = 0;
     bool instanced_ = false;
+
+    // DW.24 V3b: dos buffers de posiciones (marco solar) en ping-pong.
+    bool tf_ = false;
+    GLuint tfProg_ = 0;
+    GLuint tfSimVao_[2] = {0, 0};
+    GLuint tfPosBuf_[2] = {0, 0};
+    GLuint tfColorBuf_ = 0;
+    GLuint tfRenderVao_[2] = {0, 0};
+    GLuint tfRenderPoints_ = 0;
+    GLuint tfRenderInst_ = 0;
+    int tfCur_ = 0;
+    unsigned int tfFrame_ = 0;
+    float tfColors_[swriver::kCount * 3] = {};
 
     swriver::RiverSim sim_;
     float verts_[swriver::kCount * 6] = {};   // pos(3) + color(3) mundo

@@ -68,6 +68,87 @@ void main() {
 }
 )";
 
+// DW.24 V3b: simulacion en GPU. Las posiciones viven en marco SOLAR en dos
+// buffers ping-pong; el shader replica stepLength (x60), obstaclePush (Shue)
+// y el reciclado. El recycle usa un hash GLSL, NO mulberry32: no se afirma
+// identidad bit a bit con la simulacion CPU (declarado en el pre-registro).
+static const char* riverTfSimVertSrc = R"(
+#version 400 core
+layout(location=0) in vec3 aPos;
+uniform float u_dist, u_r0, u_alpha, u_clearance, u_frame;
+out vec3 vPos;
+float h1(uint x) {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return float(x) / 4294967296.0;
+}
+void main() {
+    vec3 p = aPos;
+    p.x -= u_dist;
+    float r = length(p);
+    if (r > 1e-6) {
+        float c = clamp(p.x / r, -1.0, 1.0);
+        // u_r0/u_alpha vienen de shuemath::r0() y shuemath::alpha() en CPU:
+        // NO hay copia de coeficientes Shue en este shader (nota 1 del veredicto).
+        float rmp = u_r0 * pow(2.0 / (1.0 + c), u_alpha) * u_clearance;
+        if (r < rmp) p.yz *= rmp / r;
+    }
+    if (p.x < -28.0) {
+        uint s = uint(gl_VertexID) * 3u + uint(u_frame) * 7919u;
+        float sx = h1(s), sa = h1(s + 1u), sr = h1(s + 2u);
+        p.x = 18.0 - sx * 43.0;
+        float a = sa * 6.28318530718;
+        float rr = sqrt(sr) * 12.0;
+        p.y = cos(a) * rr;
+        p.z = sin(a) * rr;
+    }
+    vPos = p;
+}
+)";
+
+static const char* riverTfSimFragSrc = R"(
+#version 400 core
+out vec4 fragColor;
+void main() { fragColor = vec4(0.0); }
+)";
+
+// Render con rotacion a mundo en el vertex shader: el ping-pong se mantiene
+// en marco solar para no mezclar marcos entre frames.
+static const char* riverTfRenderVertSrc = R"(
+#version 400 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 u_view, u_projection;
+uniform mat3 u_rot;
+uniform float u_size, u_pixelScale;
+out vec3 vColor;
+void main() {
+    vec4 vp = u_view * vec4(u_rot * aPos, 1.0);
+    gl_Position = u_projection * vp;
+    float d = max(0.05, -vp.z);
+    gl_PointSize = clamp(u_size * u_pixelScale / d, 1.0, 48.0);
+    vColor = aColor;
+}
+)";
+
+static const char* riverTfInstVertSrc = R"(
+#version 400 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 u_view, u_projection;
+uniform mat3 u_rot;
+uniform float u_size;
+out vec3 vColor;
+out vec2 vCorner;
+void main() {
+    vec2 c = vec2(float((gl_VertexID & 2) >> 1), float(gl_VertexID & 1)) * 2.0 - 1.0;
+    vec4 vp = u_view * vec4(u_rot * aPos, 1.0);
+    vp.xy += c * u_size;
+    gl_Position = u_projection * vp;
+    vCorner = c;
+    vColor = aColor;
+}
+)";
+
 namespace {
 
 // Tamanos del web (size 0.17 / 0.38 R_E) y sus opacidades.
@@ -142,6 +223,9 @@ void SolarWindRiver::init() {
         glBindVertexArray(0);
     }
 
+    // DW.24 V3b: recursos TF (no afectan al path OFF).
+    initTf();
+
     // Necesario para que el vertex shader controle el tamano de punto.
     glEnable(GL_PROGRAM_POINT_SIZE);
 
@@ -153,12 +237,142 @@ void SolarWindRiver::init() {
 
 void SolarWindRiver::setInstanced(bool v) { instanced_ = v; }
 
+void SolarWindRiver::initTf() {
+    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, &riverTfSimVertSrc, nullptr);
+    glShaderSource(fs, 1, &riverTfSimFragSrc, nullptr);
+    glCompileShader(vs); glCompileShader(fs);
+    tfProg_ = glCreateProgram();
+    glAttachShader(tfProg_, vs);
+    glAttachShader(tfProg_, fs);
+    const char* varyings[] = {"vPos"};
+    glTransformFeedbackVaryings(tfProg_, 1, varyings, GL_INTERLEAVED_ATTRIBS);
+    glLinkProgram(tfProg_);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(tfProg_, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        fprintf(stderr, "[SolarWindRiver] TF sim link failed; path CPU intacto\n");
+        glDeleteProgram(tfProg_);
+        tfProg_ = 0;
+    }
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    auto makeProg = [](const char* vsrc, const char* fsrc) -> GLuint {
+        GLuint v = glCreateShader(GL_VERTEX_SHADER);
+        GLuint f = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(v, 1, &vsrc, nullptr);
+        glShaderSource(f, 1, &fsrc, nullptr);
+        glCompileShader(v); glCompileShader(f);
+        GLuint p = glCreateProgram();
+        glAttachShader(p, v); glAttachShader(p, f);
+        glLinkProgram(p);
+        GLint k = GL_FALSE;
+        glGetProgramiv(p, GL_LINK_STATUS, &k);
+        if (k != GL_TRUE) { glDeleteProgram(p); p = 0; }
+        glDeleteShader(v); glDeleteShader(f);
+        return p;
+    };
+    tfRenderPoints_ = makeProg(riverTfRenderVertSrc, riverFragSrc);
+    tfRenderInst_ = makeProg(riverTfInstVertSrc, riverInstFragSrc);
+
+    glGenBuffers(2, tfPosBuf_);
+    glGenBuffers(1, &tfColorBuf_);
+    glBindBuffer(GL_ARRAY_BUFFER, tfColorBuf_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * swriver::kCount * 3,
+                 nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glGenVertexArrays(2, tfSimVao_);
+    glGenVertexArrays(2, tfRenderVao_);
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_ARRAY_BUFFER, tfPosBuf_[i]);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * swriver::kCount * 3,
+                     i == 0 ? sim_.positions() : nullptr, GL_DYNAMIC_COPY);
+        glBindVertexArray(tfSimVao_[i]);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(tfRenderVao_[i]);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, tfColorBuf_);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(1);
+    }
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    refreshTfColors();
+}
+
+void SolarWindRiver::refreshTfColors() {
+    for (int i = 0; i < swriver::kCount; ++i) {
+        tfColors_[i * 3 + 0] = verts_[i * 6 + 3];
+        tfColors_[i * 3 + 1] = verts_[i * 6 + 4];
+        tfColors_[i * 3 + 2] = verts_[i * 6 + 5];
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, tfColorBuf_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(tfColors_), tfColors_);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void SolarWindRiver::setTransformFeedback(bool v) {
+    if (v == tf_) return;
+    tf_ = v && tfProg_ != 0 && tfRenderPoints_ != 0 && tfRenderInst_ != 0;
+    if (tf_) {
+        // Sincroniza el buffer 0 con el estado CPU actual (marco solar).
+        glBindBuffer(GL_ARRAY_BUFFER, tfPosBuf_[0]);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(float) * swriver::kCount * 3,
+                        sim_.positions());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        tfCur_ = 0;
+        refreshTfColors();
+    }
+}
+
+void SolarWindRiver::stepTf(float dt) {
+    if (!tfProg_ || dt <= 0.0f || speedKms_ <= 0.0f) return;
+    const float dist = swriver::stepLength(dt, speedKms_);   // MISMO x60 declarado
+    if (dist <= 0.0f) return;
+    const float dp = shuemath::dynamicPressure(densityCm3_, speedKms_);
+    // Unica fuente de los coeficientes: ShueMath.h (sin copia en GLSL).
+    const float sr0 = shuemath::r0(bzNT_, dp);
+    const float sal = shuemath::alpha(bzNT_, dp);
+    const int cur = tfCur_, next = 1 - cur;
+    glUseProgram(tfProg_);
+    glUniform1f(glGetUniformLocation(tfProg_, "u_dist"), dist);
+    glUniform1f(glGetUniformLocation(tfProg_, "u_r0"), sr0);
+    glUniform1f(glGetUniformLocation(tfProg_, "u_alpha"), sal);
+    glUniform1f(glGetUniformLocation(tfProg_, "u_clearance"), swriver::kClearance);
+    glUniform1f(glGetUniformLocation(tfProg_, "u_frame"), (float)(++tfFrame_));
+    glBindVertexArray(tfSimVao_[cur]);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, tfPosBuf_[next]);
+    glEnable(GL_RASTERIZER_DISCARD);
+    glBeginTransformFeedback(GL_POINTS);
+    glDrawArrays(GL_POINTS, 0, swriver::kCount);
+    glEndTransformFeedback();
+    glDisable(GL_RASTERIZER_DISCARD);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+    glBindVertexArray(0);
+    tfCur_ = next;
+}
+
+
 void SolarWindRiver::destroy() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (vao_) glDeleteVertexArrays(1, &vao_);
     if (instVao_) glDeleteVertexArrays(1, &instVao_);
     if (shader_) glDeleteProgram(shader_);
     if (instShader_) glDeleteProgram(instShader_);
+    if (tfProg_) glDeleteProgram(tfProg_);
+    if (tfRenderPoints_) glDeleteProgram(tfRenderPoints_);
+    if (tfRenderInst_) glDeleteProgram(tfRenderInst_);
+    glDeleteBuffers(2, tfPosBuf_);
+    glDeleteBuffers(1, &tfColorBuf_);
+    glDeleteVertexArrays(2, tfSimVao_);
+    glDeleteVertexArrays(2, tfRenderVao_);
+    tfProg_ = tfRenderPoints_ = tfRenderInst_ = 0;
+    tfSimVao_[0] = tfSimVao_[1] = tfPosBuf_[0] = tfPosBuf_[1] = tfColorBuf_ = 0;
+    tfRenderVao_[0] = tfRenderVao_[1] = 0;
+    tf_ = false; tfCur_ = 0;
     vbo_ = vao_ = instVao_ = shader_ = instShader_ = 0;
     visible_ = false;
     colorsDirty_ = true;
@@ -232,9 +446,17 @@ void SolarWindRiver::refreshColors() {
 
 void SolarWindRiver::update(float dt) {
     if (!visible_ || vao_ == 0) return;
-    if (colorsDirty_) refreshColors();
-    sim_.step(glm::clamp(dt, 0.0f, 0.1f), speedKms_, densityCm3_, bzNT_);
-    upload();
+    const float d = glm::clamp(dt, 0.0f, 0.1f);
+    if (colorsDirty_) {
+        refreshColors();
+        if (tfProg_) refreshTfColors();
+    }
+    if (tf_ && tfProg_) {
+        stepTf(d);   // DW.24: simulacion en GPU, sin sim_.step ni upload()
+    } else {
+        sim_.step(d, speedKms_, densityCm3_, bzNT_);
+        upload();    // path OFF: byte-identico al original
+    }
 }
 
 void SolarWindRiver::upload() {
@@ -252,6 +474,35 @@ void SolarWindRiver::upload() {
 
 void SolarWindRiver::render(const glm::mat4& view, const glm::mat4& projection, float pixelScale) {
     if (!visible_ || vao_ == 0 || shader_ == 0) return;
+
+    if (tf_ && tfRenderPoints_ && tfRenderInst_ && tfRenderVao_[tfCur_]) {
+        // DW.24: misma primitiva/tamaños/alfa que el path CPU, pero leyendo
+        // el buffer TF actual y rotando a mundo en el vertex shader.
+        const bool inst = instanced_;
+        GLuint prog = inst ? tfRenderInst_ : tfRenderPoints_;
+        glUseProgram(prog);
+        glUniformMatrix4fv(glGetUniformLocation(prog, "u_view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(prog, "u_projection"), 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix3fv(glGetUniformLocation(prog, "u_rot"), 1, GL_FALSE, glm::value_ptr(rot_));
+        glBindVertexArray(tfRenderVao_[tfCur_]);
+        const GLint sizeLoc = glGetUniformLocation(prog, "u_size");
+        const GLint alphaLoc = glGetUniformLocation(prog, "u_alpha");
+        if (inst) {
+            glUniform1f(sizeLoc, kCoreSize); glUniform1f(alphaLoc, kCoreAlpha);
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, swriver::kCount);
+            glUniform1f(sizeLoc, kGlowSize); glUniform1f(alphaLoc, kGlowAlpha);
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, swriver::kCount);
+        } else {
+            glUniform1f(glGetUniformLocation(prog, "u_pixelScale"),
+                        pixelScale > 0.0f ? pixelScale : 1000.0f);
+            glUniform1f(sizeLoc, kCoreSize); glUniform1f(alphaLoc, kCoreAlpha);
+            glDrawArrays(GL_POINTS, 0, swriver::kCount);
+            glUniform1f(sizeLoc, kGlowSize); glUniform1f(alphaLoc, kGlowAlpha);
+            glDrawArrays(GL_POINTS, 0, swriver::kCount);
+        }
+        glBindVertexArray(0);
+        return;
+    }
 
     if (instanced_ && instShader_ != 0 && instVao_ != 0) {
         // DW.23 V3a: mismos tamanos, mismos alfas, mismos colores del VBO.

@@ -229,6 +229,7 @@ struct App::Impl {
     bool thickFieldLines = false;   // DW.21: flag OFF por defecto
     bool swRiverVisible = false;
     bool instancedParticles = false;   // DW.23 V3a: flag OFF por defecto
+    bool tfSimulation = false;         // DW.24 V3b: flag OFF por defecto
     bool vanAllenVisible = false;
     bool westFordVisible = false;
     // Lote 3 del port web: capas con datos externos propios (red). Solo
@@ -1608,6 +1609,7 @@ bool App::init(int width, int height, const char* title) {
     impl->swRiver.init();
     impl->swRiver.setVisible(false);
     impl->swRiver.setInstanced(impl->instancedParticles);
+    impl->swRiver.setTransformFeedback(impl->tfSimulation);
     impl->vanAllen.init();
     impl->vanAllen.setVisible(false);
     impl->westFord.init();
@@ -2968,6 +2970,7 @@ void App::saveSettings() {
     fprintf(f, "temporalAccum %d\n", impl->temporalAccum ? 1 : 0);
     fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
     fprintf(f, "instancedParticles %d\n", impl->instancedParticles ? 1 : 0);
+    fprintf(f, "tfSimulation %d\n", impl->tfSimulation ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
     fprintf(f, "wsprArcsVisible %d\n", impl->wsprVisible ? 1 : 0);
@@ -3154,6 +3157,10 @@ void App::loadSettings() {
     else if (k == "instancedParticles") {
         impl->instancedParticles = clB(v);
         impl->swRiver.setInstanced(impl->instancedParticles);
+    }
+    else if (k == "tfSimulation") {
+        impl->tfSimulation = clB(v);
+        impl->swRiver.setTransformFeedback(impl->tfSimulation);
     }
     else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
     else if (k == "westFordVisible") impl->westFordVisible = clB(v);
@@ -5620,6 +5627,13 @@ void App::render() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetItemTooltip("DW.23 V3a: off by default = original GL_POINTS. On = instanced camera-facing quads with the same 400 positions, colors, sizes (0.17/0.38 R_E) and alpha (0.90/0.16). The x60 speed exaggeration and the data-age badge are unchanged.");
+    bool tfSim = impl->tfSimulation;
+    if (ImGui::Checkbox("GPU river (transform feedback)", &tfSim)) {
+        impl->tfSimulation = tfSim;
+        impl->swRiver.setTransformFeedback(tfSim);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.24 V3b: off by default = original CPU simulation. On = 400 particles integrated on the GPU with ping-pong transform feedback buffers; the x60 exaggeration, Shue obstacle (from ShueMath.h) and recycle range are unchanged. The GPU recycle uses a hash, not mulberry32: trajectories are NOT bit-identical to the CPU path.");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("400 particles streaming antisunward, exactly like the web demo (IonosphereScene, 400 points, core + glow). They are born on the dayside, travel at v*60 (declared x60 exaggeration so the flow is visible in real time), get pushed sideways out of the Shue-1998 magnetopause and recycle at x = -28 R_E. Colour is the same ramp as the arrows: speed + southward Bz + density from the live NOAA RTSW wind. TRUE scale (1 unit = 1 R_E), so it only fits with the camera pulled back; the first toggle does that automatically. Animation only - no synthetic wind sample.");
     ImGui::Text("river: %.0f km/s  n %.1f cm^-3  Bz %+.1f nT  (%d particles)",
                 impl->swRiver.currentSpeed(), impl->swRiver.currentDensity(),
