@@ -97,6 +97,18 @@ void drawProbe(const char* name, const VoyagerProbe& probe, const std::string& e
     if (ImGui::IsItemHovered())
         ImGui::SetItemTooltip("One-way light time = range / c. This is how old "
                               "the signal is when it arrives.");
+    // DW.32 V13: hito explicito del tamano del retardo (~1 dia-luz), calculado
+    // del rango real. Sin dato valido no se escribe ninguna cifra.
+    if (probe.fix.valid && std::isfinite(probe.lightHours) && probe.lightHours > 0.0) {
+        const double lightDays = probe.lightHours / 24.0;
+        ImGui::Text("  = %.2f light-day(s) one way", lightDays);
+        if (ImGui::IsItemHovered())
+            ImGui::SetItemTooltip("Milestone: at this JPL Horizons range the "
+                                  "one-way delay is about one light-day. The "
+                                  "pulse sweep below compresses that real delay "
+                                  "by the shown factor; the compression is "
+                                  "declared, not hidden.");
+    }
 
     ImGui::Text("  %.2e W received", probe.receivedW);
     if (ImGui::IsItemHovered())
