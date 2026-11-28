@@ -49,6 +49,7 @@
 #include "Ionosphere/IonosondeLayer.h"
 #include "Ionosphere/SolarWindLayer.h"
 #include "Ionosphere/AuroraCurtains.h"   // DW.28 V7
+#include "Ionosphere/LowerIonoLayers.h"  // DW.29 V10a
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
@@ -289,6 +290,9 @@ struct App::Impl {
     GridLayer auroraLayer;
     AuroraCurtains auroraCurtains;     // DW.28 V7: flag OFF por defecto
     bool auroraCurtainsEnabled = false;
+    LowerIonoLayers lowerLayers;       // DW.29 V10a: flags OFF por defecto
+    bool dLayerEnabled = false;
+    bool es3dEnabled = false;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
@@ -1798,6 +1802,7 @@ void main() {
     impl->auroraLayer.init();
     impl->auroraCurtains.init();
     impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
+    impl->lowerLayers.init();
     impl->auroraLayer.setColormap("aurora");
     impl->auroraLayer.setAltitude(110.0f / 6371.0f);  // ~110 km, bajo la capa TEC
     impl->auroraLayer.setOpacity(0.85f);
@@ -2143,6 +2148,7 @@ void App::update(float dt) {
     // Catalogo GIRO listo (hilo background) -> aplicar puntos y arrancar datos.
     if (impl->catalogReady.load() && !impl->catalogApplied) {
         impl->ionosondeLayer.updateSamples(giroPointsFrom(impl->giro.getSamples()));
+        impl->lowerLayers.updateEs(giroPointsFrom(impl->giro.getSamples()));
         impl->giro.fetchStationsAsync();
         impl->catalogApplied = true;
     }
@@ -2463,9 +2469,11 @@ void App::update(float dt) {
     if (lastSamplesApply < 0 || (now - lastSamplesApply) > 2.0) {
         if (impl->replayMode) {
             impl->ionosondeLayer.updateSamples(giroPointsFrom(gsAct));
+            impl->lowerLayers.updateEs(giroPointsFrom(gsAct));
         } else {
-            impl->ionosondeLayer.updateSamples(
-                giroPointsFrom(mergeDias(gsLive, impl->dias.copySamples())));
+            const auto merged = giroPointsFrom(mergeDias(gsLive, impl->dias.copySamples()));
+            impl->ionosondeLayer.updateSamples(merged);
+            impl->lowerLayers.updateEs(merged);
         }
         lastSamplesApply = now;
     }
@@ -3162,6 +3170,8 @@ void App::saveSettings() {
     fprintf(f, "faradayScale %g\n", (double)impl->faradayScale);
     fprintf(f, "auroraVisible %d\n", impl->auroraVisible ? 1 : 0);
     fprintf(f, "auroraCurtainsEnabled %d\n", impl->auroraCurtainsEnabled ? 1 : 0);
+    fprintf(f, "dLayerEnabled %d\n", impl->dLayerEnabled ? 1 : 0);
+    fprintf(f, "es3dEnabled %d\n", impl->es3dEnabled ? 1 : 0);
     fprintf(f, "tecVisible %d\n", impl->tecVisible ? 1 : 0);
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
     fprintf(f, "cineSpeed %g\n", (double)impl->cineSpeed);
@@ -3365,6 +3375,8 @@ void App::loadSettings() {
             impl->auroraCurtainsEnabled = clB(v);
             impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
         }
+        else if (k == "dLayerEnabled") impl->dLayerEnabled = clB(v);
+        else if (k == "es3dEnabled") impl->es3dEnabled = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
         else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
         else if (k == "sunProduct") impl->sunProduct = glm::clamp((int)v, 0, 1);   // M11
@@ -4652,6 +4664,13 @@ void App::render() {
         if (showFar) impl->faradayLayer.render(view, proj);
         if (showAur) impl->auroraLayer.render(view, proj);
         if (impl->auroraCurtains.visible()) impl->auroraCurtains.render(view, proj);
+        // DW.29 V10a: fuente unica del flare = XrayAdapter::flareFactor.
+        float dFlare = 0.0f;
+        if (impl->lastXray && impl->lastXray->latest.valid)
+            dFlare = XrayAdapter::flareFactor(impl->lastXray->latest.flux);
+        impl->lowerLayers.setDLayerParams(impl->sunDirection, dFlare);
+        if (impl->dLayerEnabled) impl->lowerLayers.renderD(view, proj);
+        if (impl->es3dEnabled) impl->lowerLayers.renderEs(view, proj);
         // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
         // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5810,6 +5829,15 @@ void App::render() {
                         impl->auroraCurtains.curtainCount(),
                         impl->auroraCurtains.gridMax(),
                         impl->auroraCurtains.gridTimestamp());
+    ImGui::Checkbox("D-layer (80 km)", &impl->dLayerEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.29 V10a: off by default. On = amber shell at 80 km with opacity from solar illumination times XrayAdapter::flareFactor (single source). Visual proxy only: the Sauer-Wilkinson LUF/SID calculation is untouched.");
+    ImGui::Checkbox("Es 3D (foEs > 2 MHz)", &impl->es3dEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.29 V10a: off by default. On = one patch per GIRO station with foEs > 2 MHz at hEs (or 110 km), coloured by foEs. Visualises the measurement; it does not predict Es.");
+    ImGui::TextDisabled("Es patches: %d (foEs max %.1f)",
+                        impl->lowerLayers.esPatchCount(),
+                        impl->lowerLayers.esMaxFoEs());
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
