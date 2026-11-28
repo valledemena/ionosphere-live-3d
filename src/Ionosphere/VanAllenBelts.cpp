@@ -156,9 +156,8 @@ float VanAllenBelts::kp() const { return kp_; }
 float VanAllenBelts::outerL() const { return outerLForKp(kp_); }
 
 float VanAllenBelts::outerLForKp(float kp) {
-    // Port de beltOuterL: Kp acotado 0..9 -> L = 4.2..4.92 R_E.
-    const float k = std::isfinite(kp) ? glm::clamp(kp, 0.0f, 9.0f) : 0.0f;
-    return 4.2f + 0.08f * k;
+    // DW.19: delega en la ley pura del header (misma formula, un solo sitio).
+    return beltOuterLForKp(kp);
 }
 
 void VanAllenBelts::update() {

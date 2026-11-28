@@ -589,3 +589,6 @@ target_include_directories(test_hdr_all_six PRIVATE src libs/glad/include libs/g
 target_link_libraries(test_hdr_all_six PRIVATE CURL::libcurl)
 add_test(NAME hdr_all_six COMMAND test_hdr_all_six)
 add_test(NAME hdr_odr COMMAND ${CMAKE_COMMAND} -E env python3 ${CMAKE_SOURCE_DIR}/tests/hdr_odr_check.py)
+add_executable(test_van_allen_belts tests/test_van_allen_belts.cpp)
+target_include_directories(test_van_allen_belts PRIVATE src libs/glad/include libs/glm)
+add_test(NAME van_allen_belts COMMAND test_van_allen_belts)

@@ -1,6 +1,13 @@
 #pragma once
 #include <glad/glad.h>
 #include <glm/glm.hpp>
+#include <cmath>
+
+// DW.19: ley parametric pura del toro externo (testeable sin GL).
+inline float beltOuterLForKp(float kp) {
+    const float k = std::isfinite(kp) ? glm::clamp(kp, 0.0f, 9.0f) : 0.0f;
+    return 4.2f - 0.08f * k;
+}
 
 // VanAllenBelts: cinturones de radiacion de Van Allen como dos tori
 // alambrados (GL_LINES) alrededor de la Tierra. Port de belts.ts de la
@@ -9,8 +16,10 @@
 //
 //   - Interno (protones): L = 1.5 R_E fijo, estable, plata-acero
 //     (0.72, 0.78, 0.92). Radio de tubo 0.28 R_E.
-//   - Externo (electrones): L = 4.2 + 0.08 * Kp con Kp acotado a 0..9,
-//     ambar (1.00, 0.70, 0.28). Radio de tubo 0.85 R_E.
+//   - Externo (electrones): L = 4.2 - 0.08 * Kp con Kp acotado a 0..9
+//     (DW.19: v2 parametrica, solo corrige la DIRECCION del efecto
+//     tormenta; no es un ajuste empirico). Ambar (1.00, 0.70, 0.28).
+//     Radio de tubo 0.85 R_E.
 //   - Alpha externo = 0.70 * (0.45 + 0.55 * rbeGlow): un evento RBE
 //     reciente (glow 0..1) enciende el cinturon de electrones.
 //
@@ -18,8 +27,8 @@
 // son: son una eleccion de dibujo para que los cinturones se lean como
 // bandas y no como lineas de 1 px.
 //
-// Escala: 1 unidad = 1 R_E = 6371 km. El cinturon externo vive entre 4.2
-// y 4.9 R_E, muy por fuera del encuadre por defecto: hay que alejar la
+// Escala: 1 unidad = 1 R_E = 6371 km. El cinturon externo vive entre 3.48
+// y 4.2 R_E, muy por fuera del encuadre por defecto: hay que alejar la
 // camara (la distancia maxima es 20 R_E) para verlo entero junto al
 // interno, que a 1.5 R_E casi roza la superficie.
 //
