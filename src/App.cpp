@@ -52,6 +52,7 @@
 #include "Ionosphere/LowerIonoLayers.h"  // DW.29 V10a
 #include "Ionosphere/MidIonoLayers.h"    // DW.30 V10b
 #include "Ionosphere/HeliosphereView.h"  // DW.33 V11a
+#include "Ionosphere/HeliosphereProbes.h"  // DW.34 V11b
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
@@ -302,6 +303,9 @@ struct App::Impl {
     bool toiEnabled = false;
     HeliosphereView helio;             // DW.33 V11a: flag OFF por defecto
     bool heliosphereView = false;
+    HeliosphereProbes helioProbes;     // DW.34 V11b: flags OFF por defecto
+    bool probeMarkersEnabled = false;
+    bool moonCrossingEnabled = false;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
@@ -1828,6 +1832,7 @@ void main() {
     impl->lowerLayers.init();
     impl->midLayers.init();
     impl->helio.init();
+    impl->helioProbes.init();
     impl->auroraLayer.setColormap("aurora");
     impl->auroraLayer.setAltitude(110.0f / 6371.0f);  // ~110 km, bajo la capa TEC
     impl->auroraLayer.setOpacity(0.85f);
@@ -3202,6 +3207,8 @@ void App::saveSettings() {
     fprintf(f, "anomalyEnabled %d\n", impl->anomalyEnabled ? 1 : 0);
     fprintf(f, "toiEnabled %d\n", impl->toiEnabled ? 1 : 0);
     fprintf(f, "heliosphereView %d\n", impl->heliosphereView ? 1 : 0);
+    fprintf(f, "probeMarkersEnabled %d\n", impl->probeMarkersEnabled ? 1 : 0);
+    fprintf(f, "moonCrossingEnabled %d\n", impl->moonCrossingEnabled ? 1 : 0);
     fprintf(f, "es3dEnabled %d\n", impl->es3dEnabled ? 1 : 0);
     fprintf(f, "tecVisible %d\n", impl->tecVisible ? 1 : 0);
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
@@ -3415,6 +3422,8 @@ void App::loadSettings() {
         else if (k == "anomalyEnabled") impl->anomalyEnabled = clB(v);
         else if (k == "toiEnabled") impl->toiEnabled = clB(v);
         else if (k == "heliosphereView") impl->heliosphereView = clB(v);
+        else if (k == "probeMarkersEnabled") impl->probeMarkersEnabled = clB(v);
+        else if (k == "moonCrossingEnabled") impl->moonCrossingEnabled = clB(v);
         else if (k == "es3dEnabled") impl->es3dEnabled = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
         else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
@@ -4727,6 +4736,15 @@ void App::render() {
             impl->helio.setSunDirection(impl->sunDirection);
             impl->helio.render(view, proj);
         }
+        if (impl->probeMarkersEnabled) {
+            impl->helioProbes.setProbeStates(impl->voyagerSnap.v1.fix.valid,
+                                             impl->voyagerSnap.v2.fix.valid);
+            impl->helioProbes.renderProbes(view, proj);
+        }
+        if (impl->moonCrossingEnabled) {
+            impl->helioProbes.setMoonTime((float)impl->time);
+            impl->helioProbes.renderMoon(view, proj);
+        }
         // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
         // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5912,6 +5930,12 @@ void App::render() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetItemTooltip("DW.33 V11a: off by default. On extends the camera limit from 45 to 200 R_E and draws 12 analytic Parker spirals (parker:: sidereal omega, v_sw=400 km/s declared, visual compression x0.129 because 1 AU does not fit in R_E). Parametric, not MHD. Turning it off re-clamps the saved distance to 45 R_E.");
+    ImGui::Checkbox("Probe markers (illustrative)", &impl->probeMarkersEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.34 V11b: off by default. Only if JPL Horizons returned a fix for Voyager 1/2. Markers sit at a COMPRESSED 60/75 R_E with ARBITRARY directions (no RA/Dec from the fix): illustrative, not to scale. Real range is in the Voyager panel.");
+    ImGui::Checkbox("Moon crossing (model only)", &impl->moonCrossingEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.34 V11b: off by default. Moon at 60 R_E with phase = wall-clock time * 0.02 rad/s. wall-clock, no replay-coherent: in replay the rest of the data moves to another epoch while this marker keeps real time. MODEL ONLY, no JPL ephemeris: it does not claim the real lunar position at this epoch. Direction is illustrative, not a physical ephemeris.");
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
