@@ -50,6 +50,7 @@
 #include "Ionosphere/SolarWindLayer.h"
 #include "Ionosphere/AuroraCurtains.h"   // DW.28 V7
 #include "Ionosphere/LowerIonoLayers.h"  // DW.29 V10a
+#include "Ionosphere/MidIonoLayers.h"    // DW.30 V10b
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
@@ -293,6 +294,10 @@ struct App::Impl {
     LowerIonoLayers lowerLayers;       // DW.29 V10a: flags OFF por defecto
     bool dLayerEnabled = false;
     bool es3dEnabled = false;
+    MidIonoLayers midLayers;           // DW.30 V10b: flags OFF por defecto
+    bool plasmaEnabled = false;
+    bool anomalyEnabled = false;
+    bool toiEnabled = false;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
@@ -611,6 +616,19 @@ struct App::Impl {
 };
 
 // Marcador "(?)" con tooltip de ayuda. Usar tras el item al que documenta.
+// DW.30 V10b: eje dipolar IGRF-14 (marco Tierra), mismo origen que DW.21.
+static glm::vec3 v10bDipoleAxis() {
+    double bn = 0.0, be = 0.0, bd = 0.0, ba = 0.0;
+    if (irtameval::igrfFull(2025.0, 0.0, 0.0, 0.0, bn, be, bd, ba) &&
+        std::isfinite(bn) && std::isfinite(be) && std::isfinite(bd) &&
+        std::fabs(bn) > 1.0) {
+        const float tilt = std::atan2((float)std::fabs(bd), (float)std::fabs(bn));
+        const float sgn = (be >= 0.0) ? 1.0f : -1.0f;
+        return glm::normalize(glm::vec3(sgn * std::sin(tilt), std::cos(tilt), 0.0f));
+    }
+    return glm::normalize(glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
 // DW.27 V5b: LUT 3D procedural 32^3. Identidad exacta con
 // contrast=1, saturation=1, lift=0; sin asset externo (leccion DW.16).
 static void buildLut3dTexture(GLuint tex, float contrast, float saturation, float lift) {
@@ -1803,6 +1821,7 @@ void main() {
     impl->auroraCurtains.init();
     impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
     impl->lowerLayers.init();
+    impl->midLayers.init();
     impl->auroraLayer.setColormap("aurora");
     impl->auroraLayer.setAltitude(110.0f / 6371.0f);  // ~110 km, bajo la capa TEC
     impl->auroraLayer.setOpacity(0.85f);
@@ -3171,6 +3190,9 @@ void App::saveSettings() {
     fprintf(f, "auroraVisible %d\n", impl->auroraVisible ? 1 : 0);
     fprintf(f, "auroraCurtainsEnabled %d\n", impl->auroraCurtainsEnabled ? 1 : 0);
     fprintf(f, "dLayerEnabled %d\n", impl->dLayerEnabled ? 1 : 0);
+    fprintf(f, "plasmaEnabled %d\n", impl->plasmaEnabled ? 1 : 0);
+    fprintf(f, "anomalyEnabled %d\n", impl->anomalyEnabled ? 1 : 0);
+    fprintf(f, "toiEnabled %d\n", impl->toiEnabled ? 1 : 0);
     fprintf(f, "es3dEnabled %d\n", impl->es3dEnabled ? 1 : 0);
     fprintf(f, "tecVisible %d\n", impl->tecVisible ? 1 : 0);
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
@@ -3376,6 +3398,9 @@ void App::loadSettings() {
             impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
         }
         else if (k == "dLayerEnabled") impl->dLayerEnabled = clB(v);
+        else if (k == "plasmaEnabled") impl->plasmaEnabled = clB(v);
+        else if (k == "anomalyEnabled") impl->anomalyEnabled = clB(v);
+        else if (k == "toiEnabled") impl->toiEnabled = clB(v);
         else if (k == "es3dEnabled") impl->es3dEnabled = clB(v);
         else if (k == "tecVisible") impl->tecVisible = clB(v);
         else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
@@ -4671,6 +4696,17 @@ void App::render() {
         impl->lowerLayers.setDLayerParams(impl->sunDirection, dFlare);
         if (impl->dLayerEnabled) impl->lowerLayers.renderD(view, proj);
         if (impl->es3dEnabled) impl->lowerLayers.renderEs(view, proj);
+        // DW.30 V10b: mismo binario, cero draws nuevos con todo OFF.
+        float midTec = 0.0f;
+        const GridData& midGrid = impl->tecLayer.getGrid();
+        if (midGrid.valid && !midGrid.values.empty())
+            midTec = glm::clamp(*std::max_element(midGrid.values.begin(),
+                                                 midGrid.values.end()) / 40.0f, 0.0f, 1.0f);
+        impl->midLayers.setParams(currentKp(), midTec, impl->sunDirection,
+                                  v10bDipoleAxis(), (float)impl->time);
+        if (impl->plasmaEnabled) impl->midLayers.renderPlasmasphere(view, proj);
+        if (impl->anomalyEnabled) impl->midLayers.renderAnomaly(view, proj);
+        if (impl->toiEnabled) impl->midLayers.renderToi(view, proj);
         // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
         // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5838,6 +5874,15 @@ void App::render() {
     ImGui::TextDisabled("Es patches: %d (foEs max %.1f)",
                         impl->lowerLayers.esPatchCount(),
                         impl->lowerLayers.esMaxFoEs());
+    ImGui::Checkbox("Plasmasphere (L/kp)", &impl->plasmaEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.30 V10b: off by default. Visual proxy shell scaled by L_pp = 5.6 - 0.46*Kp, brighter on the dayside. Not an electron-density model.");
+    ImGui::Checkbox("Anomaly +-15 magnetic", &impl->anomalyEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.30 V10b: off by default. Two Gaussian crests at +-15 deg magnetic latitude (IGRF-14 axis, Earth frame) at 300 km, modulated by live TEC. Parametric, not measured foF2.");
+    ImGui::Checkbox("TOI wave", &impl->toiEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.30 V10b: off by default. Animated analytic travelling wave sin(6*lon - 0.5*t) at 320 km, amplitude from Kp. Animation only: no measured TID data.");
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
