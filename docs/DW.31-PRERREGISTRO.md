@@ -33,7 +33,7 @@ aplicable es `DRAW_GATE` con `glFinish` + reloj de alta resolución:
   **SLOW** si `v <= 400 km/s`, **TRANSITIONAL** en el intervalo
   (400, 500). Umbranes sólo visuales, no clasificación física.
 - Con flag ON, `refreshColors()` aplica un énfasis determinista sobre
-  el color de la rampa: FASTA realza el azul/cian, LENTA realza el
+  el color de la rampa: FAST realza el azul/cian, LENTA realza el
   ámbar; TRANSITIONAL deja el color de la web intacto. Sin cambiar
   posiciones, tamaños, alfas ni número de partículas.
 - Con flag ON, el HUD muestra el régimen con la velocidad real:

@@ -39,6 +39,9 @@ public:
     bool instanced() const { return instanced_; }
     void setTransformFeedback(bool v);      // DW.24 V3b: flag OFF por defecto
     bool transformFeedback() const { return tf_; }
+    void setWindStateMode(bool v);          // DW.31 V12: flag OFF por defecto
+    bool windStateMode() const { return windStateMode_; }
+    static const char* windRegime(float speedKms);
 
     // Viento vivo. Cada valor no finito se ignora (conserva el ultimo valido).
     void setSolarWind(float speedKms, float densityCm3, float bzNT);
@@ -72,6 +75,7 @@ private:
     bool instanced_ = false;
 
     // DW.24 V3b: dos buffers de posiciones (marco solar) en ping-pong.
+    bool windStateMode_ = false;
     bool tf_ = false;
     GLuint tfProg_ = 0;
     GLuint tfSimVao_[2] = {0, 0};
