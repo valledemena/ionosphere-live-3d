@@ -226,7 +226,8 @@ void HFTraceLayer::buildPolyline(const Input& in, const HFCircuitResult& r) {
         hfc::arcPoint(in.txLatDeg, in.txLonDeg, in.rxLatDeg, in.rxLonDeg, fr, rLat, rLon);
         hfc::arcPoint(in.txLatDeg, in.txLonDeg, in.rxLatDeg, in.rxLonDeg, f1, gLat1, gLon1);
         const double mufK = r.hopMufMHz.empty() ? 0.0 : r.hopMufMHz[(size_t)k];
-        const float via = (float)hfc::hopViable((double)in.freqMHz, mufK);
+        const float via = (float)hfc::hopViableWithLuf(
+            (double)in.freqMHz, mufK, r.lufMHz);
         // Pata 1: suelo_k -> reflexion (t: 0..1, alt = (h'+off)·t·exag).
         for (int j = 0; j < LEGS; j++) {
             const double t = (double)j / (double)(LEGS - 1);

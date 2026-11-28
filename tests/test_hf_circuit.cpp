@@ -498,6 +498,23 @@ int main() {
         check_bool("DW.16-4: distancia euclidea al rojo > 0.5",
                    dist(hfc::traceColorClosed()) > 0.5);
     }
+    printf("--- DW.18: LUF en el color del arco ---\n");
+    {
+        const double muf = 8.3, luf = 4.4;
+        check_near("DW.18-1: 1.0 MHz con LUF 4.4 -> cerrado",
+                   hfc::hopViableWithLuf(1.0, muf, luf), 0.0, 0.0);
+        check_near("DW.18-2: 5.3 MHz con LUF 4.4 -> abierto",
+                   hfc::hopViableWithLuf(5.3, muf, luf), 1.0, 0.0);
+        check_near("DW.18-3: 7.5 MHz con LUF 4.4 -> marginal",
+                   hfc::hopViableWithLuf(7.5, muf, luf), 0.5, 0.0);
+        check_near("DW.18-4: 9.0 MHz con LUF 4.4 -> cerrado por MUF",
+                   hfc::hopViableWithLuf(9.0, muf, luf), 0.0, 0.0);
+        // El gate LUF actua ANTES que el MUF (mufHop distinto).
+        check_near("DW.18-5: 5.3 MHz, muf 6.0, luf 6.5 -> cerrado por LUF",
+                   hfc::hopViableWithLuf(5.3, 6.0, 6.5), 0.0, 0.0);
+        check_near("DW.18-6: 5.3 MHz, muf 6.0, luf 0 -> regresion MUF (marginal)",
+                   hfc::hopViableWithLuf(5.3, 6.0, 0.0), 0.5, 0.0);
+    }
     printf("\n[test_hf_circuit] %d OK, %d FAIL\n", g_ok, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
