@@ -5935,7 +5935,7 @@ void App::render() {
         ImGui::SetItemTooltip("DW.34 V11b: off by default. Only if JPL Horizons returned a fix for Voyager 1/2. Markers sit at a COMPRESSED 60/75 R_E with ARBITRARY directions (no RA/Dec from the fix): illustrative, not to scale. Real range is in the Voyager panel.");
     ImGui::Checkbox("Moon crossing (model only)", &impl->moonCrossingEnabled);
     if (ImGui::IsItemHovered())
-        ImGui::SetItemTooltip("DW.34 V11b: off by default. Moon at 60 R_E with phase = wall-clock time * 0.02 rad/s. MODEL ONLY, no JPL ephemeris: it does not claim the real lunar position at this epoch.");
+        ImGui::SetItemTooltip("DW.34 V11b: off by default. Moon at 60 R_E with phase = wall-clock time * 0.02 rad/s. wall-clock, no replay-coherent: in replay the rest of the data moves to another epoch while this marker keeps real time. MODEL ONLY, no JPL ephemeris: it does not claim the real lunar position at this epoch. Direction is illustrative, not a physical ephemeris.");
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
