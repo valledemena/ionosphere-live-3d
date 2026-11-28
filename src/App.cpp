@@ -48,6 +48,7 @@
 #include "Utils/Tour.h"
 #include "Ionosphere/IonosondeLayer.h"
 #include "Ionosphere/SolarWindLayer.h"
+#include "Ionosphere/AuroraCurtains.h"   // DW.28 V7
 #include "Data/DataManager.h"
 #include "Data/EsaAdapter.h"
 #include "Data/GloTecAdapter.h"
@@ -286,6 +287,8 @@ struct App::Impl {
     // fuentes con fetch propio (matriz = vista de estado, no solo diagnostico).
     bool provStatusOpen = false, provStatusWasOpen = false;
     GridLayer auroraLayer;
+    AuroraCurtains auroraCurtains;     // DW.28 V7: flag OFF por defecto
+    bool auroraCurtainsEnabled = false;
     EbroAdapter ebro;
     Framebuffer sceneFBO;
     Framebuffer limbFBO;            // UI-117B: lupa en modo Chapman (blit post-3b)
@@ -1793,6 +1796,8 @@ void main() {
 
     // Ovalo auroral (NOAA Ovation): overlay verde (datos via worker).
     impl->auroraLayer.init();
+    impl->auroraCurtains.init();
+    impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
     impl->auroraLayer.setColormap("aurora");
     impl->auroraLayer.setAltitude(110.0f / 6371.0f);  // ~110 km, bajo la capa TEC
     impl->auroraLayer.setOpacity(0.85f);
@@ -1877,6 +1882,7 @@ void main() {
     impl->faradayLayer.setVisible(impl->faradayVisible);
     impl->faradayLayer.setScale(impl->faradayScale);
     impl->auroraLayer.setVisible(impl->auroraVisible);
+    impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
     impl->auroraLayer.setOpacity(impl->aurOpacity);
     impl->volumeLayer.setVisible(impl->volumeVisible);
     impl->volumeLayer.setOpacityScale(impl->volumeOpacity);
@@ -3155,6 +3161,7 @@ void App::saveSettings() {
     fprintf(f, "faradayMode %d\n", impl->faradayMode);
     fprintf(f, "faradayScale %g\n", (double)impl->faradayScale);
     fprintf(f, "auroraVisible %d\n", impl->auroraVisible ? 1 : 0);
+    fprintf(f, "auroraCurtainsEnabled %d\n", impl->auroraCurtainsEnabled ? 1 : 0);
     fprintf(f, "tecVisible %d\n", impl->tecVisible ? 1 : 0);
     fprintf(f, "giroStationsVisible %d\n", impl->giroStationsVisible ? 1 : 0);
     fprintf(f, "cineSpeed %g\n", (double)impl->cineSpeed);
@@ -3354,6 +3361,10 @@ void App::loadSettings() {
         else if (k == "faradayMode") impl->faradayMode = glm::clamp((int)v, 0, 1);
         else if (k == "faradayScale") impl->faradayScale = glm::clamp((float)v, 0.2f, 4.0f);
         else if (k == "auroraVisible") impl->auroraVisible = clB(v);
+        else if (k == "auroraCurtainsEnabled") {
+            impl->auroraCurtainsEnabled = clB(v);
+            impl->auroraCurtains.setVisible(impl->auroraCurtainsEnabled);
+        }
         else if (k == "tecVisible") impl->tecVisible = clB(v);
         else if (k == "sunVisible") impl->sunVisible = clB(v);   // M11
         else if (k == "sunProduct") impl->sunProduct = glm::clamp((int)v, 0, 1);   // M11
@@ -3859,6 +3870,7 @@ void App::consumeBundles() {
         impl->lastAurora = au;
         ++impl->watchBundles;
         if (au->grid.valid) impl->auroraLayer.updateFromGrid(au->grid);
+        if (au->grid.valid) impl->auroraCurtains.updateFromGrid(au->grid);
     }
     auto rp = impl->getRadio();
     if (rp && rp != impl->lastRadio) {
@@ -4639,6 +4651,7 @@ void App::render() {
         if (showSW) impl->solarWindLayer.render(view, proj);
         if (showFar) impl->faradayLayer.render(view, proj);
         if (showAur) impl->auroraLayer.render(view, proj);
+        if (impl->auroraCurtains.visible()) impl->auroraCurtains.render(view, proj);
         // M8 (plan 11.3): el ribbon se dibuja en el pase de escena (M9f,
         // antes del resolve) para alimentar el bloom; aqui ya no va nada.
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5786,6 +5799,17 @@ void App::render() {
         impl->auroraLayer.setOpacity(impl->aurOpacity);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Opacity of the aurora overlay. Visual only.");
+    bool curtains = impl->auroraCurtainsEnabled;
+    if (ImGui::Checkbox("Aurora curtains (100-250 km)", &curtains)) {
+        impl->auroraCurtainsEnabled = curtains;
+        impl->auroraCurtains.setVisible(curtains);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.28 V7: off by default. On = one curtain per NOAA Ovation cell above 8, from 100 to 250 km, tilted along the IGRF-14 dipole field (Earth frame). Three declared bands: 557.7 nm green, 630.0 nm red and N2+ violet at the lower border. Visual parameterisation, not a radiative-emission model. The flat oval layer is unchanged.");
+    ImGui::TextDisabled("curtains: %d (Ovation max %.0f, epoch %.0f)",
+                        impl->auroraCurtains.curtainCount(),
+                        impl->auroraCurtains.gridMax(),
+                        impl->auroraCurtains.gridTimestamp());
     auto aurB = impl->getAurora();
     if (aurB && aurB->grid.valid) {
         float amn, amx;
