@@ -273,6 +273,37 @@ bool SolarWindAdapter::fetch(double utc) {
     latest_.timeUtc = latestT;
     latest_.valid = (speed > 0.0f || gotMag);
 
+    // DW.20: historial completo alineando plasma con Bz (<=120 s).
+    // Sin Bz real la muestra NO es dato valido para el retardo (nota 2 del
+    // veredicto). Bx es opcional: su ausencia no invalida la muestra.
+    fullHistory_.clear();
+    if (!windRows.empty()) {
+        const double cutoff = windRows.back().timeUtc - 24.0 * 3600.0;
+        for (const SolarWindSample& w : windRows) {
+            if (w.timeUtc < cutoff || !w.valid) continue;
+            SolarWindSample s = w;
+            double best = 1.0e30;
+            const SolarWindHistoryPoint* nearestBz = nullptr;
+            for (const auto& m : magHist) {
+                const double d = std::fabs(m.timeUtc - w.timeUtc);
+                if (d < best) { best = d; nearestBz = &m; }
+            }
+            if (nearestBz && best <= 120.0) {
+                s.bz = nearestBz->value;
+                s.hasBx = false;
+                double bestBx = 1.0e30;
+                for (const auto& bx : bxHist) {
+                    const double d = std::fabs(bx.timeUtc - w.timeUtc);
+                    if (d < bestBx) { bestBx = d; s.bx = bx.value; }
+                }
+                if (bestBx <= 120.0) s.hasBx = true;
+                s.valid = true;
+                fullHistory_.push_back(s);
+            }
+            // Si falta Bz, no se guarda: no inventamos campo magnetico.
+        }
+    }
+
     // Historico de Bz: mostrar las ultimas ~24h de magHist.
     bzHistory_.clear();
     if (!magHist.empty()) {
