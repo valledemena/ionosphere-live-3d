@@ -12,6 +12,8 @@ uniform float u_vignette;
 uniform float u_ca;
 uniform float u_time;
 uniform vec2 u_resolution;
+uniform bool u_lutEnabled;        // DW.27 V5b: OFF por defecto
+uniform sampler3D u_lut3d;
 out vec4 fragColor;
 
 vec3 acesFilm(vec3 x) {
@@ -72,6 +74,12 @@ void main() {
             col += (n - 0.5) * u_grain;
         }
         col = clamp(col, 0.0, 1.0);
+    }
+
+    // DW.27 V5b: LUT 3D al FINAL de la cadena (ya en LDR). El mapeo a centro
+    // de texel hace que la LUT identidad sea exacta: c -> (c*31+0.5)/32.
+    if (u_lutEnabled) {
+        col = texture(u_lut3d, clamp(col, 0.0, 1.0) * (31.0 / 32.0) + 0.5 / 32.0).rgb;
     }
     fragColor = vec4(col, 1.0);
 }

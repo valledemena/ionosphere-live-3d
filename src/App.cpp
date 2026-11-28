@@ -310,6 +310,15 @@ struct App::Impl {
     float gradeGrain = 0.03f;      // amplitud del grano (LDR)
     float gradeVignette = 0.35f;   // intensidad de la vineta (LDR)
     float gradeCA = 0.003f;        // offset radial por canal (LDR)
+    bool lut3dEnabled = false;     // DW.27 V5b: flag OFF por defecto
+    float lutContrast = 1.0f;
+    float lutSaturation = 1.0f;
+    float lutLift = 0.0f;
+    GLuint lut3dTexture = 0;
+    bool bloomMipEnabled = false;  // DW.27 V5b: flag OFF por defecto
+    Shader bloomDownShader;
+    Shader bloomUpShader;
+    Framebuffer bloomMipFBO[3];
     int msaaSamples = 0;           // M1: MSAA de escena 0/2/4 (default 0, persistible)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
@@ -595,6 +604,32 @@ struct App::Impl {
 };
 
 // Marcador "(?)" con tooltip de ayuda. Usar tras el item al que documenta.
+// DW.27 V5b: LUT 3D procedural 32^3. Identidad exacta con
+// contrast=1, saturation=1, lift=0; sin asset externo (leccion DW.16).
+static void buildLut3dTexture(GLuint tex, float contrast, float saturation, float lift) {
+    constexpr int N = 32;
+    float data[N * N * N * 4];
+    for (int b = 0; b < N; ++b) {
+        for (int g = 0; g < N; ++g) {
+            for (int r = 0; r < N; ++r) {
+                float c[3] = { (float)r / (N - 1), (float)g / (N - 1), (float)b / (N - 1) };
+                for (int k = 0; k < 3; ++k)
+                    c[k] = glm::clamp((c[k] - 0.5f) * contrast + 0.5f, 0.0f, 1.0f);
+                const float lum = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+                for (int k = 0; k < 3; ++k) {
+                    c[k] = glm::mix(lum, c[k], saturation);
+                    c[k] = glm::clamp(c[k] + lift * (1.0f - c[k]), 0.0f, 1.0f);
+                }
+                float* p = data + ((b * N + g) * N + r) * 4;
+                p[0] = c[0]; p[1] = c[1]; p[2] = c[2]; p[3] = 1.0f;
+            }
+        }
+    }
+    glBindTexture(GL_TEXTURE_3D, tex);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA16F, N, N, N, 0, GL_RGBA, GL_FLOAT, data);
+    glBindTexture(GL_TEXTURE_3D, 0);
+}
+
 static void HelpMarker(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -1088,6 +1123,8 @@ uniform float u_vignette;
 uniform float u_ca;
 uniform float u_time;
 uniform vec2 u_resolution;
+uniform bool u_lutEnabled;        // DW.27 V5b: OFF por defecto
+uniform sampler3D u_lut3d;
 out vec4 fragColor;
 
 vec3 acesFilm(vec3 x) {
@@ -1149,11 +1186,65 @@ void main() {
         }
         col = clamp(col, 0.0, 1.0);
     }
+
+    // DW.27 V5b: LUT 3D al FINAL de la cadena (ya en LDR). El mapeo a centro
+    // de texel hace que la LUT identidad sea exacta: c -> (c*31+0.5)/32.
+    if (u_lutEnabled) {
+        col = texture(u_lut3d, clamp(col, 0.0, 1.0) * (31.0 / 32.0) + 0.5 / 32.0).rgb;
+    }
     fragColor = vec4(col, 1.0);
 }
 )"
         );
     }
+
+    // DW.27 V5b: shaders de la cascada mip (inline, sin ficheros externos).
+    impl->bloomDownShader.loadFromSource(
+        "#version 400 core\n"
+        "layout(location=0) in vec2 aPos;\n"
+        "out vec2 vUV;\n"
+        "void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }\n",
+        "#version 400 core\n"
+        "in vec2 vUV;\n"
+        "uniform sampler2D u_texture;\n"
+        "uniform vec2 u_texel;\n"
+        "out vec4 fragColor;\n"
+        "void main(){\n"
+        "  vec3 c = texture(u_texture, vUV + u_texel*vec2(-0.5,-0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2( 0.5,-0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2(-0.5, 0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2( 0.5, 0.5)).rgb;\n"
+        "  fragColor = vec4(c*0.25, 1.0);\n"
+        "}\n");
+    impl->bloomUpShader.loadFromSource(
+        "#version 400 core\n"
+        "layout(location=0) in vec2 aPos;\n"
+        "out vec2 vUV;\n"
+        "void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }\n",
+        "#version 400 core\n"
+        "in vec2 vUV;\n"
+        "uniform sampler2D u_texture;\n"
+        "uniform vec2 u_texel;\n"
+        "out vec4 fragColor;\n"
+        "void main(){\n"
+        "  vec3 c = texture(u_texture, vUV + u_texel*vec2(-0.5,-0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2( 0.5,-0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2(-0.5, 0.5)).rgb;\n"
+        "  c += texture(u_texture, vUV + u_texel*vec2( 0.5, 0.5)).rgb;\n"
+        "  fragColor = vec4(c*0.25, 1.0);\n"
+        "}\n");
+
+    // DW.27 V5b: textura 3D procedural (identidad por defecto).
+    glGenTextures(1, &impl->lut3dTexture);
+    glBindTexture(GL_TEXTURE_3D, impl->lut3dTexture);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    buildLut3dTexture(impl->lut3dTexture, impl->lutContrast,
+                      impl->lutSaturation, impl->lutLift);
 
     // DW.22: shader de acumulacion (fallback inline si faltan los ficheros).
     if (!impl->temporalShader.load("shaders/temporal.vert", "shaders/temporal.frag")) {
@@ -1722,6 +1813,10 @@ void main() {
     impl->sceneFBO.init(winW, winH, impl->msaaSamples);
     impl->bloomFBO[0].init(winW / 2, winH / 2);
     impl->bloomFBO[1].init(winW / 2, winH / 2);
+    for (int i = 0; i < 3; ++i) {
+        const int div = 4 << i;   // 1/4, 1/8, 1/16
+        impl->bloomMipFBO[i].init(std::max(1, winW / div), std::max(1, winH / div));
+    }
     impl->compFBO.init(winW, winH);   // M'-2: composite con god rays ON
     impl->histFBO[0].init(winW, winH);  // DW.22: historia temporal
     impl->histFBO[1].init(winW, winH);
@@ -1826,6 +1921,7 @@ void App::recreateRenderTargets(int w, int h) {
     impl->sceneFBO.destroy();
     impl->bloomFBO[0].destroy();
     impl->bloomFBO[1].destroy();
+    for (int i = 0; i < 3; ++i) impl->bloomMipFBO[i].destroy();
     impl->compFBO.destroy();   // M'-2: con god rays OFF no se usa (coste 0)
     impl->histFBO[0].destroy();
     impl->histFBO[1].destroy();
@@ -1833,6 +1929,10 @@ void App::recreateRenderTargets(int w, int h) {
         fprintf(stderr, "[App] sceneFBO recreate failed at %dx%d\n", w, h);
     impl->bloomFBO[0].init(w / 2, h / 2);
     impl->bloomFBO[1].init(w / 2, h / 2);
+    for (int i = 0; i < 3; ++i) {
+        const int div = 4 << i;
+        impl->bloomMipFBO[i].init(std::max(1, w / div), std::max(1, h / div));
+    }
     impl->compFBO.init(w, h);
     impl->histFBO[0].init(w, h);
     impl->histFBO[1].init(w, h);
@@ -2034,7 +2134,6 @@ void App::processInput() {
 }
 
 void App::update(float dt) {
-
     // Catalogo GIRO listo (hilo background) -> aplicar puntos y arrancar datos.
     if (impl->catalogReady.load() && !impl->catalogApplied) {
         impl->ionosondeLayer.updateSamples(giroPointsFrom(impl->giro.getSamples()));
@@ -3020,6 +3119,11 @@ void App::saveSettings() {
     fprintf(f, "gradeGrain %g\n", (double)impl->gradeGrain);
     fprintf(f, "gradeVignette %g\n", (double)impl->gradeVignette);
     fprintf(f, "gradeCA %g\n", (double)impl->gradeCA);
+    fprintf(f, "lut3dEnabled %d\n", impl->lut3dEnabled ? 1 : 0);
+    fprintf(f, "lutContrast %g\n", (double)impl->lutContrast);
+    fprintf(f, "lutSaturation %g\n", (double)impl->lutSaturation);
+    fprintf(f, "lutLift %g\n", (double)impl->lutLift);
+    fprintf(f, "bloomMipEnabled %d\n", impl->bloomMipEnabled ? 1 : 0);
     fprintf(f, "msaaSamples %d\n", impl->msaaSamples);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
     fprintf(f, "reliefAmp %g\n", (double)impl->reliefAmp);
@@ -3196,6 +3300,11 @@ void App::loadSettings() {
         else if (k == "gradeGrain") impl->gradeGrain = glm::clamp((float)v, 0.0f, 0.15f);
         else if (k == "gradeVignette") impl->gradeVignette = glm::clamp((float)v, 0.0f, 1.0f);
         else if (k == "gradeCA") impl->gradeCA = glm::clamp((float)v, 0.0f, 0.02f);
+        else if (k == "lut3dEnabled") impl->lut3dEnabled = clB(v);
+        else if (k == "lutContrast") { impl->lutContrast = glm::clamp((float)v, 0.5f, 2.0f); buildLut3dTexture(impl->lut3dTexture, impl->lutContrast, impl->lutSaturation, impl->lutLift); }
+        else if (k == "lutSaturation") { impl->lutSaturation = glm::clamp((float)v, 0.0f, 2.0f); buildLut3dTexture(impl->lut3dTexture, impl->lutContrast, impl->lutSaturation, impl->lutLift); }
+        else if (k == "lutLift") { impl->lutLift = glm::clamp((float)v, 0.0f, 0.25f); buildLut3dTexture(impl->lut3dTexture, impl->lutContrast, impl->lutSaturation, impl->lutLift); }
+        else if (k == "bloomMipEnabled") impl->bloomMipEnabled = clB(v);
         else if (k == "msaaSamples") {   // M1: solo 0/2/4 validos, resto -> 4
             int s = (int)v;
             impl->msaaSamples = (s == 0 || s == 2) ? s : 4;
@@ -4380,6 +4489,49 @@ void App::render() {
         glDrawArrays(GL_TRIANGLES, 0, 6);
         impl->bloomFBO[1].unbind();
 
+        // DW.27 V5b: cascada mip ADITIVA sobre el resultado V ya calculado.
+        // Las dos pasadas gold (H/V con los 24 pesos) NO se tocan. Con el
+        // flag OFF este bloque no corre: salida byte-identica al head.
+        if (impl->bloomMipEnabled && impl->bloomDownShader.program != 0 &&
+            impl->bloomUpShader.program != 0) {
+            GLuint srcTex = impl->bloomFBO[1].colorTexture;
+            int srcW = impl->bloomFBO[1].width, srcH = impl->bloomFBO[1].height;
+            glDisable(GL_DEPTH_TEST);
+            glBindVertexArray(impl->quadVAO);
+            impl->bloomDownShader.use();
+            impl->bloomDownShader.setInt("u_texture", 0);
+            for (int i = 0; i < 3; ++i) {
+                impl->bloomMipFBO[i].bind();
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, srcTex);
+                impl->bloomDownShader.setVec2("u_texel",
+                    glm::vec2(1.0f / (float)std::max(srcW, 1),
+                              1.0f / (float)std::max(srcH, 1)));
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                srcTex = impl->bloomMipFBO[i].colorTexture;
+                srcW = impl->bloomMipFBO[i].width;
+                srcH = impl->bloomMipFBO[i].height;
+            }
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE);
+            impl->bloomUpShader.use();
+            impl->bloomUpShader.setInt("u_texture", 0);
+            for (int i = 2; i >= 0; --i) {
+                if (i == 2) impl->bloomFBO[1].bind();
+                else        impl->bloomMipFBO[i - 1].bind();
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, impl->bloomMipFBO[i].colorTexture);
+                impl->bloomUpShader.setVec2("u_texel",
+                    glm::vec2(1.0f / (float)std::max(impl->bloomMipFBO[i].width, 1),
+                              1.0f / (float)std::max(impl->bloomMipFBO[i].height, 1)));
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            glDisable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(0);
+            impl->bloomFBO[1].unbind();
+        }
+
         // Restaurar el viewport a resolución completa: unbind() no lo restaura y el
         // composite/ImGui se dibujarían a mitad de resolución (globo de otro tamaño + borroso).
         glViewport(0, 0, winW, winH);
@@ -4538,6 +4690,12 @@ void App::render() {
     impl->compositeShader.setFloat("u_time", impl->time);
     impl->compositeShader.setVec2("u_resolution",
                                   glm::vec2((float)winW, (float)winH));
+    // DW.27 V5b: unidad 2 = LUT 3D (siempre enlazada; inactiva con flag OFF).
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_3D, impl->lut3dTexture);
+    impl->compositeShader.setInt("u_lut3d", 2);
+    impl->compositeShader.setBool("u_lutEnabled", impl->lut3dEnabled);
+    glActiveTexture(GL_TEXTURE0);
 
     // Draw fullscreen quad with persistent VAO
     glBindVertexArray(impl->quadVAO);
@@ -4719,6 +4877,25 @@ void App::render() {
         impl->gradeVignette = glm::clamp(impl->gradeVignette, 0.0f, 1.0f);
         impl->gradeCA = glm::clamp(impl->gradeCA, 0.0f, 0.02f);
     }
+    ImGui::Checkbox("3D LUT", &impl->lut3dEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.27 V5b: off by default. On = procedural 32^3 RGBA16F LUT applied at the very end of the composite, in LDR. Identity at defaults (contrast 1, saturation 1, lift 0); no external asset.");
+    if (impl->lut3dEnabled) {
+        bool changed = false;
+        changed |= ImGui::SliderFloat("LUT contrast", &impl->lutContrast, 0.5f, 2.0f);
+        changed |= ImGui::SliderFloat("LUT saturation", &impl->lutSaturation, 0.0f, 2.0f);
+        changed |= ImGui::SliderFloat("LUT lift", &impl->lutLift, 0.0f, 0.25f);
+        if (changed) {
+            impl->lutContrast = glm::clamp(impl->lutContrast, 0.5f, 2.0f);
+            impl->lutSaturation = glm::clamp(impl->lutSaturation, 0.0f, 2.0f);
+            impl->lutLift = glm::clamp(impl->lutLift, 0.0f, 0.25f);
+            buildLut3dTexture(impl->lut3dTexture, impl->lutContrast,
+                              impl->lutSaturation, impl->lutLift);
+        }
+    }
+    ImGui::Checkbox("Bloom mip cascade", &impl->bloomMipEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.27 V5b: off by default. On = three extra mip levels (1/4, 1/8, 1/16) downsample + additive upsample over the existing bloom. The pinned M1/M9f/M9g gold passes are untouched.");
     {
         // M1: MSAA de escena 0/2/4 (persistible). El cambio recrea los targets
         // en caliente: mismo punto de recreacion que el resize (hilo seguro).
