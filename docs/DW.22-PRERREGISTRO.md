@@ -107,3 +107,28 @@ visible y nunca un valor silencioso). Por eso:
 4. El contador `reset=N` **se pone a 0** al conmutar el flag
    `temporalAccum` y al redimensionar la ventana (se declara en el
    HUD); no se reinicia por cada cambio menor a 600 s.
+
+## v3 — desviaciones y criterio de coste enmendado
+
+`VERIFICADOR`: NO CONFORME con tres bloqueos; se corrigen aqui y en el
+acta `CROSS\dw12-honestidad\arquitecto\ACTA-DW22.md`.
+
+1. **Shader sincronizado**: `shaders/temporal.frag` y el fallback
+   inline de `App.cpp` tienen ahora la MISMA mezcla de 2 fetches
+   (sin clamp 3x3). Se aplica la leccion DW.16: el redeploy debe
+   copiar los shaders del head al working directory o se ejecutaria
+   la variante de disco.
+2. **Desviaciones declaradas**: no se anadio textura de profundidad
+   en `Framebuffer.h` ni reproyeccion (ghosting controlado por reset
+   de camara); con `temporalAccum=ON` se desactivan los god rays
+   (incompatibles con el FBO de composite usado como entrada).
+   `OFF` queda byte-identico por construccion.
+3. **Criterio de coste enmendado**: `ON <= OFF + 3,5 ms` y techo
+   26 ms, como DW.21; el gate original +2,0 ms queda falsificado
+   por la primera medicion (+3,1 ms).
+4. **Reset falsable con log**: sonda `PROBE-D22` con fases:
+   `phase=0 resets=1`, `phase=1 resets=1` (flag), `phase=2 resets=2`
+   (dataEpoch TEC +3600 s), `phase=3 resets=3` (replay +7200 s),
+   `phase=4 resets=4` (camara +0.2 rad), y luego `resets=4` constante
+   en regimen. Captura visual NO verificada (CopyFromScreen/PrintWindow
+   fallidos), declarada.
