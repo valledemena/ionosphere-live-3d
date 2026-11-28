@@ -592,3 +592,6 @@ add_test(NAME hdr_odr COMMAND ${CMAKE_COMMAND} -E env python3 ${CMAKE_SOURCE_DIR
 add_executable(test_van_allen_belts tests/test_van_allen_belts.cpp)
 target_include_directories(test_van_allen_belts PRIVATE src libs/glad/include libs/glm)
 add_test(NAME van_allen_belts COMMAND test_van_allen_belts)
+add_executable(test_solar_wind_delay tests/test_solar_wind_delay.cpp)
+target_include_directories(test_solar_wind_delay PRIVATE src libs/glm)
+add_test(NAME solar_wind_delay COMMAND test_solar_wind_delay)

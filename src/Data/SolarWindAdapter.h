@@ -42,6 +42,8 @@ public:
     bool fetch(double utc);
 
     const SolarWindSample& getLatest() const { return latest_; }
+    // DW.20: historial completo (plasma + Bz/Bx alineados) para el retardo L1 x/v.
+    const std::vector<SolarWindSample>& getFullHistory() const { return fullHistory_; }
     // Historico de Bz (ultimas ~24h), para la mini-grafica.
     const std::vector<SolarWindHistoryPoint>& getBzHistory() const { return bzHistory_; }
     // Historico de Bx GSE (misma ventana). Vacio si el feed no publica bx:
@@ -61,6 +63,8 @@ private:
     void fillSimulated(double utc);
 
     SolarWindSample latest_;
+    // DW.20: muestra completa por minuto (25-62 min de retardo L1).
+    std::vector<SolarWindSample> fullHistory_;
     std::vector<SolarWindHistoryPoint> bzHistory_;
     std::vector<SolarWindHistoryPoint> bxHistory_;
     double lastFetchUtc_ = 0.0;

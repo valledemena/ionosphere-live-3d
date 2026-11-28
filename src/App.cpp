@@ -62,6 +62,7 @@
 #include "Utils/AppCfg.h"       // cacheDir <ruta> (parser extraido, testeable)
 #include "Data/SolarIndicesAdapter.h"
 #include "Data/SolarWindAdapter.h"
+#include "Utils/SolarWindDelay.h"   // DW.20: retardo L1 -> Tierra (x/v)
 #include "Data/RadioPropagationAdapter.h"
 #include "Data/AuroraAdapter.h"
 #include "Data/EbroAdapter.h"
@@ -114,6 +115,7 @@ struct App::Impl {
     };
     struct WindBundle {
         SolarWindSample latest;
+        std::vector<SolarWindSample> fullHist;  // DW.20: retardo L1 x/v
         std::vector<SolarWindHistoryPoint> bzHist;
         // Bx GSE (nT) de la misma ventana, para el panel de la espiral de
         // Parker. Vacio si el feed no publica bx: no se rellena con ceros.
@@ -2497,12 +2499,30 @@ void App::update(float dt) {
         }   // else volumeShouldRebuild (guard 190b)
     }
 
+    // DW.20: retardo L1 -> Tierra con la velocidad de cada muestra (x/v).
+    // nowWall es reloj de PARED (std::time), nunca el epoch de replay.
+    const double nowWall = (double)std::time(nullptr);
+    swdelay::DelayedWind dw;
+    if (impl->lastWind && !impl->lastWind->fullHist.empty())
+        dw = swdelay::sampleAt(impl->lastWind->fullHist, nowWall);
+    static int lastDelayMin = -1;
+    if (dw.available) {
+        const int dm = (int)(dw.travelSec / 60.0);
+        if (dm != lastDelayMin) {
+            lastDelayMin = dm;
+            std::fprintf(stderr, "[Wind] L1 propagation %d min (x/v, v=%.0f km/s)\n",
+                         dm, dw.sample.speed);
+        }
+    }
+
     // Viento solar: refrescar la orientacion/longitud/color de las flechas cuando
     // cambie el sol o los datos (throttle ~2s, para no reconstruir el mesh cada frame).
     static double lastArrow = -1.0;
     if (impl->swArrowsVisible && (lastArrow < 0 || (now - lastArrow) > 2.0)) {
-        static const SolarWindSample kNoWind{};
-        const SolarWindSample& sw = impl->lastWind ? impl->lastWind->latest : kNoWind;
+        // DW.20: dato propagado L1 si hay muestra llegada; si no, se conserva
+        // el latest actual (declared default del modulo), sin inventar dato.
+        const SolarWindSample sw = dw.available ? dw.sample
+            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
         impl->solarWindLayer.updateArrowData(sw.speed, sw.bz, sw.density,
                                              impl->sunDirection, impl->swArrowMode);
         impl->solarWindLayer.setArrowScale(impl->swArrowScale);
@@ -2544,8 +2564,8 @@ void App::update(float dt) {
     // Sol; sin muestra valida se dejan los defaults del modulo (400 km/s,
     // 5 cm^-3, Bz 0), porque Dp = 0 daria una cavidad absurda.
     if (impl->magnetosphere.visible()) {
-        static const SolarWindSample kNoWindMag{};
-        const SolarWindSample& swMag = impl->lastWind ? impl->lastWind->latest : kNoWindMag;
+        const SolarWindSample swMag = dw.available ? dw.sample
+            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
         if (swMag.valid && swMag.speed > 0.0f) {
             impl->magnetosphere.setSolarWind(swMag.speed, swMag.density, swMag.bz);
         }
@@ -2559,8 +2579,8 @@ void App::update(float dt) {
     // deriva a v*60 (exageracion declarada) y se abre alrededor de la misma
     // superficie Shue que dibuja la magnetopausa.
     if (impl->swRiver.visible()) {
-        static const SolarWindSample kNoWindRiver{};
-        const SolarWindSample& swRiv = impl->lastWind ? impl->lastWind->latest : kNoWindRiver;
+        const SolarWindSample swRiv = dw.available ? dw.sample
+            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
         if (swRiv.valid && swRiv.speed > 0.0f) {
             impl->swRiver.setSolarWind(swRiv.speed, swRiv.density, swRiv.bz);
         }
@@ -3366,6 +3386,7 @@ void App::fetchWorker() {
             if (windOk && sw.getLatest().valid) {
                 auto b = std::make_shared<Impl::WindBundle>();
                 b->latest = sw.getLatest();
+                b->fullHist = sw.getFullHistory();   // DW.20
                 b->bzHist = sw.getBzHistory();
                 b->bxHist = sw.getBxHistory();   // lote 5D: polaridad real
                 b->simulated = sw.isSimulated();
@@ -5296,7 +5317,7 @@ void App::render() {
         impl->swArrowsVisible = showSW;
         impl->solarWindLayer.setVisible(showSW);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed. Values are propagated from L1 by x/v (~25-62 min); if no sample has arrived yet the declared defaults are kept (propagation pending).");
     const char* swModes[] = { "color: speed+Bz+density", "color: Bz (red N / blue S)" };
     if (ImGui::Combo("Arrow color", &impl->swArrowMode, swModes, 2)) {
         impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, swl.density, impl->sunDirection, impl->swArrowMode);
