@@ -168,8 +168,6 @@ struct App::Impl {
     std::mutex tecDownloadMutex;
     // Despertar YA al hilo de precarga/periódico cuando la UI cambia la
     // profundidad (no esperar al siguiente ciclo de 1 h).
-    std::mutex depthCvMutex;
-    std::condition_variable depthCv;
     std::thread catalogPreloadThread;
     std::thread irtamBackfillThread;  // M-IRTAM-F2 (P4): backfill gambit (joinable, M0.2)
     std::atomic<bool> shutdownRequested{false};
@@ -560,8 +558,8 @@ struct App::Impl {
     // C1b: 36/144/432 = 6/24/72 h de backfill. atomic: la UI lo escribe y el
     // hilo de precarga lo lee cuando arranca cada pasada (precarga inicial y
     // periodico; el cambio actua en la proxima pasada, y la UI despierta el
-    // hilo con depthCv para que no espere la hora).
-    std::atomic<int> tecDepthSlots{36};
+    // DW.17: profundidad FIJA al maximo; sin selector ni notify.
+    std::atomic<int> tecDepthSlots{glotbf::kDepth72h};
     std::atomic<bool> cacheLoaded{false};     // init-read con frames reales
     std::atomic<double> cacheNewestEpoch{-1.0};
     std::atomic<int> cacheRestored{0};
@@ -1212,7 +1210,7 @@ bool App::init(int width, int height, const char* title) {
                         cachedEp.push_back(f.timestamp);
                 }
                 const double nowPre = (double)std::time(nullptr);
-                const int depth = glm::clamp(self->impl->tecDepthSlots.load(), 36, 432);
+                const int depth = glotbf::kDepth72h;
                 std::vector<glotbf::IndexFrame> pure;
                 pure.reserve(idx.size());
                 for (const auto& e : idx) pure.push_back({e.url, e.timeUtc});
@@ -1243,15 +1241,14 @@ bool App::init(int width, int height, const char* title) {
                 // Espera el proximo ciclo — con PLAZO de 1 h SIEMPRE (commit
                 // anterior lo perdio: el ciclo no corria nunca sin cambio de
                 // profundidad, y el hueco tras una suspension no se rellenaba).
-                // DESPIERTA YA si la UI cambia la profundidad (depthCv notify)
-                // o se pide cierre (re-chequeo max 1 s, como antes).
+                // Re-chequeo max 1 s para el cierre; ya no hay notify de
+                // profundidad (DW.17: el selector desaparece).
                 const bool runCycle = periodicwait::waitNextCycle(
                     3600.0,
                     [self]() { return self->impl->shutdownRequested.load(); },
                     [self]() { return self->impl->tecDepthSlots.load(); },
-                    [self]() {
-                        std::unique_lock<std::mutex> lk(self->impl->depthCvMutex);
-                        self->impl->depthCv.wait_for(lk, std::chrono::seconds(1));
+                    []() {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
                     },
                     []() {
                         // Reloj de PARED (system_clock, no steady): el equipo
@@ -1273,7 +1270,7 @@ bool App::init(int width, int height, const char* title) {
                 // `tecDepthSlots` window. Sin contadores de UI (histLoading/
                 // histDone quedan quietos para no ensuciar el historial del
                 // arranque).
-                const int depth = glm::clamp(self->impl->tecDepthSlots.load(), 36, 432);
+                const int depth = glotbf::kDepth72h;
                 // Mismo mutex largo que la precarga inicial: serializa con el
                 // worker, que salta el pase con try_lock mientras esto dura.
                 std::lock_guard<std::mutex> dlk(self->impl->tecDownloadMutex);
@@ -2945,7 +2942,7 @@ void App::saveSettings() {
     fprintf(f, "voyWinH %g\n", (double)impl->voyagerGeom.h);
     fprintf(f, "tecCacheEnabled %d\n", impl->tecCacheEnabled ? 1 : 0);   // M10
     fprintf(f, "tecCacheMaxAgeH %g\n", (double)impl->tecCacheMaxAgeH);   // M10
-    fprintf(f, "tecDepthSlots %d\n", impl->tecDepthSlots.load());       // C1b
+    fprintf(f, "tecDepthSlots %d\n", glotbf::kDepth72h);   // DW.17: siempre maximo
     fclose(f);
 }
 
@@ -3087,10 +3084,7 @@ void App::loadSettings() {
     else if (k == "voyWinH") impl->voyagerGeom.h = glm::clamp((float)v, 220.0f, 1000.0f);
         else if (k == "tecCacheEnabled") impl->tecCacheEnabled = clB(v);   // M10
         else if (k == "tecCacheMaxAgeH") impl->tecCacheMaxAgeH = glm::clamp((double)v, 1.0, 168.0);   // M10
-        else if (k == "tecDepthSlots") {   // C1b: solo 36/144/432 (6/24/72 h)
-            const int d = (int)v;
-            impl->tecDepthSlots.store((d == 144 || d == 432) ? d : 36);
-        }
+        // DW.17: se ignora tecDepthSlots de settings antiguos (siempre 432).
         else if (k == "giroStationsVisible") impl->giroStationsVisible = clB(v);
         else if (k == "cineSpeed") impl->cineSpeed = glm::clamp((float)v, 0.005f, 0.30f);
         else if (k == "replaySpeed") impl->replaySpeed = glm::clamp((float)v, 0.5f, 8.0f);
@@ -6372,24 +6366,9 @@ void App::render() {
             // carga del historico, que es justo cuando no lo buscas). Detras
             // DEL tooltip LIVE, no del HelpMarker (regresion a80ec06).
             ImGui::Separator();
-            ImGui::Text("History depth");
-            const char* depthLabels[] = { "6h", "24h", "72h" };
-            int depthIndex = 0;
-            const int curSlots = impl->tecDepthSlots.load();
-            if (curSlots == 144) depthIndex = 1;
-            else if (curSlots == 432) depthIndex = 2;
-            if (ImGui::Combo("##depth", &depthIndex, depthLabels, 3)) {
-                const int newSlots = (depthIndex == 1) ? 144 : (depthIndex == 2) ? 432 : 36;
-                if (newSlots != curSlots) {
-                    impl->tecDepthSlots.store(newSlots);
-                    impl->depthCv.notify_all();   // el periodo actua YA (no a la hora)
-                }
-            }
-            ImGui::SameLine();
-            HelpMarker("Select how far back to download past TEC frames "
-                       "(download horizon). Applies to the next periodic "
-                       "backfill (hourly, or immediately on change) and after "
-                       "app restart. On disk, frames are kept up to 72 h.");
+            ImGui::TextDisabled("GloTEC history: max 72 h (432 frames), always");
+            if (ImGui::IsItemHovered())
+                ImGui::SetItemTooltip("The app always requests the maximum GloTEC history supported (72 h / 432 frames). Frames on disk are kept up to 72 h.");
             if (nfr >= 2) {
                 if (ImGui::Button("Replay session")) {
                     impl->replayMode = true;
