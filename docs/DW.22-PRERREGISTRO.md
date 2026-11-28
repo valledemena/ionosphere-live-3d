@@ -83,3 +83,27 @@ visible y nunca un valor silencioso). Por eso:
   documenta.
 - El limite de 2 ms puede ser optimista; como en V2, se reporta el
   valor medido y se pide re-veredicto antes de merge.
+
+## Adendum — notas del veredicto v1 (incorporadas)
+
+`VERIFICADOR`: **CONFORME CON NOTAS**, sin GO de ejecucion ni merge.
+
+1. **Cambio de `dataEpoch` operativo**: solo cuentan las fuentes que
+   alimentan capas visibles: `PROV_TEC`, `PROV_GIRO` (o su fusion
+   kc2g) y `PROV_WIND`, leidas de `provBoard`. Se agrega con el
+   **maximo** `dataEpoch` de esas fuentes y una ventana de gracia de
+   **600 s**: se resetea solo si `aggEpoch - lastAggEpoch > 600 s`
+   (avance real de dato) o si el salto de replay supera 30 s. Un
+   cambio de ciclo de una fuente menor a 600 s **no** resetea. Con
+   esto `resets=0` en regimen es falsable.
+2. La captura tras reset incluye ademas un **giro de camara** (caso
+   que mas ghosting genera), ademas del cambio de dato y del salto
+   de replay.
+3. **`OFF` byte-identico y MSAA**: la textura de profundidad
+   opcional en `Framebuffer.h` no debe alterar el path clasico
+   (`initSingle`/`initMsaa`) cuando `temporalAccum=false`; se exige
+   diff funcional OFF y medicion `OFF/ON` con MSAA activo, ademas
+   del caso sin MSAA.
+4. El contador `reset=N` **se pone a 0** al conmutar el flag
+   `temporalAccum` y al redimensionar la ventana (se declara en el
+   HUD); no se reinicia por cada cambio menor a 600 s.
