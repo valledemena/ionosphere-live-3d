@@ -586,6 +586,11 @@ add_executable(test_hdr_idwinterp tests/test_hdr_idwinterp.cpp src/Data/RadioPro
 target_include_directories(test_hdr_idwinterp PRIVATE src libs/glad/include libs/glm)
 target_link_libraries(test_hdr_idwinterp PRIVATE CURL::libcurl)
 add_test(NAME hdr_idwinterp COMMAND test_hdr_idwinterp)
+
+# DW.35 F4: nucleo IDW de residuo (puro, sin GL).
+add_executable(test_idw_residual tests/test_idw_residual.cpp src/Data/IrtamGridEval.cpp src/Data/IrtamCoeffParse.cpp)
+target_include_directories(test_idw_residual PRIVATE src libs/glad/include libs/glm)
+add_test(NAME idw_residual COMMAND test_idw_residual)
 add_executable(test_hdr_irtambracket tests/test_hdr_irtambracket.cpp src/Data/IrtamCoeffCache.cpp src/Data/IrtamCoeffParse.cpp src/Data/IrtamGridEval.cpp src/Data/IrtamState.cpp)
 target_include_directories(test_hdr_irtambracket PRIVATE src libs/glad/include libs/glm)
 add_test(NAME hdr_irtambracket COMMAND test_hdr_irtambracket)
