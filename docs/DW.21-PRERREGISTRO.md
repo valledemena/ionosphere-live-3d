@@ -19,7 +19,9 @@ magnetosfera visible) sobre el arbol vigente, worktree limpio:
 [BENCH-D21] avg_dt_ms=16.847 frames=300
 [BENCH-D21] avg_dt_ms=16.387 frames=300
 ```
-Baseline en regimen: **16,4–17,1 ms/frame** (~58–61 fps). La sonda fue
+Baseline en regimen: **16,4–17,1 ms/frame** (~58–61 fps), etiquetado
+como **flag OFF** (estado actual: 32 lineas analiticas, sin traza RK2).
+La sonda fue
 **restaurada** (grep `PROBE-D21` = 0) y se reconstruyo `--clean-first`.
 El coste del estimado 2 de ARQUITECTO se sustituye por este baseline:
 el objetivo es que V2 con flag ON no supere **19,0 ms/frame** medido
@@ -27,7 +29,9 @@ con la misma sonda (incremento <= ~2 ms sobre 17 ms).
 
 ## 2. Estado del código (medido)
 
-- `MagnetosphereLayer.cpp:264-328`: 32 lineas dipolares analyticas
+- `CMakeLists.txt:63` compila `src/Ionosphere/MagnetosphereLayer.cpp`
+  (ruta exacta; el texto "src/Render" era inexacto, sin impacto).
+- `MagnetosphereLayer.cpp:264-328`: 32 lineas dipolares analíticas
   (`r = L·cos²λ`, L=1.5/2.5/4/6, 8 meridianos), `GL_LINES` con un
   shader de posicion+color; `Framebuffer` RGBA16F con depth como
   renderbuffer; GLAD GL 4.0 core (geometry shader disponible,
@@ -70,13 +74,17 @@ con la misma sonda (incremento <= ~2 ms sobre 17 ms).
 ## 4. Criterio binario
 
 1. **Unitarios**: `igrfFull` devuelve B finito y no cero en un punto de
-   prueba; ano 2025.0; `ctest` rc=0 con el total de la base
+   prueba concreta `lat=40.0`, `lon=-75.0`, `alt=300 km`, `year=2025.0`;
+   `ctest` rc=0 con el total de la base
    + tests nuevos.
 2. **Build**: `cmake --build` rc=0; uniforms/atributos del shader
    fallback y del fichero sincronizados.
-3. **Coste medido**: misma sonda `PROBE-D21`, flag OFF y ON;
-   ON debe mantenerse <= 19,0 ms/frame en regimen (objetivo derivado
-   del baseline medido, no del estimado 2).
+3. **Coste medido**: misma sonda `PROBE-D21`, con etiqueta explicita
+   `flag=OFF` y `flag=ON` en cada linea; ON debe mantenerse <= 19,0
+   ms/frame en regimen. La traza RK2 puede exigir rebuild de la
+   geometria: se mide tambien el coste del rebuild (primer bloque
+   tras activar el flag) y se reporta separado del regimen; el limite
+   de 19 ms aplica al regimen, el rebuild se declara con su valor.
 4. **Visual**: capturas antes/despues con el mismo epoch y camara,
    lineas gruesas continuas sin escalones; `test_volume_jitter.cpp`
    intacto (git diff vacio para ese fichero).
@@ -102,3 +110,20 @@ con la misma sonda (incremento <= ~2 ms sobre 17 ms).
   dipolo: se conservan las semillas y se documenta la diferencia.
 - El geometry shader aumenta vertices por segmento: el limite de 19 ms
   es falsable y puede forzar reducir semillas/anchos antes de merge.
+
+## Adendum — notas del veredicto v1 (incorporadas)
+
+`VERIFICADOR`: **CONFORME CON NOTAS**, sin GO de ejecucion ni merge.
+
+1. El bench de 6 valores queda etiquetado como **OFF**. En la ejecucion
+   cada bloque `[BENCH-D21]` llevara `flag=OFF` o `flag=ON` con la
+   misma sonda para que `ON <= 19.0 ms` sea falsable.
+2. RK2 no esta en el baseline: se mide por separado el **rebuild** de
+   la traza y el regimen; limite de 19 ms solo para regimen.
+3. Punto de prueba de `igrfFull` declarado: `lat=40.0`, `lon=-75.0`,
+   `alt=300 km`, `year=2025.0`.
+4. `tests/test_volume_jitter.cpp` y `src/Utils/VolumeJitter.h` deben
+   quedar con `git diff` vacio; `thickFieldLines` se persiste en
+   `settings.cfg` con **default OFF** (se comprueba tras cerrar).
+5. Ruta corregida: `CMakeLists.txt:63` -> `src/Ionosphere/MagnetosphereLayer.cpp`.
+
