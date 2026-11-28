@@ -2519,10 +2519,9 @@ void App::update(float dt) {
     // cambie el sol o los datos (throttle ~2s, para no reconstruir el mesh cada frame).
     static double lastArrow = -1.0;
     if (impl->swArrowsVisible && (lastArrow < 0 || (now - lastArrow) > 2.0)) {
-        // DW.20: dato propagado L1 si hay muestra llegada; si no, se conserva
-        // el latest actual (declared default del modulo), sin inventar dato.
-        const SolarWindSample sw = dw.available ? dw.sample
-            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
+        // DW.20: dato propagado L1 si hay muestra llegada; si no, DEFAULTS
+        // declarados del modulo (muestra vacia), nunca el latest no propagado.
+        const SolarWindSample sw = dw.available ? dw.sample : SolarWindSample{};
         impl->solarWindLayer.updateArrowData(sw.speed, sw.bz, sw.density,
                                              impl->sunDirection, impl->swArrowMode);
         impl->solarWindLayer.setArrowScale(impl->swArrowScale);
@@ -2564,8 +2563,7 @@ void App::update(float dt) {
     // Sol; sin muestra valida se dejan los defaults del modulo (400 km/s,
     // 5 cm^-3, Bz 0), porque Dp = 0 daria una cavidad absurda.
     if (impl->magnetosphere.visible()) {
-        const SolarWindSample swMag = dw.available ? dw.sample
-            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
+        const SolarWindSample swMag = dw.available ? dw.sample : SolarWindSample{};
         if (swMag.valid && swMag.speed > 0.0f) {
             impl->magnetosphere.setSolarWind(swMag.speed, swMag.density, swMag.bz);
         }
@@ -2579,8 +2577,7 @@ void App::update(float dt) {
     // deriva a v*60 (exageracion declarada) y se abre alrededor de la misma
     // superficie Shue que dibuja la magnetopausa.
     if (impl->swRiver.visible()) {
-        const SolarWindSample swRiv = dw.available ? dw.sample
-            : (impl->lastWind ? impl->lastWind->latest : SolarWindSample{});
+        const SolarWindSample swRiv = dw.available ? dw.sample : SolarWindSample{};
         if (swRiv.valid && swRiv.speed > 0.0f) {
             impl->swRiver.setSolarWind(swRiv.speed, swRiv.density, swRiv.bz);
         }
@@ -5317,7 +5314,18 @@ void App::render() {
         impl->swArrowsVisible = showSW;
         impl->solarWindLayer.setVisible(showSW);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed. Values are propagated from L1 by x/v (~25-62 min); if no sample has arrived yet the declared defaults are kept (propagation pending).");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("3D arrows of the solar flow (NOAA RTSW). Direction subsolar -> antisolar, length follows speed. Values are propagated from L1 by x/v (~25-62 min); if no sample has arrived yet the declared module defaults are used (propagation pending).");
+    if (impl->lastWind && !impl->lastWind->fullHist.empty()) {
+        const double hudNowWall = (double)std::time(nullptr);
+        const swdelay::DelayedWind hudDw =
+            swdelay::sampleAt(impl->lastWind->fullHist, hudNowWall);
+        if (hudDw.available)
+            ImGui::Text("L1 x/v: %.0f min (v=%.0f km/s)",
+                        hudDw.travelSec / 60.0, hudDw.sample.speed);
+        else
+            ImGui::TextDisabled("L1 propagation pending (x/v, travel %.0f min)",
+                                hudDw.travelSec / 60.0);
+    }
     const char* swModes[] = { "color: speed+Bz+density", "color: Bz (red N / blue S)" };
     if (ImGui::Combo("Arrow color", &impl->swArrowMode, swModes, 2)) {
         impl->solarWindLayer.updateArrowData(swl.speed, swl.bz, swl.density, impl->sunDirection, impl->swArrowMode);
