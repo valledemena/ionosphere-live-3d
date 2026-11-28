@@ -174,6 +174,13 @@ inline double hopViable(double fMHz, double mufHopMHz) {
     return 0.0;
 }
 
+// DW.18 (opcion A): viabilidad VISUAL con gate LUF antes que MUF.
+// El LUF del circuito cierra la banda por abajo; hopViable queda intacto.
+inline double hopViableWithLuf(double fMHz, double mufHopMHz, double lufMHz) {
+    if (lufMHz > 0.0 && fMHz < lufMHz) return 0.0;
+    return hopViable(fMHz, mufHopMHz);
+}
+
 // Fraccion del arco del punto de reflexion del salto k (k = 0..n-1).
 inline double reflectionFraction(int hopIdx, int nHops) {
     return ((double)hopIdx + 0.5) / (double)nHops;
