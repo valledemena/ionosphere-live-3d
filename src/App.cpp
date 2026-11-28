@@ -219,6 +219,7 @@ struct App::Impl {
     VanAllenBelts vanAllen;            // tori L=1.5 y L=4.2-0.08*Kp
     WestFordRing westFord;             // banda de dipolos de 1963 (estatica)
     bool magnetosphereVisible = false;
+    bool thickFieldLines = false;   // DW.21: flag OFF por defecto
     bool swRiverVisible = false;
     bool vanAllenVisible = false;
     bool westFordVisible = false;
@@ -1574,6 +1575,7 @@ bool App::init(int width, int height, const char* title) {
     // Lote 2 del port web (ocultas por defecto).
     impl->magnetosphere.init();
     impl->magnetosphere.setVisible(false);
+    impl->magnetosphere.setThickLines(impl->thickFieldLines);
     impl->swRiver.init();
     impl->swRiver.setVisible(false);
     impl->vanAllen.init();
@@ -2887,6 +2889,7 @@ void App::saveSettings() {
     fprintf(f, "electrojetVisible %d\n", impl->electrojetVisible ? 1 : 0);
     fprintf(f, "greylineVisible %d\n", impl->greylineVisible ? 1 : 0);
     fprintf(f, "magnetosphereVisible %d\n", impl->magnetosphereVisible ? 1 : 0);
+    fprintf(f, "thickFieldLines %d\n", impl->thickFieldLines ? 1 : 0);
     fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
@@ -3058,6 +3061,10 @@ void App::loadSettings() {
         else if (k == "electrojetVisible") impl->electrojetVisible = clB(v);
         else if (k == "greylineVisible") impl->greylineVisible = clB(v);
     else if (k == "magnetosphereVisible") impl->magnetosphereVisible = clB(v);
+    else if (k == "thickFieldLines") {
+        impl->thickFieldLines = clB(v);
+        impl->magnetosphere.setThickLines(impl->thickFieldLines);
+    }
     else if (k == "swRiverVisible") impl->swRiverVisible = clB(v);
     else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
     else if (k == "westFordVisible") impl->westFordVisible = clB(v);
@@ -5439,6 +5446,13 @@ void App::render() {
         if (showMag && impl->camera.distance < 10.0f) impl->camera.distance = 20.0f;
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Shue-1998 magnetopause wireframe, r0 = [10.22 + 1.29*tanh(0.184*(Bz+8.14))] / Dp^(1/6.6) with Dp = 1.6726e-6*n*v^2, plus IGRF-14 degree-1 dipole field lines at L = 1.5, 2.5, 4.0 and 6.0 (epoch 2025.0, 9.2 deg tilt). Driven by the live solar wind. TRUE scale: the subsolar standoff sits at 6-12 R_E, so turning it on from a close view pulls the camera back automatically. The wireframe stops at theta = 105 deg (the edge of the dayside cavity) and the night-side stretch is a declared v1 parameterisation, not Tsyganenko; the real tail is longer than 20 R_E and is out of scope.");
+    bool thick = impl->thickFieldLines;
+    if (ImGui::Checkbox("Thick field lines", &thick)) {
+        impl->thickFieldLines = thick;
+        impl->magnetosphere.setThickLines(thick);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.21: thick antialiased field lines via geometry shader. OFF (default) = original 1px GL_LINES and degree-1 dipole; ON = full IGRF-14 coefficients (NMAX=13) for the axis, in Earth frame (magnetopause stays GSM). Model/visual only, no new measurement.");
     ImGui::Text("r0 %.1f R_E  alpha %.2f  tail x%.2f",
                 impl->magnetosphere.subsolarR0(), impl->magnetosphere.alpha(),
                 impl->magnetosphere.tailStretch());

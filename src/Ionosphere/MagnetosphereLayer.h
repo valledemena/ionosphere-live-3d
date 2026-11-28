@@ -62,6 +62,8 @@ public:
 
     void setVisible(bool v);          // por defecto false
     bool visible() const;
+    void setThickLines(bool v);       // DW.21: flag OFF por defecto
+    bool thickLines() const;
 
     void setSolarWind(float speedKms, float densityCm3, float bzNT);  // ignora no finitos
     void setSunDirection(const glm::vec3& sunWorld);                  // ignora el vector nulo
@@ -81,12 +83,14 @@ private:
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
     GLuint shader_ = 0;
+    GLuint thickShader_ = 0;
 
     int ringFirst_ = 0, ringCount_ = 0;
     int merFirst_ = 0, merCount_ = 0;
     int dipFirst_ = 0, dipCount_ = 0;
 
     bool visible_ = false;
+    bool thickLines_ = false;
     bool dirty_ = true;
 
     float speedKms_ = 400.0f;               // km/s

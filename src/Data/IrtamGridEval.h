@@ -57,6 +57,13 @@ double decimalYearForTov(double tovEpoch);
 bool igrfDip(double latDeg, double lonDeg, double decimalYear, double heightKm,
              double& xmodipOut);
 
+// DW.21: campo IGRF-14 COMPLETO (NMAX=13, 195 coeficientes + SV) ya embebido.
+// Devuelve B en las unidades del modelo Fortran (Gauss; 1 G = 1e5 nT) en
+// marco Tierra/geodetico (norte, este, abajo) y su modulo.
+// Requiere year >= 2015 (rama EXTRASHC de buildModel).
+bool igrfFull(double decimalYear, double latDeg, double lonDeg, double altKm,
+              double& bnorth, double& beast, double& bdown, double& babs);
+
 // Un punto Jones-Gallet (FOUT1->GAMMA2, semantica mixta). coeffs = 1064
 // doubles P1a (se truncan a float internamente). hourUt y tovHoras en horas
 // decimales UT (ejemplo: TOV=12).
