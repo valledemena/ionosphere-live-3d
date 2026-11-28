@@ -5321,7 +5321,7 @@ void App::render() {
     if (ImGui::SliderFloat("Clouds", &impl->cloudAmt, 0.0f, 1.0f)) {
         impl->cloudAmt = glm::clamp(impl->cloudAmt, 0.0f, 1.0f);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Procedural animated cloud cover (seamless noise, drifts with time). 0 = clear sky.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("DECORATIVE ONLY: procedural animated cloud cover (seamless noise drifting with time). Not a weather product, not satellite imagery, and not driven by any measured cloud data. 0 = clear sky.");
     ImGui::Checkbox("Atmosphere", &impl->showAtmosphere);
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Rayleigh/Mie atmosphere (single scattering): blue daytime limb, red ring at the terminator, aerial perspective + cloud shadows on Earth.");
     // M6 (plan 9.4): toggle de calidad + slider de intensidad junto al
