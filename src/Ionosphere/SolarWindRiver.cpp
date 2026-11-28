@@ -432,11 +432,37 @@ void SolarWindRiver::refreshRotation() {
     rot_ = glm::mat3(glm::rotate(glm::mat4(1.0f), std::acos(c), axis));
 }
 
+// DW.31 V12: umbrales declarados, solo visuales (no clasificacion fisica).
+static constexpr float kFastWindKms = 500.0f;
+static constexpr float kSlowWindKms = 400.0f;
+
+const char* SolarWindRiver::windRegime(float speedKms) {
+    if (speedKms >= kFastWindKms) return "FAST WIND v>=500";
+    if (speedKms <= kSlowWindKms) return "SLOW WIND v<=400";
+    return "TRANSITIONAL 400<v<500";
+}
+
+void SolarWindRiver::setWindStateMode(bool v) {
+    if (v == windStateMode_) return;
+    windStateMode_ = v;
+    colorsDirty_ = true;   // recolorear con/sin enfasis
+}
+
 void SolarWindRiver::refreshColors() {
     for (int i = 0; i < swriver::kCount; ++i) {
         // Desfase aureo por particula, igual que la web: (i*0.618034) mod 1.
         const float seed = std::fmod((float)i * 0.61803398875f, 1.0f);
-        const glm::vec3 c = windramp::webColor(speedKms_, bzNT_, densityCm3_, seed);
+        glm::vec3 c = windramp::webColor(speedKms_, bzNT_, densityCm3_, seed);
+        if (windStateMode_) {
+            if (speedKms_ >= kFastWindKms) {
+                // Rapido: realce cian/azul sobre la rampa original.
+                c = glm::mix(c, glm::vec3(0.20f, 0.75f, 1.00f), 0.45f);
+            } else if (speedKms_ <= kSlowWindKms) {
+                // Lento: realce ambar sobre la rampa original.
+                c = glm::mix(c, glm::vec3(1.00f, 0.62f, 0.18f), 0.45f);
+            }
+            // Transicional: color de la web intacto.
+        }
         verts_[i * 6 + 3] = c.r;
         verts_[i * 6 + 4] = c.g;
         verts_[i * 6 + 5] = c.b;

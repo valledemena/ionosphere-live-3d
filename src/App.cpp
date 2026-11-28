@@ -232,6 +232,7 @@ struct App::Impl {
     bool thickFieldLines = false;   // DW.21: flag OFF por defecto
     bool swRiverVisible = false;
     bool instancedParticles = false;   // DW.23 V3a: flag OFF por defecto
+    bool windStateMode = false;        // DW.31 V12: flag OFF por defecto
     bool tfSimulation = false;         // DW.24 V3b: flag OFF por defecto
     bool vanAllenVisible = false;
     bool westFordVisible = false;
@@ -1788,6 +1789,7 @@ void main() {
     impl->swRiver.setVisible(false);
     impl->swRiver.setInstanced(impl->instancedParticles);
     impl->swRiver.setTransformFeedback(impl->tfSimulation);
+    impl->swRiver.setWindStateMode(impl->windStateMode);
     impl->vanAllen.init();
     impl->vanAllen.setVisible(false);
     impl->westFord.init();
@@ -3173,6 +3175,7 @@ void App::saveSettings() {
     fprintf(f, "temporalAccum %d\n", impl->temporalAccum ? 1 : 0);
     fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
     fprintf(f, "instancedParticles %d\n", impl->instancedParticles ? 1 : 0);
+    fprintf(f, "windStateMode %d\n", impl->windStateMode ? 1 : 0);
     fprintf(f, "tfSimulation %d\n", impl->tfSimulation ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
@@ -3375,6 +3378,10 @@ void App::loadSettings() {
     else if (k == "instancedParticles") {
         impl->instancedParticles = clB(v);
         impl->swRiver.setInstanced(impl->instancedParticles);
+    }
+    else if (k == "windStateMode") {
+        impl->windStateMode = clB(v);
+        impl->swRiver.setWindStateMode(impl->windStateMode);
     }
     else if (k == "tfSimulation") {
         impl->tfSimulation = clB(v);
@@ -5997,10 +6004,20 @@ void App::render() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetItemTooltip("DW.24 V3b: off by default = original CPU simulation. On = 400 particles integrated on the GPU with ping-pong transform feedback buffers; the x60 exaggeration, Shue obstacle (from ShueMath.h) and recycle range are unchanged. The GPU recycle uses a hash, not mulberry32: trajectories are NOT bit-identical to the CPU path.");
+    bool windState = impl->windStateMode;
+    if (ImGui::Checkbox("Fast/slow wind state", &windState)) {
+        impl->windStateMode = windState;
+        impl->swRiver.setWindStateMode(windState);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.31 V12: off by default = original web colour ramp. On = cyan emphasis for FAST (v>=500 km/s), amber for SLOW (v<=400), unchanged for TRANSITIONAL. Visual thresholds only, not a physical classification. Wind source and age stay visible in the HUD; the declared x60 exaggeration is unchanged.");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("400 particles streaming antisunward, exactly like the web demo (IonosphereScene, 400 points, core + glow). They are born on the dayside, travel at v*60 (declared x60 exaggeration so the flow is visible in real time), get pushed sideways out of the Shue-1998 magnetopause and recycle at x = -28 R_E. Colour is the same ramp as the arrows: speed + southward Bz + density from the live NOAA RTSW wind. TRUE scale (1 unit = 1 R_E), so it only fits with the camera pulled back; the first toggle does that automatically. Animation only - no synthetic wind sample.");
     ImGui::Text("river: %.0f km/s  n %.1f cm^-3  Bz %+.1f nT  (%d particles)",
                 impl->swRiver.currentSpeed(), impl->swRiver.currentDensity(),
                 impl->swRiver.currentBz(), impl->swRiver.particleCount());
+    if (impl->windStateMode)
+        ImGui::TextDisabled("wind state: %s",
+                            SolarWindRiver::windRegime(impl->swRiver.currentSpeed()));
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Wind values currently driving the river. Until a valid sample arrives it keeps the declared module defaults (400 km/s, 5 cm^-3, Bz 0), the same as the magnetosphere.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Fit##river")) impl->camera.distance = 38.0f;
