@@ -176,6 +176,20 @@ double decimalYearForTov(double tovEpoch) {
     return (double)y + ((double)doy1 - 0.5) / (leap ? 366.0 : 365.0);
 }
 
+bool igrfFull(double decimalYear, double latDeg, double lonDeg, double altKm,
+              double& bnorth, double& beast, double& bdown, double& babs) {
+    bnorth = beast = bdown = babs = 0.0;
+    if (!std::isfinite(decimalYear) || !std::isfinite(latDeg) ||
+        !std::isfinite(lonDeg) || !std::isfinite(altKm)) return false;
+    if (!buildModel(decimalYear)) return false;  // NMAX=13 + SV, year>=2015
+    float bn = 0.0f, be = 0.0f, bd = 0.0f, ba = 0.0f;
+    if (!feldg((float)latDeg, (float)lonDeg, (float)altKm, bn, be, bd, ba))
+        return false;
+    if (!std::isfinite(bn) || !std::isfinite(be) || !std::isfinite(bd)) return false;
+    bnorth = bn; beast = be; bdown = bd; babs = ba;
+    return true;
+}
+
 bool igrfDip(double latDeg, double lonDeg, double decimalYear,
              double heightKm, double& xmodipOut) {
     if (!std::isfinite(latDeg) || !std::isfinite(lonDeg) ||

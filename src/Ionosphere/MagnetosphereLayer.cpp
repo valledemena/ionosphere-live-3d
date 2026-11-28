@@ -1,5 +1,6 @@
 #include "MagnetosphereLayer.h"
 #include "Data/ShueMath.h"
+#include "Data/IrtamGridEval.h"   // DW.21: IGRF-14 completo (NMAX=13)
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,53 @@ in vec4 vColor;
 out vec4 fragColor;
 void main() {
     fragColor = vColor;
+}
+)";
+
+// DW.21: lineas gruesas antialiasadas con geometry shader (core 4.0).
+static const char* fieldVertSrc = R"(
+#version 400 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec4 aColor;
+out vec4 vColor;
+void main() { vColor = aColor; gl_Position = vec4(aPos, 1.0); }
+)";
+
+static const char* fieldGeomSrc = R"(
+#version 400 core
+layout(lines) in;
+layout(triangle_strip, max_vertices = 4) out;
+uniform mat4 u_view, u_projection;
+uniform float u_halfWidthNdc;
+in vec4 vColor[];
+out vec4 gColor;
+out float vSide;
+void main() {
+    vec4 p0 = u_projection * u_view * gl_in[0].gl_Position;
+    vec4 p1 = u_projection * u_view * gl_in[1].gl_Position;
+    vec2 a = p0.xy / p0.w, b = p1.xy / p1.w;
+    vec2 d = b - a;
+    float len = length(d);
+    float aspect = u_projection[1][1] / u_projection[0][0];
+    vec2 n = (len > 1e-7) ? vec2(-d.y / aspect, d.x) * (u_halfWidthNdc / len)
+                          : vec2(u_halfWidthNdc / aspect, 0.0);
+    gColor = vColor[0];
+    vSide = -1.0; gl_Position = p0 + vec4(n * p0.w * -1.0, 0.0, 0.0); EmitVertex();
+    vSide =  1.0; gl_Position = p0 + vec4(n * p0.w,        0.0, 0.0); EmitVertex();
+    vSide = -1.0; gl_Position = p1 + vec4(n * p1.w * -1.0, 0.0, 0.0); EmitVertex();
+    vSide =  1.0; gl_Position = p1 + vec4(n * p1.w,        0.0, 0.0); EmitVertex();
+    EndPrimitive();
+}
+)";
+
+static const char* fieldFragSrc = R"(
+#version 400 core
+in vec4 gColor;
+in float vSide;
+out vec4 fragColor;
+void main() {
+    float coverage = 0.78 + 0.22 * (1.0 - abs(vSide));
+    fragColor = vec4(gColor.rgb * coverage, gColor.a);
 }
 )";
 
@@ -59,8 +107,26 @@ float roundKey(float v, float scale) {
     return std::round(v * scale) / scale;
 }
 
-// Momento dipolar unitario en marco web: m ~ (g11, g10, -h11)/|..|.
+// DW.21: con lineas gruesas activadas se consumen los coeficientes IGRF-14
+// completos (NMAX=13) ya embebidos: la inclinacion del eje se deriva del
+// campo real en el ecuador geografico. Es una APROXIMACION v2 del eje
+// dipolar, no una traza RK2 completa; el marco sigue siendo Tierra, nunca
+// GSM (la magnetopausa Shue permanece en GSM).
+// Con flag OFF se usa el arreglo historico de grado 1 (byte-identico).
+static bool g_useFullIgrf = false;
+
 glm::vec3 dipoleMoment() {
+    if (g_useFullIgrf) {
+        double bn = 0.0, be = 0.0, bd = 0.0, ba = 0.0;
+        if (irtameval::igrfFull(2025.0, 0.0, 0.0, 0.0, bn, be, bd, ba) &&
+            std::isfinite(bn) && std::isfinite(be) && std::isfinite(bd) &&
+            std::fabs(bn) > 1.0) {
+            const float tilt = std::atan2((float)std::fabs(bd), (float)std::fabs(bn));
+            const float sgn = (be >= 0.0) ? 1.0f : -1.0f;
+            return glm::normalize(glm::vec3(sgn * std::sin(tilt),
+                                            std::cos(tilt), 0.0f));
+        }
+    }
     return glm::normalize(glm::vec3(kG11, kG10, -kH11));
 }
 
@@ -97,6 +163,15 @@ float MagnetosphereLayer::tailStretch() const {
 }
 
 bool MagnetosphereLayer::visible() const { return visible_; }
+
+void MagnetosphereLayer::setThickLines(bool v) {
+    if (thickLines_ == v) return;
+    thickLines_ = v;
+    g_useFullIgrf = v;  // DW.21: solo con flag ON se consumen los coeficientes completos
+    dirty_ = true;
+}
+
+bool MagnetosphereLayer::thickLines() const { return thickLines_; }
 
 void MagnetosphereLayer::setVisible(bool v) {
     if (v == visible_) return;
@@ -165,6 +240,28 @@ void MagnetosphereLayer::init() {
     glLinkProgram(shader_);
     glDeleteShader(vs);
     glDeleteShader(fs);
+
+    // DW.21: segundo programa con geometry shader; si falla, se usa el normal.
+    GLuint fvs = glCreateShader(GL_VERTEX_SHADER);
+    GLuint fgs = glCreateShader(GL_GEOMETRY_SHADER);
+    GLuint ffs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fvs, 1, &fieldVertSrc, nullptr);
+    glShaderSource(fgs, 1, &fieldGeomSrc, nullptr);
+    glShaderSource(ffs, 1, &fieldFragSrc, nullptr);
+    glCompileShader(fvs); glCompileShader(fgs); glCompileShader(ffs);
+    thickShader_ = glCreateProgram();
+    glAttachShader(thickShader_, fvs);
+    glAttachShader(thickShader_, fgs);
+    glAttachShader(thickShader_, ffs);
+    glLinkProgram(thickShader_);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(thickShader_, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        fprintf(stderr, "[MagnetosphereLayer] thick-line shader link failed; fallback a GL_LINES\n");
+        glDeleteProgram(thickShader_);
+        thickShader_ = 0;
+    }
+    glDeleteShader(fvs); glDeleteShader(fgs); glDeleteShader(ffs);
 
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
@@ -316,11 +413,15 @@ void MagnetosphereLayer::render(const glm::mat4& view, const glm::mat4& projecti
     if (dirty_) rebuild();
     if (ringCount_ == 0 && merCount_ == 0 && dipCount_ == 0) return;
 
-    glUseProgram(shader_);
-    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_view"), 1, GL_FALSE,
+    const bool useThick = thickLines_ && thickShader_ != 0;
+    const GLuint prog = useThick ? thickShader_ : shader_;
+    glUseProgram(prog);
+    glUniformMatrix4fv(glGetUniformLocation(prog, "u_view"), 1, GL_FALSE,
                        glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(shader_, "u_projection"), 1, GL_FALSE,
+    glUniformMatrix4fv(glGetUniformLocation(prog, "u_projection"), 1, GL_FALSE,
                        glm::value_ptr(projection));
+    if (useThick)
+        glUniform1f(glGetUniformLocation(prog, "u_halfWidthNdc"), 0.0025f);
 
     glBindVertexArray(vao_);
     if (ringCount_ > 0) glDrawArrays(GL_LINES, ringFirst_, ringCount_);
@@ -333,7 +434,8 @@ void MagnetosphereLayer::destroy() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (vao_) glDeleteVertexArrays(1, &vao_);
     if (shader_) glDeleteProgram(shader_);
-    vao_ = vbo_ = shader_ = 0;
+    if (thickShader_) glDeleteProgram(thickShader_);
+    vao_ = vbo_ = shader_ = thickShader_ = 0;
     ringFirst_ = ringCount_ = 0;
     merFirst_ = merCount_ = 0;
     dipFirst_ = dipCount_ = 0;
