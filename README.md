@@ -13,9 +13,11 @@ CMake 3.20+, C++17. Dependencias (CMake `find_package`):
 - `CURL` (libcurl)
 - `Threads` (Linux)
 
-Backfill GloTEC (por defecto): 6 h, de nuevo a viejo (`newest -> oldest`), parando tras 3 respuestas 404 consecutivas.
+Backfill GloTEC: maxima historia soportada, 72 h (432 frames a 10 min), de nuevo a viejo (`newest -> oldest`), parando tras 3 respuestas 404 consecutivas.
 
-El selector `Timeline > History depth` (6 / 24 / 72 h) **solo se persiste al cerrar la app**: cambiarlo en caliente no rehace la precarga inicial. Para aplicar 72 h desde el arranque, seleccionarlo, cerrar la app y volver a abrirla. Detalle y evidencia: `docs/TEC-HISTORY-DEPTH.md`.
+**No hay selector de profundidad** (DW.17): la app pide siempre los 432 frames maximos (72 h nominales; el rango real en disco puede ser ~69,6 h por huecos). En modo capa el timeline muestra todos los frames descargados; con `Full 168 h window` el rango es fijo de 168 h. Detalle historico: `docs/TEC-HISTORY-DEPTH.md`.
+
+**HF Circuit en replay** (DW.15/DW.16/DW.18): la ruta se dibuja siempre; cuando la fuente activa (GIRO o kc2g) no tiene dato fresco en el cursor se muestra en **gris estatico** y el panel dice `sin datos <fuente>`. Con dato, el color de cada salto respeta **LUF antes que MUF** (rojo si la frecuencia esta por debajo del LUF). Detalle: `docs/HF-CIRCUIT-REPLAY.md`.
 
 Ver `CREDITS.md` para el detalle de los commits de revisión.
 
@@ -229,7 +231,7 @@ synthetic fallback, `off` until the source is actually used.
 
 | Data | Source | Refresh |
 |---|---|---|
-| TEC | NOAA SWPC GloTEC (GeoJSON 72×72) | 5 min + preload 6/24/72 h (se guarda al cerrar) |
+| TEC | NOAA SWPC GloTEC (GeoJSON 72×72) | 5 min + preload fijo 72 h (432 frames) |
 | foF2/MUF/hmF2/… | GIRO DIDBase `scaled.php` (129 stations) | 5 min |
 | foF2/MUF/hmF2/… (failover) | prop.kc2g.com redistribution (GIRO data with permission, WWROF-supported, plus eSWua/INGV and NOAA feeds) | on GIRO failure only, 1 req/10 min |
 | EB040 profile | Ebre Observatory FTP (`EB040_*.SAO`) | 5 min, background |

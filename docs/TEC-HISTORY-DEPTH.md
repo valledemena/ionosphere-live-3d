@@ -1,4 +1,23 @@
-# TEC: la profundidad del historial solo se persiste al cerrar la app
+# TEC: profundidad del historial (estado final y registro historico)
+
+## Estado final (DW.17, vigente)
+
+**Ya no hay selector de profundidad.** La app pide siempre el maximo
+soportado: `glotbf::kDepth72h = 432` frames a 10 min (72 h nominales;
+~69,6 h reales en la cache actual por 5 huecos de 10-13 min).
+`tecDepthSlots` se inicializa a 432, `saveSettings` escribe 432 y
+`loadSettings` ignora cualquier valor antiguo 36/144. El texto del
+panel es `GloTEC history: max 72 h (432 frames), always`.
+
+El timeline **no depende de la profundidad**: en modo capa son los
+bounds `[tecHist.front(), tecHist.back()]` de los frames en disco; con
+`Full 168 h window` es un rango fijo de 168 h.
+
+Lo que sigue es el **registro historico** del comportamiento anterior
+(selector 6/24/72 h y persistencia al cerrar). Se conserva como
+evidencia; sus instrucciones estan **supersedidas por DW.17**.
+
+---
 
 Este documento registra un comportamiento medido de la app desktop C++
 (NOAA GloTEC). Corrige la frase anterior "72 h disponibles", que se
