@@ -306,6 +306,10 @@ struct App::Impl {
     float bloomStrength = 0.55f;   // composite add amount
     bool toneMap = true;           // ACES en composite (bypass exacto si off)
     float exposure = 1.12f;        // M1: calibrado para ACES+sRGB (era 1.0 a mano)
+    bool cinematicGrade = false;   // DW.25 V5a: flag OFF por defecto
+    float gradeGrain = 0.03f;      // amplitud del grano (LDR)
+    float gradeVignette = 0.35f;   // intensidad de la vineta (LDR)
+    float gradeCA = 0.003f;        // offset radial por canal (LDR)
     int msaaSamples = 0;           // M1: MSAA de escena 0/2/4 (default 0, persistible)
     bool cineMode = false;         // cinema: auto-rotation (key C)
     float cineSpeed = 0.05f;       // rad/s de auto-rotacion en modo cine
@@ -1069,27 +1073,85 @@ bool App::init(int width, int height, const char* title) {
             "layout(location=0) in vec2 aPos;\n"
             "out vec2 vUV;\n"
             "void main(){ vUV = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n",
-            "#version 400 core\n"
-            "in vec2 vUV;\n"
-            "uniform sampler2D u_scene;\n"
-            "uniform sampler2D u_bloom;\n"
-            "uniform bool u_bloomEnabled;\n"
-            "uniform float u_bloomStrength;\n"
-            "uniform bool u_toneMap;\n"
-            "uniform float u_exposure;\n"
-            "out vec4 fragColor;\n"
-            "vec3 acesFilm(vec3 x){\n"
-            "  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);\n"
-            "}\n"
-            "void main(){\n"
-            "  vec3 col = texture(u_scene, vUV).rgb;\n"
-            "  if(u_bloomEnabled) col += texture(u_bloom, vUV).rgb * u_bloomStrength;\n"
-            "  if(u_toneMap){\n"
-            "    col = acesFilm(col * u_exposure);\n"
-            "    col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));\n"
-            "  }\n"
-            "  fragColor = vec4(col, 1.0);\n"
-            "}\n"
+            R"(
+#version 400 core
+in vec2 vUV;
+uniform sampler2D u_scene;
+uniform sampler2D u_bloom;
+uniform bool u_bloomEnabled;
+uniform float u_bloomStrength;
+uniform bool u_toneMap;
+uniform float u_exposure;
+uniform bool u_grade;             // DW.25 V5a: OFF por defecto
+uniform float u_grain;
+uniform float u_vignette;
+uniform float u_ca;
+uniform float u_time;
+uniform vec2 u_resolution;
+out vec4 fragColor;
+
+vec3 acesFilm(vec3 x) {
+    // Aproximacion de Narkowicz, estandar en tiempo real.
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+// Misma cadena scene+bloom+ACES+sRGB que el camino base, para que la CA
+// se aplique sobre color YA en LDR (nunca antes del tonemap).
+vec3 gradeAt(vec2 uv) {
+    vec3 col = texture(u_scene, uv).rgb;
+    if (u_bloomEnabled) col += texture(u_bloom, uv).rgb * u_bloomStrength;
+    if (u_toneMap) {
+        col = acesFilm(col * u_exposure);
+        col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
+    return col;
+}
+
+void main() {
+    vec3 scene = texture(u_scene, vUV).rgb;
+    vec3 col = scene;
+    if (u_bloomEnabled) {
+        vec3 bloom = texture(u_bloom, vUV).rgb;
+        // SUMA ADITIVA (no multiplicativa): añade glow real, no escala la escena.
+        col += bloom * u_bloomStrength;
+    }
+    // Tonemapping sobre la SUMA (si se comprimieran por separado, el bloom
+    // se saltaria la curva y seguiria quemando). Bypass exacto con u_toneMap.
+    if (u_toneMap) {
+        col = acesFilm(col * u_exposure);
+        // M1: encode sRGB tras ACES. pow LOCAL (NO GL_FRAMEBUFFER_SRGB): el
+        // pase categorico 3b y ImGui dibujan DESPUES del composite a pantalla
+        // con colores ya pensados en sRGB; el flag global los romperia. Con
+        // u_toneMap off el bypass sigue escribiendo lineal (exacto, para A/B).
+        col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+    }
+
+    // DW.25 V5a: TODO en LDR, DESPUES del pow sRGB local. Con u_grade=false
+    // no se ejecuta nada y la salida es funcionalmente identica al head b273f0e.
+    if (u_grade) {
+        if (u_ca > 0.0) {
+            vec2 off = (vUV - 0.5) * u_ca;
+            vec3 cR = gradeAt(vUV + off);
+            vec3 cB = gradeAt(vUV - off);
+            col.r = cR.r;
+            col.b = cB.b;
+        }
+        if (u_vignette > 0.0) {
+            float aspect = u_resolution.x / max(u_resolution.y, 1.0);
+            float d = length((vUV - 0.5) * vec2(aspect, 1.0));
+            col *= clamp(1.0 - u_vignette * smoothstep(0.35, 0.85, d), 0.0, 1.0);
+        }
+        if (u_grain > 0.0) {
+            float n = fract(sin(dot(vUV * u_resolution + u_time,
+                                    vec2(12.9898, 78.233))) * 43758.5453);
+            col += (n - 0.5) * u_grain;
+        }
+        col = clamp(col, 0.0, 1.0);
+    }
+    fragColor = vec4(col, 1.0);
+}
+)"
         );
     }
 
@@ -2954,6 +3016,10 @@ void App::saveSettings() {
     fprintf(f, "toneMap %d\n", impl->toneMap ? 1 : 0);
     fprintf(f, "godraysEnabled %d\n", impl->godraysEnabled ? 1 : 0);   // M'-2
     fprintf(f, "exposure %g\n", (double)impl->exposure);
+    fprintf(f, "cinematicGrade %d\n", impl->cinematicGrade ? 1 : 0);
+    fprintf(f, "gradeGrain %g\n", (double)impl->gradeGrain);
+    fprintf(f, "gradeVignette %g\n", (double)impl->gradeVignette);
+    fprintf(f, "gradeCA %g\n", (double)impl->gradeCA);
     fprintf(f, "msaaSamples %d\n", impl->msaaSamples);
     fprintf(f, "reliefOn %d\n", impl->reliefOn ? 1 : 0);
     fprintf(f, "reliefAmp %g\n", (double)impl->reliefAmp);
@@ -3126,6 +3192,10 @@ void App::loadSettings() {
         else if (k == "toneMap") impl->toneMap = clB(v);
         else if (k == "godraysEnabled") impl->godraysEnabled = clB(v);   // M'-2
         else if (k == "exposure") impl->exposure = glm::clamp((float)v, 0.2f, 2.5f);
+        else if (k == "cinematicGrade") impl->cinematicGrade = clB(v);
+        else if (k == "gradeGrain") impl->gradeGrain = glm::clamp((float)v, 0.0f, 0.15f);
+        else if (k == "gradeVignette") impl->gradeVignette = glm::clamp((float)v, 0.0f, 1.0f);
+        else if (k == "gradeCA") impl->gradeCA = glm::clamp((float)v, 0.0f, 0.02f);
         else if (k == "msaaSamples") {   // M1: solo 0/2/4 validos, resto -> 4
             int s = (int)v;
             impl->msaaSamples = (s == 0 || s == 2) ? s : 4;
@@ -4460,6 +4530,14 @@ void App::render() {
     impl->compositeShader.setFloat("u_bloomStrength", impl->bloomStrength);
     impl->compositeShader.setBool("u_toneMap", impl->toneMap);
     impl->compositeShader.setFloat("u_exposure", impl->exposure);
+    // DW.25 V5a: efectos en LDR, tras el pow sRGB local del shader.
+    impl->compositeShader.setBool("u_grade", impl->cinematicGrade);
+    impl->compositeShader.setFloat("u_grain", impl->gradeGrain);
+    impl->compositeShader.setFloat("u_vignette", impl->gradeVignette);
+    impl->compositeShader.setFloat("u_ca", impl->gradeCA);
+    impl->compositeShader.setFloat("u_time", impl->time);
+    impl->compositeShader.setVec2("u_resolution",
+                                  glm::vec2((float)winW, (float)winH));
 
     // Draw fullscreen quad with persistent VAO
     glBindVertexArray(impl->quadVAO);
@@ -4630,6 +4708,17 @@ void App::render() {
         impl->exposure = glm::clamp(impl->exposure, 0.2f, 2.5f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Manual exposure for the tone mapping curve. Only applies when Tone map is on.");
+    ImGui::Checkbox("Cinematic grade", &impl->cinematicGrade);
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.25 V5a: off by default = original composite output. On = film grain, vignette and per-channel chromatic aberration applied in LDR AFTER the local sRGB encode, never before. No new FBO and no GL_FRAMEBUFFER_SRGB.");
+    if (impl->cinematicGrade) {
+        ImGui::SliderFloat("Grain", &impl->gradeGrain, 0.0f, 0.15f);
+        ImGui::SliderFloat("Vignette", &impl->gradeVignette, 0.0f, 1.0f);
+        ImGui::SliderFloat("Chromatic ab.", &impl->gradeCA, 0.0f, 0.02f);
+        impl->gradeGrain = glm::clamp(impl->gradeGrain, 0.0f, 0.15f);
+        impl->gradeVignette = glm::clamp(impl->gradeVignette, 0.0f, 1.0f);
+        impl->gradeCA = glm::clamp(impl->gradeCA, 0.0f, 0.02f);
+    }
     {
         // M1: MSAA de escena 0/2/4 (persistible). El cambio recrea los targets
         // en caliente: mismo punto de recreacion que el resize (hilo seguro).
