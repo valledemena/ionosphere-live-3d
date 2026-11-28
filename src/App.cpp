@@ -214,7 +214,7 @@ struct App::Impl {
     // Lote 2 del port web: cavidad magnetosferica, cinturones y anillo 1963.
     MagnetosphereLayer magnetosphere;  // magnetopausa Shue-1998 + lineas dipolares
     SolarWindRiver swRiver;            // rio de particulas del viento solar (web)
-    VanAllenBelts vanAllen;            // tori L=1.5 y L=4.2+0.08*Kp
+    VanAllenBelts vanAllen;            // tori L=1.5 y L=4.2-0.08*Kp
     WestFordRing westFord;             // banda de dipolos de 1963 (estatica)
     bool magnetosphereVisible = false;
     bool swRiverVisible = false;
@@ -5443,7 +5443,7 @@ void App::render() {
         // se veria el interno. Se aleja sola al encender.
         if (showVa && impl->camera.distance < 6.0f) impl->camera.distance = 8.0f;
     }
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Two wireframe tori: inner protons at L = 1.5 (stable, silver) and outer electrons at L = 4.2 + 0.08*Kp (amber). Brightness knots drift WEST for protons and EAST for electrons (0.05 rad/s). Torus axis is the geographic equator (dipole tilt ignored). The outer belt reaches 4.2-4.9 R_E, so use Fit. No live RBE feed: the outer-belt glow term stays at 0.");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Two wireframe tori: inner protons at L = 1.5 (stable, silver) and outer electrons at L = 4.2 - 0.08*Kp (amber; v2 parametric: only the direction of the storm-time effect is corrected, not an empirical fit). Brightness knots drift WEST for protons and EAST for electrons (0.05 rad/s). Torus axis is the geographic equator (dipole tilt ignored). The outer belt reaches 3.48-4.2 R_E, so use Fit. No live RBE feed: the outer-belt glow term stays at 0.");
     ImGui::Text("Kp %.1f  outer L %.2f R_E", sw.valid ? sw.kp : 0.0f, impl->vanAllen.outerL());
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Kp from the NOAA index bundle and the resulting outer-belt L shell. Kp <= 3 quiet, >= 5 storm: the electron belt moves outward as Kp rises.");
     ImGui::SameLine();
