@@ -27,8 +27,7 @@ El coste del estimado 2 de ARQUITECTO se sustituye por este baseline:
 el objetivo original (19,0 ms) quedo FALSIFICADO: se calculo sin
 magnetosfera visible. Criterio ENMIENDADO (v3): **ON <= OFF + 3,5 ms**
 en regimen y techo absoluto **26 ms**, ambos medidos con la misma
-sonda y etiquetas `flag=OFF`/`flag=ON`
-con la misma sonda (incremento <= ~2 ms sobre 17 ms).
+sonda y etiquetas `flag=OFF`/`flag=ON`.
 
 ## 2. Estado del código (medido)
 
@@ -113,8 +112,9 @@ con la misma sonda (incremento <= ~2 ms sobre 17 ms).
 
 - Integrar B completo puede cambiar la forma de las lineas respecto al
   dipolo: se conservan las semillas y se documenta la diferencia.
-- El geometry shader aumenta vertices por segmento: el limite de 19 ms
-  es falsable y puede forzar reducir semillas/anchos antes de merge.
+- El geometry shader aumenta vertices por segmento: el gate relativo
+  (ON <= OFF + 3,5 ms) es falsable y puede forzar reducir
+  semillas/anchos antes de merge.
 
 ## Adendum — notas del veredicto v1 (incorporadas)
 
@@ -128,7 +128,7 @@ con la misma sonda (incremento <= ~2 ms sobre 17 ms).
    (sin penalizacion aparente en esa corrida; absoluto mayor por
    distinto estado de red/camara, se reporta tal cual).
 2. RK2 no esta en el baseline: se mide por separado el **rebuild** de
-   la traza y el regimen; limite de 19 ms solo para regimen.
+   la traza y el regimen; gate relativo y techo 26 ms solo para regimen.
 3. Punto de prueba de `igrfFull` declarado: `lat=40.0`, `lon=-75.0`,
    `alt=300 km`, `year=2025.0`.
 4. `tests/test_volume_jitter.cpp` y `src/Utils/VolumeJitter.h` deben
@@ -156,5 +156,3 @@ visible (16,4-17,1 ms) y quedo **falsificado**. Se sustituye por:
   solo el draw de lineas.
 
 Acta CROSS: `CROSS\dw12-honestidad\arquitecto\ACTA-CRITERIO-DW21.md`.
-
-
