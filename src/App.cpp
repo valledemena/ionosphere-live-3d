@@ -182,6 +182,13 @@ struct App::Impl {
     Shader atmosphereShader;
     Shader bloomShader;
     Shader compositeShader;
+    Shader temporalShader;   // DW.22: acumulacion temporal (flag OFF)
+    Framebuffer histFBO[2];
+    bool temporalAccum = false;
+    bool temporalClear = false;
+    int temporalCur = 0;
+    int temporalResets = 0;
+    double temporalLastAgg = 0.0;
     Shader terminatorShader;
     Earth earth;
     Stars stars;
@@ -1084,6 +1091,27 @@ bool App::init(int width, int height, const char* title) {
         );
     }
 
+    // DW.22: shader de acumulacion (fallback inline si faltan los ficheros).
+    if (!impl->temporalShader.load("shaders/temporal.vert", "shaders/temporal.frag")) {
+        impl->temporalShader.loadFromSource(
+            "#version 400 core\n"
+            "layout(location=0) in vec2 aPos;\n"
+            "out vec2 vUV;\n"
+            "void main(){ vUV = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n",
+            "#version 400 core\n"
+            "in vec2 vUV;\n"
+            "uniform sampler2D u_current;\n"
+            "uniform sampler2D u_history;\n"
+            "uniform float u_alpha;\n"
+            "uniform vec2 u_texel;\n"
+            "out vec4 fragColor;\n"
+            "void main(){\n"
+            "  vec3 cur = texture(u_current, vUV).rgb;\n"
+            "  vec3 hist = texture(u_history, vUV).rgb;\n"
+            "  fragColor = vec4(mix(hist, cur, u_alpha), 1.0);\n"
+            "}\n");
+    }
+
     if (!impl->godraysShader.load("shaders/godrays.vert", "shaders/godrays.frag")) {
         // M'-2: fallback en paralelo con shaders/godrays.frag (12 taps).
         fprintf(stderr, "Godrays shader failed, using fallback\n");
@@ -1629,6 +1657,8 @@ bool App::init(int width, int height, const char* title) {
     impl->bloomFBO[0].init(winW / 2, winH / 2);
     impl->bloomFBO[1].init(winW / 2, winH / 2);
     impl->compFBO.init(winW, winH);   // M'-2: composite con god rays ON
+    impl->histFBO[0].init(winW, winH);  // DW.22: historia temporal
+    impl->histFBO[1].init(winW, winH);
 
     // Fullscreen quad for post-processing (bloom, composite)
     float quadVerts[] = {
@@ -1731,11 +1761,17 @@ void App::recreateRenderTargets(int w, int h) {
     impl->bloomFBO[0].destroy();
     impl->bloomFBO[1].destroy();
     impl->compFBO.destroy();   // M'-2: con god rays OFF no se usa (coste 0)
+    impl->histFBO[0].destroy();
+    impl->histFBO[1].destroy();
     if (!impl->sceneFBO.init(w, h, impl->msaaSamples))
         fprintf(stderr, "[App] sceneFBO recreate failed at %dx%d\n", w, h);
     impl->bloomFBO[0].init(w / 2, h / 2);
     impl->bloomFBO[1].init(w / 2, h / 2);
     impl->compFBO.init(w, h);
+    impl->histFBO[0].init(w, h);
+    impl->histFBO[1].init(w, h);
+    impl->temporalResets++;   // DW.22: resize resetea la historia
+    impl->temporalClear = true;
     impl->camera.aspect = (h > 0) ? (float)w / (float)h : 1.0f;
     glViewport(0, 0, w, h);
 }
@@ -1949,6 +1985,43 @@ void App::update(float dt) {
     // La red NOAA la hace el worker.
     static double lastIndexFetch = -1.0;
     double now = glfwGetTime();
+    // DW.22: reseteo de historia por dato real, salto de replay o camara.
+    if (impl->temporalAccum) {
+        double agg = 0.0;
+        {
+            std::lock_guard<std::mutex> lk(impl->bundleMutex);
+            for (const auto& st : impl->provBoard) {
+                if (st.id == provstatus::PROV_TEC ||
+                    st.id == provstatus::PROV_GIRO ||
+                    st.id == provstatus::PROV_WIND)
+                    agg = std::max(agg, st.dataEpoch);
+            }
+        }
+        bool rst = false;
+        if (agg > 0.0) {
+            if (impl->temporalLastAgg > 0.0 && agg - impl->temporalLastAgg > 600.0)
+                rst = true;
+            impl->temporalLastAgg = agg;
+        }
+        static double lastRep = -1.0;
+        if (impl->replayMode) {
+            if (lastRep >= 0.0 && std::fabs(impl->replayEpoch - lastRep) > 30.0)
+                rst = true;
+            lastRep = impl->replayEpoch;
+        } else {
+            lastRep = -1.0;
+        }
+        static float lastRX = 1e9f, lastRY = 1e9f, lastDist = 1e9f;
+        if (lastRX < 1e8f &&
+            (std::fabs(impl->camera.rotateX - lastRX) > 0.02f ||
+             std::fabs(impl->camera.rotateY - lastRY) > 0.02f ||
+             std::fabs(impl->camera.distance - lastDist) > 0.05f))
+            rst = true;
+        lastRX = impl->camera.rotateX;
+        lastRY = impl->camera.rotateY;
+        lastDist = impl->camera.distance;
+        if (rst) { ++impl->temporalResets; impl->temporalClear = true; }
+    }
     if (lastIndexFetch < 0 || (now - lastIndexFetch) > 300.0) {
         if (impl->catalogApplied && !impl->giro.isFetching()) {
             impl->giro.fetchStationsAsync();
@@ -2890,6 +2963,7 @@ void App::saveSettings() {
     fprintf(f, "greylineVisible %d\n", impl->greylineVisible ? 1 : 0);
     fprintf(f, "magnetosphereVisible %d\n", impl->magnetosphereVisible ? 1 : 0);
     fprintf(f, "thickFieldLines %d\n", impl->thickFieldLines ? 1 : 0);
+    fprintf(f, "temporalAccum %d\n", impl->temporalAccum ? 1 : 0);
     fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
@@ -3064,6 +3138,14 @@ void App::loadSettings() {
     else if (k == "thickFieldLines") {
         impl->thickFieldLines = clB(v);
         impl->magnetosphere.setThickLines(impl->thickFieldLines);
+    }
+    else if (k == "temporalAccum") {
+        const bool was = impl->temporalAccum;
+        impl->temporalAccum = clB(v);
+        if (was != impl->temporalAccum) {
+            impl->temporalResets = 0;   // nota 4 del veredicto
+            impl->temporalClear = true;
+        }
     }
     else if (k == "swRiverVisible") impl->swRiverVisible = clB(v);
     else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
@@ -4342,8 +4424,9 @@ void App::render() {
     const godrays::SunProj gsp = godrays::projectSun(godVP, camPos, godSun);
     const bool gLimbo = godrays::rayHitsEarth(camPos, godSun);
     const bool doGodrays = impl->godraysEnabled && impl->compFBO.colorTexture != 0 &&
+                           !impl->temporalAccum &&   // DW.22: incompatibles, flag OFF intacto
                            !godrays::gateSkip(gsp, gLimbo);
-    if (doGodrays)
+    if (doGodrays || impl->temporalAccum)
         impl->compFBO.bind();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
@@ -4395,6 +4478,49 @@ void App::render() {
         glBindVertexArray(impl->quadVAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);
+    }
+
+    // DW.22: acumulacion temporal. Sin reproyeccion por depth: la historia
+    // se DESCARTA al girar la camara (reset en update), asi el ghosting no
+    // puede confundirse con la edad del dato. clamp vecinal en el shader.
+    if (impl->temporalAccum && impl->histFBO[0].colorTexture &&
+        impl->histFBO[1].colorTexture) {
+        const int next = 1 - impl->temporalCur;
+        impl->histFBO[next].bind();
+        if (impl->temporalClear) {
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+        impl->temporalShader.use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, impl->compFBO.colorTexture);
+        impl->temporalShader.setInt("u_current", 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, impl->histFBO[impl->temporalCur].colorTexture);
+        impl->temporalShader.setInt("u_history", 1);
+        impl->temporalShader.setFloat("u_alpha", 0.90f);
+        impl->temporalShader.setVec2("u_texel",
+            glm::vec2(1.0f / (float)std::max(impl->compFBO.width, 1),
+                      1.0f / (float)std::max(impl->compFBO.height, 1)));
+        glBindVertexArray(impl->quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, winW, winH);
+        impl->temporalShader.use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, impl->histFBO[next].colorTexture);
+        impl->temporalShader.setInt("u_current", 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, impl->histFBO[next].colorTexture);
+        impl->temporalShader.setInt("u_history", 1);
+        impl->temporalShader.setFloat("u_alpha", 1.0f);
+        glBindVertexArray(impl->quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+        impl->temporalCur = next;
+        impl->temporalClear = false;
     }
 
     glActiveTexture(GL_TEXTURE0);
@@ -5446,6 +5572,17 @@ void App::render() {
         if (showMag && impl->camera.distance < 10.0f) impl->camera.distance = 20.0f;
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Shue-1998 magnetopause wireframe, r0 = [10.22 + 1.29*tanh(0.184*(Bz+8.14))] / Dp^(1/6.6) with Dp = 1.6726e-6*n*v^2, plus IGRF-14 degree-1 dipole field lines at L = 1.5, 2.5, 4.0 and 6.0 (epoch 2025.0, 9.2 deg tilt). Driven by the live solar wind. TRUE scale: the subsolar standoff sits at 6-12 R_E, so turning it on from a close view pulls the camera back automatically. The wireframe stops at theta = 105 deg (the edge of the dayside cavity) and the night-side stretch is a declared v1 parameterisation, not Tsyganenko; the real tail is longer than 20 R_E and is out of scope.");
+    bool taa = impl->temporalAccum;
+    if (ImGui::Checkbox("Temporal accumulation", &taa)) {
+        const bool was = impl->temporalAccum;
+        impl->temporalAccum = taa;
+        if (was != taa) { impl->temporalResets = 0; impl->temporalClear = true; }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.22: off by default. On: temporal blend with a clamp to the current frame. History resets when TEC/GIRO/wind dataEpoch advances >600 s, replay jumps >30 s, resize or flag toggle. No depth reprojection: camera motion also clears history to avoid ghosting. HUD shows alpha and reset count.");
+    ImGui::TextDisabled("TAA: %s alpha=%.2f reset=%d",
+                        impl->temporalAccum ? "ON" : "OFF", 0.90,
+                        impl->temporalResets);
     bool thick = impl->thickFieldLines;
     if (ImGui::Checkbox("Thick field lines", &thick)) {
         impl->thickFieldLines = thick;
