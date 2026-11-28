@@ -228,6 +228,7 @@ struct App::Impl {
     bool magnetosphereVisible = false;
     bool thickFieldLines = false;   // DW.21: flag OFF por defecto
     bool swRiverVisible = false;
+    bool instancedParticles = false;   // DW.23 V3a: flag OFF por defecto
     bool vanAllenVisible = false;
     bool westFordVisible = false;
     // Lote 3 del port web: capas con datos externos propios (red). Solo
@@ -1606,6 +1607,7 @@ bool App::init(int width, int height, const char* title) {
     impl->magnetosphere.setThickLines(impl->thickFieldLines);
     impl->swRiver.init();
     impl->swRiver.setVisible(false);
+    impl->swRiver.setInstanced(impl->instancedParticles);
     impl->vanAllen.init();
     impl->vanAllen.setVisible(false);
     impl->westFord.init();
@@ -2965,6 +2967,7 @@ void App::saveSettings() {
     fprintf(f, "thickFieldLines %d\n", impl->thickFieldLines ? 1 : 0);
     fprintf(f, "temporalAccum %d\n", impl->temporalAccum ? 1 : 0);
     fprintf(f, "swRiverVisible %d\n", impl->swRiverVisible ? 1 : 0);
+    fprintf(f, "instancedParticles %d\n", impl->instancedParticles ? 1 : 0);
     fprintf(f, "vanAllenVisible %d\n", impl->vanAllenVisible ? 1 : 0);
     fprintf(f, "westFordVisible %d\n", impl->westFordVisible ? 1 : 0);
     fprintf(f, "wsprArcsVisible %d\n", impl->wsprVisible ? 1 : 0);
@@ -3148,6 +3151,10 @@ void App::loadSettings() {
         }
     }
     else if (k == "swRiverVisible") impl->swRiverVisible = clB(v);
+    else if (k == "instancedParticles") {
+        impl->instancedParticles = clB(v);
+        impl->swRiver.setInstanced(impl->instancedParticles);
+    }
     else if (k == "vanAllenVisible") impl->vanAllenVisible = clB(v);
     else if (k == "westFordVisible") impl->westFordVisible = clB(v);
     else if (k == "wsprArcsVisible") impl->wsprVisible = clB(v);
@@ -5606,6 +5613,13 @@ void App::render() {
         impl->swRiver.setVisible(showRiver);
         if (showRiver && impl->camera.distance < 30.0f) impl->camera.distance = 38.0f;
     }
+    bool instP = impl->instancedParticles;
+    if (ImGui::Checkbox("Instanced particle quads", &instP)) {
+        impl->instancedParticles = instP;
+        impl->swRiver.setInstanced(instP);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetItemTooltip("DW.23 V3a: off by default = original GL_POINTS. On = instanced camera-facing quads with the same 400 positions, colors, sizes (0.17/0.38 R_E) and alpha (0.90/0.16). The x60 speed exaggeration and the data-age badge are unchanged.");
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("400 particles streaming antisunward, exactly like the web demo (IonosphereScene, 400 points, core + glow). They are born on the dayside, travel at v*60 (declared x60 exaggeration so the flow is visible in real time), get pushed sideways out of the Shue-1998 magnetopause and recycle at x = -28 R_E. Colour is the same ramp as the arrows: speed + southward Bz + density from the live NOAA RTSW wind. TRUE scale (1 unit = 1 R_E), so it only fits with the camera pulled back; the first toggle does that automatically. Animation only - no synthetic wind sample.");
     ImGui::Text("river: %.0f km/s  n %.1f cm^-3  Bz %+.1f nT  (%d particles)",
                 impl->swRiver.currentSpeed(), impl->swRiver.currentDensity(),

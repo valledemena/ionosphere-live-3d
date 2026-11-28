@@ -35,6 +35,8 @@ public:
 
     void setVisible(bool v);
     bool visible() const { return visible_; }
+    void setInstanced(bool v);              // DW.23 V3a: flag OFF por defecto
+    bool instanced() const { return instanced_; }
 
     // Viento vivo. Cada valor no finito se ignora (conserva el ultimo valido).
     void setSolarWind(float speedKms, float densityCm3, float bzNT);
@@ -58,8 +60,11 @@ private:
     void upload();
 
     GLuint vao_ = 0;
+    GLuint instVao_ = 0;      // DW.23: mismo VBO, divisor 1
     GLuint vbo_ = 0;
     GLuint shader_ = 0;
+    GLuint instShader_ = 0;
+    bool instanced_ = false;
 
     swriver::RiverSim sim_;
     float verts_[swriver::kCount * 6] = {};   // pos(3) + color(3) mundo

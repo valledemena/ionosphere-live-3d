@@ -36,6 +36,38 @@ void main() {
 }
 )";
 
+// DW.23 V3a: quads instanciados, mismo VBO pos(3)+color(3). No toca sim_.
+static const char* riverInstVertSrc = R"(
+#version 400 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+uniform mat4 u_view, u_projection;
+uniform float u_size;
+out vec3 vColor;
+out vec2 vCorner;
+void main() {
+    vec2 c = vec2(float((gl_VertexID & 2) >> 1), float(gl_VertexID & 1)) * 2.0 - 1.0;
+    vec4 vp = u_view * vec4(aPos, 1.0);
+    vp.xy += c * u_size;
+    gl_Position = u_projection * vp;
+    vCorner = c;
+    vColor = aColor;
+}
+)";
+
+static const char* riverInstFragSrc = R"(
+#version 400 core
+in vec3 vColor;
+in vec2 vCorner;
+uniform float u_alpha;
+out vec4 fragColor;
+void main() {
+    float r = length(vCorner);
+    float soft = 1.0 - smoothstep(0.55, 1.0, r);
+    fragColor = vec4(vColor, u_alpha * soft);
+}
+)";
+
 namespace {
 
 // Tamanos del web (size 0.17 / 0.38 R_E) y sus opacidades.
@@ -79,6 +111,37 @@ void SolarWindRiver::init() {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
+    // DW.23: VAO instanciado sobre el MISMO vbo_ (divisor 1).
+    GLuint ivs = glCreateShader(GL_VERTEX_SHADER);
+    GLuint ifs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(ivs, 1, &riverInstVertSrc, nullptr);
+    glShaderSource(ifs, 1, &riverInstFragSrc, nullptr);
+    glCompileShader(ivs); glCompileShader(ifs);
+    instShader_ = glCreateProgram();
+    glAttachShader(instShader_, ivs);
+    glAttachShader(instShader_, ifs);
+    glLinkProgram(instShader_);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(instShader_, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        fprintf(stderr, "[SolarWindRiver] instanced shader link failed; GL_POINTS intacto\n");
+        glDeleteProgram(instShader_);
+        instShader_ = 0;
+    }
+    glDeleteShader(ivs); glDeleteShader(ifs);
+    if (instShader_) {
+        glGenVertexArrays(1, &instVao_);
+        glBindVertexArray(instVao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribDivisor(0, 1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribDivisor(1, 1);
+        glBindVertexArray(0);
+    }
+
     // Necesario para que el vertex shader controle el tamano de punto.
     glEnable(GL_PROGRAM_POINT_SIZE);
 
@@ -88,11 +151,15 @@ void SolarWindRiver::init() {
     fprintf(stderr, "[OK] SolarWindRiver initialized (%d particles)\n", swriver::kCount);
 }
 
+void SolarWindRiver::setInstanced(bool v) { instanced_ = v; }
+
 void SolarWindRiver::destroy() {
     if (vbo_) glDeleteBuffers(1, &vbo_);
     if (vao_) glDeleteVertexArrays(1, &vao_);
+    if (instVao_) glDeleteVertexArrays(1, &instVao_);
     if (shader_) glDeleteProgram(shader_);
-    vbo_ = vao_ = shader_ = 0;
+    if (instShader_) glDeleteProgram(instShader_);
+    vbo_ = vao_ = instVao_ = shader_ = instShader_ = 0;
     visible_ = false;
     colorsDirty_ = true;
     colorKeyValid_ = false;
@@ -185,6 +252,22 @@ void SolarWindRiver::upload() {
 
 void SolarWindRiver::render(const glm::mat4& view, const glm::mat4& projection, float pixelScale) {
     if (!visible_ || vao_ == 0 || shader_ == 0) return;
+
+    if (instanced_ && instShader_ != 0 && instVao_ != 0) {
+        // DW.23 V3a: mismos tamanos, mismos alfas, mismos colores del VBO.
+        glUseProgram(instShader_);
+        glUniformMatrix4fv(glGetUniformLocation(instShader_, "u_view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(instShader_, "u_projection"), 1, GL_FALSE, glm::value_ptr(projection));
+        glBindVertexArray(instVao_);
+        glUniform1f(glGetUniformLocation(instShader_, "u_size"), kCoreSize);
+        glUniform1f(glGetUniformLocation(instShader_, "u_alpha"), kCoreAlpha);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, swriver::kCount);
+        glUniform1f(glGetUniformLocation(instShader_, "u_size"), kGlowSize);
+        glUniform1f(glGetUniformLocation(instShader_, "u_alpha"), kGlowAlpha);
+        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, swriver::kCount);
+        glBindVertexArray(0);
+        return;
+    }
 
     glUseProgram(shader_);
     glUniformMatrix4fv(glGetUniformLocation(shader_, "u_view"), 1, GL_FALSE, glm::value_ptr(view));
